@@ -1,203 +1,248 @@
-# Civil Buddy
+# civil-buddy — the tender response and the packing plan, linked
 
-[![ci-smoke](https://github.com/LUOaini1213/civil-buddy/actions/workflows/ci.yml/badge.svg)](https://github.com/LUOaini1213/civil-buddy/actions/workflows/ci.yml) [![release](https://img.shields.io/github/v/release/LUOaini1213/civil-buddy)](https://github.com/LUOaini1213/civil-buddy/releases) [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![ci](https://github.com/LUOaini1213/civil-buddy-sme/actions/workflows/ci.yml/badge.svg)](https://github.com/LUOaini1213/civil-buddy-sme/actions/workflows/ci.yml) [![release](https://img.shields.io/github/v/release/LUOaini1213/civil-buddy-sme)](https://github.com/LUOaini1213/civil-buddy-sme/releases) [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-**Agentic AI Workspace for Engineering** — 土木版 Codex
+中文说明：[README.zh.md](README.zh.md)
 
-Natural Language → Agent Routing → Deterministic Tools → HITL → Evaluation
+**Who it is for.** Singapore façade and curtain-wall SMEs that supply and install façade packages and
+must answer English tenders *and* ship the panels to site in containers.
 
-**CAD → 3D 建模助手（预览）** — 上传 DXF（闭合轮廓、圆弧、圆和受限块引用），确认单位、图层和实体区域，
-生成墙/柱/板或带孔截面的参数化网格；旋转查看、选中追溯、修改高度/长度与撤销，
-保存项目及版本、重启恢复、项目包交接，并在统一 Agent 对话里改参、撤销与导出。
-先运行 `python -m pip install -r requirements-cad.txt`，
-再运行 `python -m packing_assistant.civil app`，从首页进入「CAD → 3D 建模助手」（`/cad`）。
-同仓还有施工计划（关键路径 / 资源调整，`/engineering/planning`）和箱单台账（来源核对后才改数，`/logistics`）。
-附带明确标注的合成样例，真实项目图纸、工期和箱单须另行验收；不支持直接导入 DWG，
-不自动识别门窗，不是完整 BIM 或签认模型。操作与边界见 [CAD 建模说明](docs/civil-buddy/cad-to-3d.md)。
+**The problem, in one sentence.** Tender response and outbound packing run as two disconnected
+exercises — the tender in Word or PDF, the panel list in Excel, bookings in email — so a statement
+about packing in the bid is not tied to a loading plan and a container count is not tied to the clause
+it should satisfy; civil-buddy links them clause by clause.
 
-![Civil Buddy workbench](docs/assets/workbench.png)
+**What it does.** One request reads the tender's logistics clauses with their clause numbers, plans
+the real panel list in the container type the tender names, and writes each logistics statement of the
+English response from a plan figure, citing its clause. A link record ties every statement to its
+clause, to the plan figure and to the SHA-256 of the tender, the panel list and the plan. When the
+panel list is revised, the same request re-plans and names the statements a person must re-confirm
+and the earlier Word copies that are now stale. Code computes the numbers; qualifications and price
+stay with people (`[TO FILL]`); nothing is booked or submitted.
 
-**In one paragraph (EN)** — a civil / construction workbench whose one measured
-engine is container packing (`pack-ship`). Coordinates, counts and prices come
-only from that tool, and a 128-run evaluation is archived in the repo. CI on
-every push runs a 2×1 offline slice of that eval, not the full 128. The other
-65 job-post skills are SOPs the model drafts against, at the depth the ladder
-states — not 65 engines. High-risk actions (qualification, bids, disk writes)
-need a human confirmation. A preview path turns DXF outlines into a mesh
-(`/cad`), plus a planning page and a packing-list ledger; those are not extra
-engines and are not sign-off models. Rust workbench + MCP entry, Python packing harness,
-FastAPI gateway. MIT.
+> This repository is the NUS-ISS "Show Me Your Agents" 2026 SME-track entry of Team Mintang
+> (PJ2U63AF). The pilot partner is not named here. **Every demo input is SYNTHETIC**
+> ([examples/facade-demo](examples/facade-demo/README.md)); no contractor's document or number is in
+> this repository.
 
-**30 秒，无 Key** — 策略引擎 + 失败恢复的四拍剧本（正常放行 → 越权被拒 → 工具故障重试降级 → 成本超限熔断）：
+## Try it: one command, offline, no key
 
 ```bash
-pip install -r requirements.txt
-python scripts/demo_agent_middleware.py     # 四拍剧本，输出见下
-python scripts/test_agent_middleware.py     # 同一剧本的断言版（CI 每次提交都跑）
+pip install -r requirements.txt && python scripts/demo_facade.py
 ```
 
-![The four-beat middleware script running in a terminal: ALLOW, DENY with a reason, DEGRADE through the recovery chain, CIRCUIT on cost](docs/assets/demo.gif)
+Python 3.11. No model key, no network, no account. It writes drafts into a throw-away job folder
+(a new temporary folder, or `--job <new folder>`) and ends with `PASS demo_facade`. Flow 1 is the linked run; flows 2–4
+run tender review, packing and site paperwork on their own.
 
-<details>
-<summary>四拍剧本的实际输出（2026-09-03 本机，无 API Key）</summary>
+**Clause → plan → statement.** Abridged output of flow 1 (`main` at `cab9249`):
 
 ```text
-==========================================================
-Civil Buddy · 策略引擎 + 失败恢复
-==========================================================
-两层 Runtime 中间件（不是五个平庸包装）
-  1. 策略引擎  谁 / 哪个工具 / 花多少 / 能否碰生产数据
-  2. 失败恢复  超时重试 → 降级 UNSPECIFIED → 审计链
-剧本：正常下单 → 越权被拒 → 工具挂掉自动恢复 → 成本超限熔断
-
-[1/4] 正常下单   ALLOW
-  原因  低风险岗 finance-tax 写作业根
-  结果  wrote=True  GST 9%=True  files=2  run=run-<id>
-
-[2/4] 越权被拒   DENY
-  原因  拒绝：岗 bid-parse 不能调 pack-ship__plan（exclusive 属于 pack-ship）。
-  弹窗  拒绝：岗 bid-parse 不能调 pack-ship__plan（exclusive 属于 pack-ship）。
-  密钥  拒绝：secret path denied: .env  文件未落地
-
-[3/4] 工具挂掉自动恢复   DEGRADE
-  原因  下游失败 timeout，工具 demo__downstream 降级，不编柜数/xyz。
-  动作  degrade  审计 ['call', 'retry', 'degrade']
-  结果  can_fit=UNSPECIFIED  不编柜数
-
-[4/4] 成本超限熔断   CIRCUIT
-  原因  熔断：session 成本超限 steps 1/1 tokens 32/32。
-  代码  circuit_open  已执行=False
-
-submit_blocked=true  secret_leak=false  禁止：可以投标 / 可以开工
+== 1 Tender <-> packing, linked: the ITT's logistics clauses, the plan under them, the English statements
+  $ civil exec 'Link the tender facade_itt_doc.md to the packing list facade_panels.xlsx and write the logistics response'
+  reply: Linked facade_itt_doc.md and facade_panels.xlsx: 5 logistics clauses, 7 statements (1 covered by the plan, 2 partial, 0 gap, 4 for a person). ...
+    container type: Container type 40HQ taken from Clause 4.8.
+    inputs: tender facade_itt_doc.md sha256 855de144f92e · panel_list facade_panels.xlsx sha256 3d62fd55274c · plan pack-plan.json sha256 8a0bec8ece8a
+    S1 Clause 4.8 · container_type · covered · clause names 40HQ; plan made in 40HQ
+    S2 Clause 4.8 · containers_used · partial · 6 x 40HQ (N0 6) for 24 pieces / 10,800 kg net from facade_panels.xlsx
+    S3 Clause 4.9 · gross_mass · partial · heaviest container 6,472.8 kg gross (2,582.8 cargo + 3,890.0 tare) vs limit 20,000 kg, margin 13,527.2
+    S4 Clause 4.10 · securing · human_required · not modelled -> competent person (lashing)
+    S5 Clause 4.7 · handling · human_required · not modelled -> logistics
+    S6 Clause 4.7 · crate_structure · human_required · 24 of 24 crates pending detailed design (待详设)
+    S7 Clause 4.11 · delivery_sequence · human_required · not modelled -> project manager
 ```
 
-</details>
+It also writes an English bid-book draft (`bidbook.en.md` / `.docx`) whose logistics chapter states
+each of these with its clause and figure, and the link record `tender-packing-link.json`
+(`confirmed_by_person = false`, `submit_blocked = true`). S2 and S3 read *partial* because the
+tender asks for A-frame stillages, which the planner does not model; the statement says so with a
+`[TO CONFIRM by logistics: ...]` placeholder.
 
-**是什么** — 装箱引擎 `pack-ship` 已做评测；另外 65 岗是 SOP 技能，深度见下表，不是 65 个引擎。工作台覆盖土木 / 施工 / 投标 16 大类。每岗一份 `SKILL.md` 按 SOP 出稿；**硬数字（坐标、柜数、单价）只由确定性工具算**，模型负责路由和起草；资格、投标、写盘这类高风险动作**须人确认**。产出是内部讨论草稿，不是签认件。CI 每次提交只跑 2 lane × 1 round 离线切片，128 次全量评测是另一次留档复跑。CAD、施工计划和箱单台账是预览工具，不是签认模型。
+**What goes stale when the panel list changes.** The demo then feeds revision B of the panel list
+(level L9 added, L8 panels heavier; 30 panels, 13,920 kg) with the same request, asked in Chinese:
 
-**给谁用** — 物机 / 物流 / 投标岗的日常起草与装柜计算。装箱引擎 pack-ship 是其中一岗，也是前身独立仓 `packing-agent`（已并入本仓，旧链接自动跳转）。
+```text
+    S2 Clause 4.8 · containers_used · partial · 8 x 40HQ (N0 8) for 30 pieces / 13,920 kg net from facade_panels_rev_b.xlsx
+    since the previous run: panel list (facade_panels.xlsx -> facade_panels_rev_b.xlsx) changed, plan changed: containers used 6 -> 8;
+      pieces 24 -> 30; cargo net kg 10,800 -> 13,920; max cargo kg 2,582.8 -> 2,862.8; max gross kg 6,472.8 -> 6,752.8;
+      statements S2, S3, S6, S7 need re-confirmation; earlier Word copies bidbook.en.docx, tender-packing-link.docx
+      still hold the previous statements - do not send them
+      re-derived with the same figures: S1, S4, S5
+  sign-off: nothing here is booked or submitted (submit_blocked stays true). A person confirms the loading plan
+  before booking, and re-confirms every statement the re-run names.
+```
 
-**凭什么可信** — 每一条都有可复跑的命令：
+(Lines wrapped here for width.) The re-run never overwrites the earlier Word files; it writes
+`bidbook.en-2.docx` and `tender-packing-link-2.docx` beside them.
 
-| 证据 | 数字 | 复跑 |
+### What the demo itself says is not done
+
+These are printed by `scripts/demo_facade.py`, not added for this page:
+
+- **Securing, handling and delivery sequence are not modelled.** Lashing to the CTU Code (S4), A-frame
+  stillages / upright transport / no stacking (S5) and the delivery sequence (S7) go to a person.
+  "not modelled: A-frame stillages (the ITT asks for them). That needs the contractor's stillage size,
+  tare and capacity."
+- **Crate structure is not designed.** 24 of 24 crates are *pending detailed design* (待详设); the
+  engine does not invent a pass.
+- **Handling notes do not change the plan.** Glass / upright / no-stack notes have no effect on the
+  plan, in English or in Chinese.
+- **The tender parse lists 0 of the ITT's 12 façade specification clauses** (PMU and VMU mock-ups, heat
+  soak, site water test, PE-endorsed calculations, warranty, A-frame delivery, the four logistics
+  clauses, insurance), and shows no liquidated-damages or retention row. The four logistics clauses are
+  read by the link instead.
+- **Nothing is booked or submitted.** `submit_blocked` stays `true`; a person confirms the loading plan
+  and re-confirms every statement a re-run names.
+
+The gross mass is the engine's per-container cargo plus an approximate knowledge-base tare (40HQ
+3,890 kg); dunnage, lashing and stillage mass are excluded, and the signed VGM governs. More limits
+(the link is not yet on MCP or a gateway route; the bid-book body has Chinese rows in chapter 3 and
+Annex B; no live-model run) are listed in [examples/facade-demo/README.md](examples/facade-demo/README.md)
+and in §3.4 of the technical document.
+
+## Safety model
+
+Enforced in code, not in prompts; shipped as the security baseline (pull request #61, merge commit
+`d3ada11`):
+
+1. **Code computes the numbers.** Container counts, masses, coordinates and clause figures come from
+   deterministic tools. A model (optional, any OpenAI-compatible endpoint) may route and phrase, but its
+   text never reaches a deliverable.
+2. **The model never approves.** A program cannot approve by sending a flag: the Python MCP server
+   neither offers nor accepts one, and the web apps refuse a `true` boolean. In civil-buddy's own model
+   loop the model's tools have no confirm field, and a copied sentence is replaced.
+3. **Only a person's typed sentence approves high-risk work.** The 19 high-risk posts in
+   `workbench/seed.json` (structure, geotechnics, safety briefing, …) write nothing until a person types
+   `我明白，将由持证人员签认` ("I understand; a licensed person will sign"), and it covers that turn only.
+   The bid posts (bid-parse, bid-tech, bid-compliance) are **low risk** in `seed.json`: they draft without
+   the sentence, but every draft carries `submit_blocked = true` and the qualification / rejection rows
+   wait for a person.
+4. **The server is token-gated.** With `CIVIL_TOKEN` set, every API route and WebSocket needs the token,
+   from loopback too (so a reverse proxy cannot bypass it). Binding a non-loopback address without a
+   token refuses to start. `/api/health` stays public on purpose for health checks.
+5. **Policy as code and an offline gate.** Every registered tool call on the default path, over MCP and
+   through the gateway's tool route passes a policy function that refuses with a stated reason. `npm run check` (146 checks, no key) runs in CI on every push; the
+   badge above is this repository's CI.
+
+## Where it runs (AWS, stated honestly)
+
+- **Target:** one AWS Lightsail Linux instance per company, used by employees in a browser behind TLS.
+  **The Lightsail instance is not running yet**; no cloud host has run the image.
+- **Docker image:** CI's `docker-smoke` job (pull request #64, merge commit `16316df`) builds the
+  gateway image on every push and checks that it refuses to start without `CIVIL_TOKEN` (exit 3),
+  answers 401 without the token and 200 with it, parses the synthetic ITT through the API, and keeps a
+  session in its SQLite database across a container re-create and across `docker compose down` / `up`.
+  The image starts the gateway only, not the browser workbench. Verified in GitHub Actions and local
+  Docker only.
+- **Amazon Bedrock:** configurable through the OpenAI-compatible Chat Completions setting, but **never
+  run** from this repository. No result in this repository comes from a live model.
+- Operator guide: [docs/deploy-minimal.md](docs/deploy-minimal.md) (in Chinese). In short:
+
+```bash
+git clone https://github.com/LUOaini1213/civil-buddy-sme && cd civil-buddy-sme
+export CIVIL_TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+docker compose up -d --build
+# open http://localhost:8000/?token=$CIVIL_TOKEN once (sets an HttpOnly cookie), or
+curl -H "Authorization: Bearer $CIVIL_TOKEN" http://127.0.0.1:8000/api/tools
+```
+
+## Numbers we stand behind
+
+Each figure comes from a command in this repository, run offline with no key.
+
+| What | Figure | Command |
 |---|---|---|
-| 66 岗诚实分级 | L1 知识库 66/66 · L2 工具写盘 66/66 · L3 引擎岗 1 | [docs/depth-ladder.md](docs/depth-ladder.md)（每级挂验收命令） |
-| 自动化装箱评测 | **128** 次（16 并发 × 8 轮），2026-09-02 复跑 **128/128 PASS**。PASS 只表示流水线跑完并返回了柜数与 `can_fit`，不表示都装得下：其中 `can_fit=True` **71/128**，其余 57 次 `can_fit=False` 交回人改方案 | [留档](docs/eval/fanout16x8-2026-09-02/rollup.md)（128 条逐次记录）· `python scripts/fanout16x8_online_cargo.py`（联网抓公开货样约 4 分钟；`--skip-fetch` 用仓内 `data/external/fanout16x8/` 缓存可离线跑）· 本表数字由 `python scripts/render_eval_table.py --check README.md` 对留档核对（CI）· CI 每次提交跑 2 lane × 1 round 离线切片 |
-| steps 主路径 vs LLM 自主调工具 | 影子评测（steps 臂 vs `llm_toolcall` 臂），CI 每次提交都跑 tiny 一例 | `python scripts/eval_workteams_cli.py --tiny-only`。**CI 里没有 Key**：llm 臂的工具选择走 `policy_fallback`（`harness._path_honesty` 会标出），CI 证明的是链路与两臂一致性检查，不是真模型的表现 |
-| Agent 中间件四拍剧本 | 正常放行 → 越权被拒 → 工具故障重试降级 → 成本超限熔断 | `python scripts/demo_agent_middleware.py`（无需 Key）· 断言版 `python scripts/test_agent_middleware.py` 与 `npm run check` 在 CI 每次提交都跑 |
-| 端到端金线 | 8/8（R13 时点实测，需 playwright，未进 CI） | `python scripts/r13_golden_path_e2e.py` |
+| Linked run (synthetic façade job) | 5 logistics clauses; 7 statements: 1 covered, 2 partial, 0 gap, 4 for a person. Rev B: 6 → 8 containers, 4 statements to re-confirm, 2 stale Word copies named | `python scripts/demo_facade.py` |
+| Link behaviour pinned by tests | 18 tests, including tenders that must *not* read as covered (a plan that does not fit, a 6,000 kg limit, size-only or negated container clauses, open-top / flat-rack types) | `python scripts/test_tender_packing_link.py` |
+| English request routing, blind held-out set | `heldout_en2`: 28 sentences, accuracy 0.786, **0 false runs** (all 6 misses fall back to chat). The two other English sets are not blind and are not quoted | `python scripts/test_english_intents.py --score` |
+| Chinese request routing, held-out | 1.000 accuracy, 0 false runs | `python scripts/eval_task_intent.py --check` |
+| Packing fan-out evaluation (128 runs) | All 128 runs completed, but only **71 of 128** produced a plan that fits; 57 returned `can_fit=False` to a person | `python scripts/render_eval_table.py` |
+| Tools | 82 registered tools (71 write), each with JSON Schema input and output contracts; MCP scopes of 11 / 8 / 9 / 13 tools | `scripts/check_project.py` checks `tool-contracts` |
+| Release gate | 146 default checks | `python scripts/check_project.py --list`; `npm run check` |
 
-**试用（零编译）** — 下载 [Releases](https://github.com/LUOaini1213/civil-buddy/releases) 的 **v0.4.0-workbench** zip → 双击 `start-workbench.bat`（浏览器自动打开 :8765）→「设置 → 模型设置」填自己的 Key（DeepSeek / z.ai / OpenAI 兼容任选，运行时生效）。
-试用包**不含装箱引擎**；要看真柜数需源码起装柜台：`pip install -r requirements.txt` → `uvicorn gateway.app:app --port 8000`。边界见 [TRY.md](TRY.md)。
+The fan-out line that CI checks against the archive is kept in its original wording (CI runs
+`python scripts/render_eval_table.py --check README.md`):
 
-**提交署名说明** — 仓内约 40% 的提交署名为 `Packing Assistant`：agent 起草并落盘的改动独立署名，经人审后合入 `main`。这是 HITL 流程的一部分，不是第二位作者。
+> **128** 次（16 并发 × 8 轮），2026-09-02 复跑 **128/128 PASS**。PASS 只表示流水线跑完并返回了柜数与 `can_fit`，不表示都装得下：其中 `can_fit=True` **71/128**，其余 57 次 `can_fit=False` 交回人改方案
 
-> 内部讨论草稿，不是法定专项方案、不是签认件。
-> 高风险写盘前确认句：`我明白，将由持证人员签认`。
+In English: 128 runs (16 lanes × 8 rounds), re-run on 2026-09-02, 128/128 PASS, where PASS only means
+the pipeline finished and returned a container count and `can_fit`; `can_fit=True` in 71 of 128.
+Archive: [docs/eval/fanout16x8-2026-09-02](docs/eval/fanout16x8-2026-09-02/README.md).
 
-**竞赛材料（海之子杯 2026 · AI 智能体挑战）** — 评审维度对照、可复跑命令与 23 轮 UX 迭代记录移至 [docs/submission/haizizhi-entry.md](docs/submission/haizizhi-entry.md)；Agent Middleware 赛道对照表（**按赛题 checklist 自评**，非官方评审）见 [docs/civil-buddy/track1-qualified.md](docs/civil-buddy/track1-qualified.md)。同一仓库也是 NUS-ISS「Show Me Your Agents」2026 的参赛项目（提案 2026-09-28）：英文对照表、可复跑命令与边界见 [docs/submission/nus-iss-entry.md](docs/submission/nus-iss-entry.md)；两赛口径互不通用。
+What we do **not** claim: results on real tender PDFs (archived first-run scores only; the files are
+outside the repository), any customer shipment, earlier held-out scores on sets now seen, a
+"L2 66/66" depth figure (no command produces it), and any live-model or Bedrock result.
 
----
+## The rest of the product (briefly)
 
-## 两套入口
+The link is built on a local-first agent workbench:
 
-| 入口 | 地址 | 用途 |
-|------|------|------|
-| **零编译试用** | Releases exe → :8765 | 双击即用；不含装箱引擎（边界见[TRY.md](TRY.md)） |
-| **Civil Buddy 工作台** | http://127.0.0.1:8765 | 召唤专家、投标/施工草稿、装箱作业单 |
-| **主线 C · 投标应答 + 交付** | http://127.0.0.1:8000 | 招标要点 → 响应矩阵 → 装柜证据（草稿） |
-| **工程装柜台** | http://127.0.0.1:8000/workbench | 成箱 → HITL → 拼柜 3D / CoG |
-| **用户路径 / PRD** | [prd-pack-ship.md](docs/civil-buddy/prd-pack-ship.md)（含 Mermaid 流程图，GitHub 直接渲染） | 流程图 + 验收表 |
+- **66 job "posts" in 16 categories** (tender review, packing and shipping, site documents, design
+  disciplines, HR, admin, IT, finance), each an SOP (`.agents/skills/<id>/SKILL.md`) that turns the
+  user's words and the files in a job folder into an internal draft in Markdown, Word and Excel.
+  Missing values stay `UNSPECIFIED`; most posts are drafting aids, not engines.
+- **Entry points:** `python -m packing_assistant.civil app` (browser workbench on 127.0.0.1:8765),
+  `civil exec "..."` / the TUI in a job folder, `civil desktop`, and the packing gateway
+  (`uvicorn gateway.app:app --host 127.0.0.1 --port 8000`).
+- **MCP:** `python -m packing_assistant.civil mcp --pack construction` (stdio JSON-RPC, for VS Code,
+  Cursor or other agent hosts; configs in [ide/](ide/README.md)). High-risk writes over MCP return
+  `approval_required` and write nothing.
+- **Legacy Rust workbench** (`workbench/`): it predates the security baseline and **still accepts
+  `confirm_ok`** (`workbench/src/api.rs:1292`, `workbench/src/mcp.rs:173-176`). It is not part of the
+  deployed surface and must not be used as the safe entry for high-risk posts. This repository ships
+  no binary builds of it.
 
-### 1) Civil Buddy 工作台
+## Documents
 
-```powershell
-cd workbench
-# API Key：启动后在界面「设置 → 模型设置」填即可（推荐）；或写 gitignored 的 demo/.env
-cargo run --release --bin civil-workbench
+- [docs/submission/nus-iss-technical.md](docs/submission/nus-iss-technical.md) — the technical
+  document: architecture, the judging-criteria map, evaluation, AWS status, limitations (every file:line
+  and number re-checked at `a161251`).
+- [docs/submission/nus-iss-entry.md](docs/submission/nus-iss-entry.md) — the one-page entry sheet.
+- [examples/facade-demo/README.md](examples/facade-demo/README.md) — the synthetic fixtures and the
+  linked run, flow by flow.
+- [docs/deploy-minimal.md](docs/deploy-minimal.md) — operator guide (Chinese).
+
+## Folder map
+
+```text
+packing_assistant/          agent runtime, tools, policy, packing engine
+  tender_packing_link.py    the tender <-> packing link (clauses, plan, statements, link record)
+  runtime/                  tool engine, tool contracts, policy, model loop, sandbox
+  bidbook/                  English bid-book (sg_facade)
+gateway/                    FastAPI packing gateway (the Docker image serves this)
+demo/                       Python browser workbench, MCP server, post knowledge bases (demo/kb)
+examples/facade-demo/       SYNTHETIC façade ITT, panel lists (rev A, rev B), site inputs
+scripts/                    demos, tests, evaluations; scripts/check_project.py is the gate
+test/benchmarks/            benchmark sets behind the evaluation figures
+docs/                       technical document, deployment guide, design notes (many in Chinese)
+workbench/                  legacy Rust workbench (see above)
+.github/workflows/ci.yml    CI: smoke (the gate), rust, packing-eval-slice, docker-smoke
 ```
 
-Rust 工作台会在本机再拉起 Python 工具引擎，用来打开 `/cad`、`/engineering`、`/logistics`，以及带招标资料或这些项目 id 的对话。没装 `requirements.txt` 时，这几页会说明引擎没起来，66 岗聊天仍可用。
+## Settings
 
-Python 参考实现：`demo/`（`uvicorn app:app --host 127.0.0.1 --port 8765`）。
+Copy `.env.example` / `demo/.env.example`; never commit keys.
 
-**语音输入（可选）**：输入框左边的「语音」按钮，说完只把文字回填到输入框、**不会自动发送**，核对后自己按发送。Python 参考实现装了 `requirements-asr.txt` 后用本机 faster-whisper 识别（带 35 个土木术语的提示，录音不出本机）；否则退回浏览器自带识别，首次使用前说明录音会发给浏览器厂商。设计与边界见 [docs/voice-input.md](docs/voice-input.md)，术语表修好了什么、没修好什么见 [eval/asr](eval/asr/README.md)。
+| Variable | Default | Effect |
+|---|---|---|
+| `CIVIL_TOKEN` | empty | One access token for the workbench and the gateway (`Authorization: Bearer`, or the cookie set by `?token=`). Set: required on every API route, loopback included. Empty: only genuinely local requests are served. `docker compose` refuses to start without it |
+| `CIVIL_ALLOW_OPEN_LAN` | unset | `1` lets a token-less app accept requests from other machines. **Never set it on a server** |
+| `CIVIL_HOST` / `CIVIL_PORT` | `127.0.0.1` / `8765` | Workbench bind address and port; a non-loopback host without `CIVIL_TOKEN` refuses to start |
+| `CIVIL_API_KEY` / `CIVIL_API_BASE` / `CIVIL_MODEL` | unset | Optional model endpoint (any OpenAI-compatible Chat Completions API); no key, no model. `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `LLM_MODEL` are also read |
+| `CIVIL_AGENT_MODE` | `steps` | `model` or `auto` enables the model loop |
+| `CIVIL_JOB_ROOT` | unset | Job-folder root the tools may read and write |
+| `CB_DB_PATH` | `data/civilbuddy.db` | SQLite database path (the Docker image sets `/app/output/db/civilbuddy.db`, inside the volume) |
+| `PACKING_AGENT_URL` / `PACKING_AGENT_ROOT` | unset / repo root | Where the workbench finds the packing engine |
+| `PACKING_TMS_MODE` | unset (stub) | Only the server environment can select a live TMS; nothing is booked by default |
 
-产品 CLI（土木版 Codex）：`python -m packing_assistant.civil`（TUI）· `python -m packing_assistant.civil app` · `python -m packing_assistant.civil mcp --pack construction`。像 Codex 在仓库里工作一样，`civil` 在**工地文件夹**里工作：`civil init` 写一份 `CIVIL.md`（本工程说明，相当于 AGENTS.md，写明的项目 / 辖区 / 业主会进成稿，留空的保持 `UNSPECIFIED`），之后在该文件夹或其子目录里运行，会话与文书落在 `<工地>/.civil-buddy/out`；`civil -C <文件夹>` 等同于先 cd；`civil exec --jsonl` 逐行输出事件流，`civil status` 看当前文件夹、沙箱、审批与模型。一轮任务有两种跑法：默认 `steps`（规则路由 + 确定性流程，不调模型）；`civil --mode model`（或 TUI 里 `/mode model`）换成模型驱动——模型自己列步骤、选岗位、读文件夹里的资料、调 `run_skill` / `pack_plan` / `tender_compare`，高风险岗位当场问确认句。模型写的字进不了成稿（交给流程的只有你的原话和你文件夹里的资料），回复里没有出处的数字会被改写或点名（基准 `test/benchmarks/number_provenance`，37 例 P/R 1.000）。模型用 `CIVIL_API_BASE` / `CIVIL_API_KEY` / `CIVIL_MODEL` 配，本机 Ollama 即可：`CIVIL_API_BASE=http://127.0.0.1:11434/v1 CIVIL_API_KEY=ollama CIVIL_MODEL=qwen2.5:3b`。两种跑法都读你点名的文件：`civil exec "packing.csv 要几个柜"` 由装箱引擎真算并留下 `pack-plan.md`，缺重量或尺寸的行逐条列出、不给柜数；`civil exec "解析招标 招标文件.docx"` 解析的是那份文件。完整走法见 [docs/civil-buddy/civil-cli.md](docs/civil-buddy/civil-cli.md)。
+## Commit authorship
 
-**拿真实招标文件来用**（招标三岗，不调模型、不联网）：`civil exec "解析招标 招标文件.pdf"` 整份读完（Word、带文字层的 PDF、装了 `.[ocr]` 之后的扫描件），字段取自前附表并标条款号和页码，否决与拒收条款一句一行；`civil exec "全面检查投标响应：招标文件.pdf 投标函.docx 施工组织设计.docx"` 把我方每份文件里的工期、报价、有效期、项目经理逐个跟招标要求比，并列出我方文件之间互相不一致的地方。用法和不能指望它的地方见 [docs/civil-buddy/real-tender.md](docs/civil-buddy/real-tender.md)。系统级沙箱（`--sandbox-backend os`：工具在被内核限制的进程里跑，Linux 用 Landlock + seccomp，Windows 用 Low 完整性级别 + Job 对象；`civil sandbox` 当场自检）见 [docs/civil-buddy/os-sandbox.md](docs/civil-buddy/os-sandbox.md)。自己公司的岗位做成插件装进来（`civil plugin install examples/plugins/site-forms`：SOP + 表单模板 + 知识，纯声明、不含代码；未受信任一律按高风险）见 [docs/civil-buddy/plugins.md](docs/civil-buddy/plugins.md)。不想用终端：`civil desktop` 打开原生桌面窗口（Tk，不用装任何东西；对话、逐步进度、审批对话框、双击打开成稿、复核），见 [docs/civil-buddy/desktop-app.md](docs/civil-buddy/desktop-app.md)。`civil review <文稿>` 不调模型，列出文稿里在工地资料中找不到出处的数字、条款号，以及「已具备报审条件」这类不该由文稿下的结论（退出码 0 干净 / 1 有待核对 / 2 审不了）。技能一岗一份：`.agents/skills/<id>/SKILL.md`。IDE：`ide/README.md`。Grok 总控：`skills/civil-buddy`。  
-**全量产品规划书**：[docs/civil-buddy/product-plan.md](docs/civil-buddy/product-plan.md)。切片执行：[product-completion-plan.md](docs/civil-buddy/product-completion-plan.md)。
+As of `cab9249`, 98 of the 447 commits on `main` (22%) are authored as `Packing Assistant`
+(`git log --format=%an | sort | uniq -c`): changes drafted by an agent and committed under their own
+name, then reviewed by a person before landing on `main`. It is part of the human-in-the-loop process,
+not a second author.
 
-### 2) 装箱引擎（pack-ship 的计算器）
+## Licence
 
-```powershell
-pip install -r requirements.txt
-python scripts/demo_agent_middleware.py      # 冒烟（四拍剧本），无需 API Key
-python scripts/demo_one_shot.py --all        # 产品冒烟 + tiny 闭环 + 影子评测，无需 API Key
-python scripts/test_trace_artifact_export.py # SQLite / JSONL 失败恢复、快照与终止事件回归
-python scripts/test_storage_ensure_run.py    # issue #22 回归：run_start 先于会话落盘时不再触发外键回退（CI 覆盖）
-uvicorn gateway.app:app --host 127.0.0.1 --port 8000
-```
-
-工作台默认在同一仓库里找引擎：`PACKING_AGENT_ROOT` = 本仓根。也可另开网关：
-
-```env
-PACKING_AGENT_URL=http://127.0.0.1:8000
-```
-
-详见 [docs/civil-buddy/packing-agent.md](docs/civil-buddy/packing-agent.md)。
-
----
-
-## 仓库结构
-
-```
-workbench/           # Civil Buddy Rust 工作台 + MCP
-demo/                # 专家知识库 kb/ + Python 参考实现
-.agents/skills/      # Codex：66 岗各一份 SKILL.md
-skills/civil-buddy/  # Grok 总控 SOP
-packing_assistant/   # 装箱 harness（Team A 成箱 + Team B 拼柜）
-gateway/ + frontend/ # 装箱 HTTP / UI
-docs/civil-buddy/    # 工作台设计、专家名册
-docs/                # 装箱架构与产品主线
-```
-
-**原则（两套入口共用）：** tools compute numbers; the model only routes.
-
----
-
-## 装箱引擎（原 packing-agent）
-
-架构：**大 Team ⊃ Team A（成箱）+ Team B（拼柜）** · Harness 0.6.4  
-NL → IntentSpec → 白名单 tools → HITL → 影子评测。
-
-![Packing HITL graph](docs/diagrams/langgraph-create-app.jpg)
-
-```powershell
-python scripts/test_p0_p1_p2_full.py              # P0–P2 全链（CI 覆盖）
-python scripts/eval_workteams_cli.py --tiny-only      # steps vs llm 影子评测（CI 覆盖）
-```
-
-文档：[docs/harness-design.md](docs/harness-design.md) · [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/product-mainline-tender-delivery.md](docs/product-mainline-tender-delivery.md)
-
----
-
-## 环境变量
-
-复制 `.env.example` / `demo/.env.example`，不要提交密钥。
-
-| 变量 | 说明 |
-|------|------|
-| `CIVIL_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` | 成稿用的 Chat Completions Key（自选；DeepSeek 可选） |
-| `CIVIL_API_BASE` / `OPENAI_BASE_URL` | 兼容网关，例 `https://api.openai.com/v1` |
-| `CIVIL_MODEL` / `LLM_MODEL` | 模型名，须与网关一致 |
-| `CIVIL_JOB_ROOT` | 授权作业文件夹（禁止 `D:\layout`） |
-| `PACKING_AGENT_URL` | 装箱网关（可选） |
-| `PACKING_AGENT_ROOT` | 默认本仓根，一般不用设 |
-| `CIVIL_PORT` | 工作台端口，默认 8765 |
-
----
-
-## 明确不做
-
-桌面键鼠、微信/飞书、Rhino/Civil3D 改模、注册工程师签认、编造条款/单价/xyz。规范全文不进仓库。
+MIT — see [LICENSE](LICENSE). Outputs are internal working drafts, never signed or statutory
+documents.

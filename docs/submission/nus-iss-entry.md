@@ -1,67 +1,113 @@
-# NUS-ISS "Show Me Your Agents" 2026 — Civil Buddy entry notes
+# NUS-ISS "Show Me Your Agents" 2026 — civil-buddy entry (SME track)
 
-> 中文说明：本文是 NUS-ISS 赛道的对照表，与海之子杯材料（同目录 `haizizhi-*.md`）并列；两赛口径互不通用，资格条款见 [knowledge_base/06_competition/constraints-nus-iss.md](../../knowledge_base/06_competition/constraints-nus-iss.md)。提案 **2026-09-28** 提交，现场演示 2026-10-10。本文只写仓库里能复跑验证的事实（截至 main `71c841e`，2026-09-13）；业务叙事、SME 对象与团队信息留给队员填。
->
-> Every number below is produced by a command in this repository, with no API key and no network. Nothing here is a judging outcome.
+Team Mintang · team code PJ2U63AF · as of `main` at `cab9249` (2026-09-26).
 
-## What it is
+Every figure on this page comes from a command in this repository, run offline with no model key.
+Nothing here is a judging outcome. The technical document
+([nus-iss-technical.md](nus-iss-technical.md)) is the full reference.
 
-Civil Buddy is an agent workbench for civil-engineering and construction SMEs: 66 job posts in 16 categories, each an SOP the model drafts against. Hard numbers — container counts, coordinates, unit prices — come only from deterministic tools; the model routes and drafts. High-risk actions (qualification verdicts, bids, writes to disk) stop at a human confirmation. One post, container packing (`pack-ship`), has a real engine behind it; the other 65 are drafting posts graded honestly in [docs/depth-ladder.md](../depth-ladder.md). MIT licence.
+## The partner's problem
 
-## What a judge can verify
+Our pilot partner is a Singapore curtain-wall (façade) contractor that supplies and installs façade
+packages; it is not named in this repository. It stated its problem in writing to the organisers. A
+typical job needs two things at once: an English tender response, and the outbound packing and
+shipping of the panels to site — often in 40HQ containers, in crates or on steel frames, under weight
+and lashing limits. The two live in separate files: the tender in Word or PDF, the packing list in
+Excel, the bookings in email. A statement in the bid about packing is often not tied to any loading
+plan, and a container count is not tied to the tender clause it should satisfy. First drafts take days,
+and the same scramble repeats on the next job. Qualifications and price remain human work. In short,
+tender response and outbound packing run as two disconnected exercises and need to stay linked.
 
-| Capability | What happens | Command (repo root, no key) |
-|---|---|---|
-| 66 posts draft offline | Every post has a knowledge base, FAQ, required fields and gap list; drafts are produced with no model key, missing data stays `[A001]` / `UNSPECIFIED` | `python scripts/test_kb_k4_depth.py` → 66/66 |
-| One-shot product demo | Routing, tool whitelist, HITL pause, trace on disk, shadow evaluation | `python scripts/demo_one_shot.py --all` → ALL_PASS |
-| Packing engine with a human gate | Boxes → **confirm** → containers → 3D / centre of gravity / risk verdict; a structurally bad input is rejected, not packed | `python main.py --demo` · `python main.py --demo --preset structure_fail` → REJECT |
-| A supplier's packing list in, a plan out | Real export headers (`Description of Goods`, `L x W x H`, `L (mm)`, N.W./G.W.), tonnes read as tonnes; a row with no weight or no dimensions stops the run and names the row, and a solve that packs nothing is an error, not a plan | `python scripts/test_table_mapper_unit.py` → ALL_PASS · `python scripts/test_pack_ship_dimension_gate.py` |
-| PDF packing lists | `.pdf` reaches the parser on `pypdf` (BSD); an unrecognised layout returns an actionable reason instead of an empty plan | `python scripts/test_packing_list_pdf.py` |
-| MCP tools that run the engine | `pack-ship__ingest / plan / vgm / booking_draft / export / list / health` over JSON-RPC 2.0 stdio; the VGM stops at `needs_shipper_signature`, the booking at `dry_run`; nothing is sent. The sample file is the long-frame list: 9 boxes, `can_fit` true, pieces 9→9 and 23800 kg conserved, 3×40HQ, `n0` 2, utilization 0.1934 | `python scripts/test_pack_ship_crates_structure.py` · `python scripts/test_pack_ship_solver_mcp.py` (same file; the script prints the solver fields, it does not freeze an older 7-container line) |
-| Mount it in an agent host | The same server, scoped per post or category, for OpenClaw / Cursor / VS Code hosts | `python demo/mcp_stdio.py --expert pack-ship` (configs in `ide/`) |
-| Agent middleware, asserted | Policy engine (deny with a reason), recovery chain (retry → `UNSPECIFIED` → audit), cost fuse | `python scripts/demo_agent_middleware.py` · `python scripts/test_agent_middleware.py` |
-| Stop, resume, export | Cancelling a turn closes the live model socket (verified on Windows and Linux); traces export atomically; a task can be backed up and re-imported as a ZIP | `npm run check` (142 checks; see the Technical Document §5.3) |
-| Evaluation, stated honestly | 128 automated packing runs (16 lanes × 8 rounds) all completed; **71 of 128 produced a plan that fits**, 57 came back `can_fit=False` for a human to revise; CI checks these figures against the archive | `python scripts/render_eval_table.py` |
-| Tender vs. bid response, measured | One row per tender line; a stated number that does not meet the tender's (工期 60 vs 999 日历天) is flagged for review, never judged. Offline `--check` on 19 cases: link precision 1.000, link recall 0.980, conflict precision 1.000, conflict recall 1.000 (14/14). An older 14-case run (recall 0.974, 9/9) is not the current score | `python scripts/eval_tender_response_match.py --check` |
-| CI | Three jobs (Python smoke, Rust workbench, packing-eval slice) green on `main` since #24–#26 (2026-09-13) | [Actions](https://github.com/LUOaini1213/civil-buddy/actions) |
+## What civil-buddy does about it: the linked run
 
-## Against the award axes
+One request links the two:
 
-**SME readiness**
+```bash
+pip install -r requirements.txt && python scripts/demo_facade.py
+```
 
-- Runs on one machine with no cloud dependency; the deterministic paths need no model key at all, and a key for any OpenAI-compatible Chat Completions endpoint is entered in the UI and kept in memory only (never written to disk, never committed — `npm run check` includes a tracked-secrets scan).
-- Every output is an internal working draft, never a signed document; the tool refuses to say "可以投标 / 可以开工", and `submit_blocked` stays `true` on bid deliverables until a licensed person confirms.
-- Data honesty is enforced by tests, not by prompt: a table that cannot be read says so instead of showing demo numbers; a row with no weight stops the plan; unconnected fields are the literal `UNSPECIFIED`.
-- Not yet in the repo: a named SME pilot and its data. The one real shipment case quoted elsewhere (446 t, 29 → 25 containers) is customer data kept out of the repository and is **not** reproducible from it.
+Flow 1 of the demo asks, in English, *"Link the tender facade_itt_doc.md to the packing list
+facade_panels.xlsx and write the logistics response"*. civil-buddy:
 
-**Best use of agents**
+1. reads the ITT's logistics clauses with their numbers (4.7 handling, 4.8 container type, 4.9 gross
+   mass, 4.10 securing, 4.11 delivery sequence);
+2. takes the container type from the clause ("Container type 40HQ taken from Clause 4.8");
+3. plans the real panel list with the packing engine, keeping its conservation and needs-human gates
+   (6 × 40HQ, 24 pieces / 10,800 kg net, 24 → 24 pieces conserved);
+4. writes 7 statements, each tied to its clause and a plan figure: **1 covered, 2 partial, 0 gap, 4 for
+   a person** — for example S3: heaviest container 6,472.8 kg gross (2,582.8 kg cargo + 3,890 kg tare)
+   against the 20,000 kg limit of Clause 4.9;
+5. writes an English bid-book draft whose logistics chapter cites clause and figure, and a link record
+   (`tender-packing-link.json`) holding statement → clause → figures → SHA-256 of the tender, the panel
+   list and the plan, with `confirmed_by_person = false` and `submit_blocked = true`.
 
-- Natural language → intent → whitelisted tools → human confirmation → evaluation, with `agent_mode=steps` as the production path and the LLM tool-calling path run only as a shadow arm whose agreement with the steps arm is checked in CI.
-- Two runtime layers rather than prompt rules: a policy engine that decides who may call which tool at what cost, and a failure-recovery chain that degrades to `UNSPECIFIED` and leaves an audit trail.
-- The engine is exposed as MCP tools so an external agent host can use it without re-implementing packing; the tools report `container_mix_supported: false` because the engine packs N containers of one type — a limit, stated.
+When revision B of the panel list arrives (30 panels, 13,920 kg), the same request re-plans (8 × 40HQ)
+and names what went stale: statements S2, S3, S6 and S7 need re-confirmation, S1, S4 and S5 keep the
+same figures, and the earlier Word copies `bidbook.en.docx` and `tender-packing-link.docx` "still hold
+the previous statements - do not send them". A statement the plan cannot evidence is never marked
+covered; `scripts/test_tender_packing_link.py` (18 tests) pins that, including a plan that does not fit
+and container clauses that name a size only or a type the planner cannot model.
 
-**Social impact**
+Flows 2–4 of the same script run tender review, packing and site paperwork on their own. Site
+paperwork is a secondary capability that shows the typed licensed sign-off; it is not the partner's
+problem.
 
-- The worker-facing angle is written up in [创意材料-工友侧.md](创意材料-工友侧.md): pre-shift safety briefings with the blanks the foreman must fill, stop-work judgement kept with people, and an explicit list of what the team refuses to build (AI signing on a worker's behalf, emotion or behaviour scoring, fully unattended pipelines).
-- Every HITL gate is a place kept for a person; the product's rule is "tools compute numbers; the model only routes".
+## The security baseline
 
-## Running it on AWS
+Shipped in pull request #61 (merge commit `d3ada11`) and enforced in code:
 
-- The packing gateway and UI ship as a Docker image (`Dockerfile`, `docker-compose.yml`): binds `$PORT`, health check at `/api/health`, output on a volume. It runs on any container host including a Lightsail container service or instance; that deployment has not been exercised yet and is a build-phase task.
-- The workbench (`demo/`, port 8765) talks to the engine over HTTP (`PACKING_AGENT_URL`) or in-process (`PACKING_AGENT_ROOT`).
-- Model access: any OpenAI-compatible Chat Completions base URL plus key, set at runtime in "设置 → 模型设置". OpenRouter (permitted by the organisers) works as-is. Amazon Bedrock offers an OpenAI-compatible Chat Completions path (`https://bedrock-runtime.<region>.amazonaws.com/openai/v1`, `Authorization: Bearer <Bedrock API key>`), so the same setting takes a Bedrock key. In Singapore (ap-southeast-1) the bedrock-runtime endpoint is supported and the bedrock-mantle endpoint is not, and the `openai.gpt-oss-*` models are not listed for that Region, so which model can serve this path from Singapore is still open. It has not been exercised from this repository yet. The Technical Document (§6) is the current reference.
+- Code computes every number; model text never reaches a deliverable.
+- The model never approves: the Python MCP server and the web apps accept no approval flag from a
+  program.
+- Only a person's typed sentence (我明白，将由持证人员签认, "I understand; a licensed person will
+  sign") approves the 19 high-risk posts, for that turn only. The bid posts are low risk: they draft
+  without it, but every draft carries `submit_blocked = true`.
+- The server is token-gated: with `CIVIL_TOKEN` set, every API route needs it, loopback included; a
+  non-loopback bind without a token refuses to start.
+- 146 offline checks (`npm run check`) run in CI on every push, next to a `docker-smoke` job that builds
+  and starts the gateway image (pull request #64, merge commit `16316df`).
 
-## Boundaries we will not cross in the proposal
+## Real and synthetic
 
-No signed or statutory documents; no automatic "can bid / can start work" verdicts; no promised win rates; no container-type mixes; no invented coordinates, clause numbers or unit prices. Regulation text is not stored in the repository.
+- **Synthetic:** every demo input — the ITT, the project, the main contractor, the panel lists, the
+  site day and the people — is an invented fixture in
+  [examples/facade-demo](../../examples/facade-demo/README.md). The only company name in code and
+  fixtures is the fictional "Harbourline Facade Pte. Ltd. (DEMO)".
+- **Real:** the code paths, the checks and the numbers the commands print. No partner document or
+  figure is in the repository, no pilot has started, and no time saving is claimed.
+- **Deployment:** the target is one AWS Lightsail instance per company. The instance is **not running
+  yet**; the Docker image is proven only in CI and local Docker. Amazon Bedrock is configurable but has
+  **never been run** from this repository, and no result here comes from a live model.
 
-## Timeline and open items
+## Not done yet
 
-| Date | Milestone |
-|---|---|
-| 2026-09-07 → 09-25 | Build phase |
-| **2026-09-28** | Proposal submission |
-| 2026-10-10 | Demo day |
-| 2026-10-19 | Awards |
+As the demo and the technical document print them:
 
-To be written by the team before 09-28: the SME problem statement and the pilot partner; which posts the demo walks through on 10-10; the Lightsail deployment record; team member list (Team Mintang, four members).
+- A-frame stillages, upright transport and no stacking, lashing to the CTU Code, and delivery
+  sequencing are not modelled; they stay `[TO CONFIRM]` for a person. The container count rests on the
+  planner's own crates, not on stillages.
+- Crate structure: 24 of 24 crates are pending detailed design (待详设).
+- The gross mass uses an approximate knowledge-base tare; dunnage, lashing and stillage mass are
+  excluded, and the signed VGM governs.
+- The plan does not follow the installation sequence (in rev B the L8 panels load in container 1).
+- The tender parse shows 0 of the ITT's 12 façade specification clauses, and no liquidated-damages or
+  retention row.
+- The link runs from a `civil` or workbench turn only, not over MCP or a gateway route; the older
+  `/api/tender/delivery` route can plan sample materials in another container type and leaves that row
+  to a person.
+- The English bid-book still carries Chinese titles in chapter 3 and Annex B for non-logistics rows.
+- No step yet in which a person marks a link statement confirmed; the link has not been run in model
+  mode.
+- English routing: on the blind held-out set `heldout_en2` (28 sentences) accuracy is 0.786 with 0
+  false runs; the misses fall back to chat.
+- The legacy Rust workbench (`workbench/`) predates the security baseline and still accepts
+  `confirm_ok`; it is not part of the deployed surface.
+
+## Links
+
+- [README](../../README.md) — the one-command demo, the safety model, the settings.
+- [Technical document](nus-iss-technical.md) — architecture, judging-criteria map, evaluation, AWS
+  status, limitations.
+- [examples/facade-demo/README.md](../../examples/facade-demo/README.md) — the synthetic fixtures and
+  the linked run.
+- [docs/deploy-minimal.md](../deploy-minimal.md) — operator guide for one server (Chinese).

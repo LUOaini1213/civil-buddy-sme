@@ -9,13 +9,13 @@
 ## 方案 A · Render（推荐，免费档够演示）
 
 ### 0. 准备
-- GitHub 已推代码：`https://github.com/LUOaini1213/civil-buddy`
+- GitHub 已推代码：`https://github.com/LUOaini1213/civil-buddy-sme`
 - 仓库根目录有可用 `Dockerfile`（已支持 `$PORT`）
 
 ### 1. 创建服务
 1. 打开 [https://render.com](https://render.com) 登录（可用 GitHub）
 2. **New → Web Service**
-3. 连接仓库 `LUOaini1213/civil-buddy`，分支 `main`
+3. 连接仓库 `LUOaini1213/civil-buddy-sme`，分支 `main`
 4. 设置：
    - **Runtime**: Docker
    - **Region**: 选近的（如 Singapore）
@@ -47,8 +47,8 @@
 curl -fsSL https://get.docker.com | sh
 
 # 2. 拉代码
-git clone https://github.com/LUOaini1213/civil-buddy.git
-cd civil-buddy
+git clone https://github.com/LUOaini1213/civil-buddy-sme.git
+cd civil-buddy-sme
 
 # 3. 访问口令（必填；docker compose 没有它会直接报错）
 echo "CIVIL_TOKEN=$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')" >> .env
