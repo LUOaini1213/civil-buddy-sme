@@ -58,7 +58,8 @@ CHECKS = (
     Check("unified-launcher", ("scripts/test_unified_launcher.py",)),
     Check("domain-service", ("scripts/test_domain_service.py",), timeout=300),
     Check("unified-packing", ("scripts/test_unified_packing.py",)),
-    Check("unified-release", ("scripts/test_unified_release.py",)),
+    # Windows temporary Git fixtures and extracted-package reads exceeded 180s under load.
+    Check("unified-release", ("scripts/test_unified_release.py",), timeout=600),
     Check("ui-dom", ("scripts/e2e/ui_dom.cjs",), "node"),  # real page + real backend in jsdom
     Check("engineering-planning", ("scripts/test_engineering_planning.py",)),
     Check("planning-exchange", ("scripts/test_planning_exchange.py",)),
