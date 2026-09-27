@@ -383,7 +383,13 @@ async fn execute(
                         {
                             Err("必须先读取源文件，并成功预览相同的source、expected_sha256和patches".into())
                         } else {
-                            let mut response = scope.execute(name, args.clone()).await;
+                            // Same turn + same previewed patch = same worker call_id,
+                            // so a repeated apply replays the first draft.
+                            let call_id = (name == "apply_document").then(|| {
+                                super::worker::document_call_id(lease.turn_id().as_str(), &key)
+                            });
+                            let mut response =
+                                scope.execute_as(name, args.clone(), call_id.as_deref()).await;
                             if let Ok(value) = &mut response {
                                 if name == "load_skill" && value["risk"] == "high" {
                                     high_risk = true;
@@ -396,7 +402,9 @@ async fn execute(
                                         value["result"]["preview_id"] = json!(key);
                                         previews.insert(key, args.clone());
                                     }
-                                    if name == "apply_document" {
+                                    if name == "apply_document"
+                                        && value["result"]["replayed"] != true
+                                    {
                                         let artifact = state
                                             .register_artifact(&req.workspace, &value["result"])?;
                                         emit(lease, "artifact", artifact.clone())?;
