@@ -22,3 +22,6 @@ demo/static/vendor/frappe-gantt-1.2.2/* text eol=lf
 
 # Shell scripts run inside Linux containers / CI; a CRLF checkout breaks them.
 *.sh text eol=lf
+
+# Files read inside Linux containers / on the Lightsail host (Caddyfile, compose override, launch script).
+deploy/** text eol=lf

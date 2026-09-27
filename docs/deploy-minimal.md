@@ -1,85 +1,68 @@
-# 云部署最小步骤（civil-buddy）
+# Deploying Civil Buddy: the minimal routes
 
-目标：固定 HTTPS 公网地址，不依赖本机 localtunnel。
+> Scope: this kit deploys the Python gateway and its tender-packing demonstration. It does not deploy the Rust unified workbench or its named-user isolation. Use one shared demo token with synthetic files; for the desktop release and per-person workspaces, see [release handoff](civil-buddy/release-handoff.md).
 
-默认 **不需要** skjolber Java；3D 用 Python bin3d。LLM Key 可选（steps 主路径可无 Key）。
+Goal: a fixed HTTPS address for the gateway (the browser pages and the API), with the access token required on
+every route except `/`, `/workbench` and `/api/health`.
 
----
+What every route below has in common:
 
-## 方案 A · Render（推荐，免费档够演示）
-
-### 0. 准备
-- GitHub 已推代码：`https://github.com/LUOaini1213/civil-buddy-sme`
-- 仓库根目录有可用 `Dockerfile`（已支持 `$PORT`）
-
-### 1. 创建服务
-1. 打开 [https://render.com](https://render.com) 登录（可用 GitHub）
-2. **New → Web Service**
-3. 连接仓库 `LUOaini1213/civil-buddy-sme`，分支 `main`
-4. 设置：
-   - **Runtime**: Docker
-   - **Region**: 选近的（如 Singapore）
-   - **Instance**: Free / Starter
-5. **Environment**（可选）：
-   | Key | 示例 | 说明 |
-   |-----|------|------|
-   | `CIVIL_TOKEN` | 长随机串 | **必填**：访问口令；不设则容器拒绝启动 |
-   | `PACKING_SKIP_SKJOLBER` | `1` | 默认即可 |
-   | `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` | 你的 Key | 不要也可跑 steps |
-   | `OPENAI_BASE_URL` | DeepSeek 时填对应 base | 可选 |
-6. **Create Web Service** → 等 Build / Deploy 变绿
-
-### 2. 访问
-- 公网：`https://<你的服务名>.onrender.com/?token=<口令>`（打开一次即换成 HttpOnly cookie）
-- 健康：`https://<你的服务名>.onrender.com/api/health`  
-  期望：`gateway: UP`、`agent_count: 13`
-
-### 3. 注意（Free）
-- 一段时间无人访问会**休眠**，下次打开要等 30～60 秒冷启动
-- 要常亮：升付费档，或用方案 B 小机
+- **`CIVIL_TOKEN` is required.** Without it the container refuses to start on 0.0.0.0, and `docker compose`
+  refuses to start at all. Keep it in the host's environment or a 0600 `.env`, never in the repository.
+- **No model key is needed.** The linked tender ↔ packing run, the demo page and the packing engine are
+  deterministic (`steps` mode). Add a key only if you want the model mode, and never on a demo server.
+- **No Java service is needed.** 3D packing uses the Python solver (`PACKING_SKIP_SKJOLBER=1` by default).
+- The image starts only the gateway. Data lives in two volumes: `packing_output` at `/app/output` (SQLite, upload
+  jobs) and `agent_out` at `/app/demo/out` (what agent turns write). `docker compose down` and `up --build` keep
+  them; only `docker compose down -v` deletes them.
+- Whole-image check: `docker build -t civil-buddy-gateway:smoke . && bash scripts/docker_smoke.sh` (the CI job
+  `docker-smoke` runs it on every PR).
 
 ---
 
-## 方案 B · 任意 Linux 云主机（2 核 2G 够演示）
+## Route A · AWS Lightsail (recommended)
+
+One Lightsail Linux instance per company, used in a browser. The full procedure, with the exact `aws lightsail`
+commands, the launch script, Caddy with automatic HTTPS, token handover and cost, is in
+**[deploy-aws-lightsail.md](deploy-aws-lightsail.md)**. That procedure **has not been run on Lightsail yet**; its
+local rehearsal (`deploy/lightsail/test-local.sh`) and the image's smoke test have.
+
+In short: reserve a static IP, launch Ubuntu 24.04 (`small_3_0`, 2 GB) with `deploy/lightsail/user-data.sh` as the
+launch script, attach the IP, open 80/443 (22 from your IP only), enable automatic snapshots, read the token over
+SSH. The gateway is on 127.0.0.1:8000 behind Caddy; port 8000 is never opened.
+
+---
+
+## Route B · Any Linux host with Docker (2 vCPU / 2 GB is enough for a demo)
 
 ```bash
-# 1. 装 Docker
-curl -fsSL https://get.docker.com | sh
+# 1. Docker (Docker's own packages; see https://docs.docker.com/engine/install/)
+# 2. The code at one commit
+git clone https://github.com/LUOaini1213/civil-buddy-sme.git civil-buddy && cd civil-buddy
+git checkout --detach <commit>
 
-# 2. 拉代码
-git clone https://github.com/LUOaini1213/civil-buddy-sme.git
-cd civil-buddy-sme
+# 3. The access token (required) and, behind the proxy, the site address
+( umask 077; printf 'CIVIL_TOKEN=%s\nSITE_ADDRESS=%s\n' "$(openssl rand -hex 32)" "<your host name>" > .env )
 
-# 3. 访问口令（必填；docker compose 没有它会直接报错）
-echo "CIVIL_TOKEN=$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')" >> .env
+# 4. With HTTPS in front (Caddy, gateway on 127.0.0.1 only; the same files as the Lightsail route)
+docker compose -f docker-compose.yml -f deploy/lightsail/compose.override.yml --env-file .env up -d --build
+#    or, on a laptop only, without a proxy:  docker compose up -d --build   -> http://localhost:8000
 
-# 4. 构建并后台跑
-docker compose up -d --build
-
-# 5. 访问 http://<公网IP>:8000/?token=<口令>
-# 正式对外请按下面「AWS Lightsail」一节加 HTTPS，不要直接放行 8000
-
-# 6. 自检（脚本用 Bearer 头；/api/health 是公开的存活探针，其余接口没口令一律 401）
+# 5. Self-check (scripts use a Bearer header; /api/health is the public liveness probe)
 curl -s http://127.0.0.1:8000/api/health
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/tools                                  # 401
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/tools                                # 401
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(sed -n 's/^CIVIL_TOKEN=//p' .env)" \
-  http://127.0.0.1:8000/api/tools                                                                       # 200
+  http://127.0.0.1:8000/api/tools                                                                      # 200
 ```
 
-数据：SQLite 库（会话、运行记录、审计、LangGraph 检查点）在卷 `packing_output` 里的 `/app/output/db/civilbuddy.db`（`CB_DB_PATH`），和 `output/` 的运行产物一起保留；`docker compose down` 或重新 `--build` 都不会丢，只有 `docker compose down -v` 会删掉。整套镜像自检是 `docker build -t civil-buddy-gateway:smoke . && bash scripts/docker_smoke.sh`（CI 的 `docker-smoke` 任务每次都跑）。
+Then open `https://<host>/?token=<token>` once (it sets an HttpOnly cookie and redirects without the token) and
+`https://<host>/demo`.
 
-可选环境变量（写 `.env` 或 `docker compose` 的 environment）：
+### Rules for a server that others reach
 
-```env
-PACKING_SKIP_SKJOLBER=1
-DEEPSEEK_API_KEY=sk-xxx
-```
-
-### AWS Lightsail（一台公司服务器 + 员工浏览器）
-
-1. **口令必填**：`CIVIL_TOKEN` 用上面的随机串，只放服务器 `.env`，不进仓库。换口令 = 改值后重启，旧 cookie 会收到 401 并被清掉。**不要**设 `CIVIL_ALLOW_OPEN_LAN`。
-2. **只经 HTTPS 进来**：`docker-compose.yml` 的端口改成 `"127.0.0.1:8000:8000"`；Lightsail 防火墙只开 80/443，不开 8000。
-3. **前面放 Caddy 或 nginx**。nginx 需要：
+1. **Only through HTTPS.** Publish the gateway on `127.0.0.1:8000` (the override does this) and open only 80/443
+   in the host firewall; never 8000.
+2. **Caddy is in the repository** (`deploy/lightsail/Caddyfile`). With nginx instead, the proxy needs:
    ```nginx
    location / {
        proxy_pass http://127.0.0.1:8000;
@@ -89,50 +72,69 @@ DEEPSEEK_API_KEY=sk-xxx
        proxy_set_header X-Forwarded-Proto $scheme;
        proxy_set_header Upgrade $http_upgrade;      # /ws/
        proxy_set_header Connection "upgrade";
+       client_max_body_size 16m;                    # the upload route takes 10 MB + 5 MB
    }
    ```
-   带转发头或走 HTTP/1.0 的请求按"非本机"处理；口令对本机回环也同样必需，所以代理怎么配都不会绕过口令；`X-Forwarded-Proto: https` 会让 cookie 带 `Secure`。不要把 uvicorn 的 `FORWARDED_ALLOW_IPS` 设成 `*`。
-4. **员工第一次**打开 `https://<域名>/?token=<口令>`，服务器 303 跳回不带口令的地址并种 HttpOnly、SameSite=Strict 的 cookie；这条链接会在代理日志和浏览器历史里出现一次，别转发。脚本用 `Authorization: Bearer <口令>`。
-5. 密钥只放环境变量；服务器仓库根和 `output/` 下不要放 `deepseek api.txt` 之类的文件（`/api/artifact` 只读 `output/`、`PACKING_OUTPUT_DIR` 和 runs 目录）。
-6. `PACKING_TMS_MODE` 不设（stub）；请求体里的 `mode` 已不能切到真实 TMS。
-7. 容器里只启动网关（镜像带着 `demo/` 的文件，因为网关的专家能力要读 `demo/kb`，但不启动工作台）。要把员工工作台也放上去，用 `CIVIL_HOST=127.0.0.1 CIVIL_TOKEN=<同一口令> python demo/serve.py`，只让同机的代理转发进来（代理和应用在同一台机器上时不要绑 0.0.0.0）；经代理进来的请求一律要口令，没设口令时代理转发的请求全部被拒。直接对外绑 0.0.0.0 而没口令，`serve.py` 拒绝启动。两个应用必须用同一个口令：cookie 同名且不分端口，口令不同会互相清掉对方的 cookie。
-8. 应用挂在域名根路径（`location /`）。挂在子路径下时，`?token=` 的 303 会跳回域名根。
-9. 没设口令时，不加转发头的 HTTP/1.1 代理（Host 改成 127.0.0.1）和任何 TCP 端口转发（socat、netsh portproxy、`ssh -R`）都会让远程请求看起来像本机：没口令的实例绝不要这样转出去。
+   A request with forwarding headers, or over HTTP/1.0, is treated as remote, and the token is required from
+   loopback too, so no proxy setting bypasses it. `X-Forwarded-Proto: https` makes the cookie `Secure`. Do not set
+   uvicorn's `FORWARDED_ALLOW_IPS` to `*`. Keep the token out of proxy access logs (the Caddyfile filters it).
+3. **The `?token=` link** appears once in the browser history; do not forward it. Scripts use
+   `Authorization: Bearer <token>`. Changing the token = edit `.env` and `up -d`; old cookies get 401 and are cleared.
+   Never set `CIVIL_ALLOW_OPEN_LAN`.
+4. **Secrets only in the environment.** No key files in the repository root or under `output/`
+   (`/api/artifact` reads only `output/`, `PACKING_OUTPUT_DIR` and the runs folder). `.dockerignore` keeps `.env`
+   files, `demo/out`, `demo/data` and `output/` out of an image built from a working copy.
+5. Leave `PACKING_TMS_MODE` unset (stub); a request body cannot switch it to a live TMS.
+6. The container starts only the gateway. To add the staff workbench as well:
+   `CIVIL_HOST=127.0.0.1 CIVIL_TOKEN=<same token> python demo/serve.py`, reached only through the same-host proxy.
+   Both apps must use the same token (the cookie has one name for both ports).
+7. Mount the app at the domain root (`location /`); under a sub-path the `?token=` redirect goes to the root.
+8. Without a token, an HTTP/1.1 proxy that strips forwarding headers and rewrites Host to 127.0.0.1, or any TCP
+   port forward (socat, netsh portproxy, `ssh -R`), makes remote requests look local: never expose an instance
+   without a token that way.
 
 ---
 
-## 方案 C · Railway（同类，界面更简单）
+## Route C · Railway
 
-1. [railway.app](https://railway.app) → New Project → Deploy from GitHub  
-2. 选本仓库 → 自动识别 Dockerfile  
-3. Variables 同上（Key 可选）  
-4. Generate Domain → 得到 `https://xxx.up.railway.app`
+1. [railway.app](https://railway.app) → New Project → Deploy from GitHub → this repository (the Dockerfile is found).
+2. Variables: `CIVIL_TOKEN` (required). No model key.
+3. Generate Domain → `https://<name>.up.railway.app`, HTTPS by the platform.
 
----
-
-## 验收清单
-
-- [ ] `GET /api/health` → UP  
-- [ ] 打开首页 → 能看到「满载演示」  
-- [ ] 点满载 → HITL 确认 → 拼柜有结果  
-- [ ] 手机 4G 也能打开（不是局域网）
+The upload jobs and the database live in the container's filesystem unless you attach a volume at `/app/output`
+(and one at `/app/demo/out`).
 
 ---
 
-## 不需要做的
+## Route D · Render.com (last resort)
 
-- 不必部署 skjolber（可选 3D 服务）  
-- 不必再开 localtunnel（云地址即长期入口）  
-- 不必把 `.env` / `deepseek api.txt` 提交进 Git  
+1. [render.com](https://render.com) → New → Web Service → this repository, branch `main`, Runtime **Docker**,
+   Region Singapore.
+2. Environment: `CIVIL_TOKEN` (required). No model key.
+3. Address: `https://<service>.onrender.com/?token=<token>`; health: `/api/health`.
+
+The free tier sleeps when idle (30–60 s cold start) and has no persistent disk: sessions and upload jobs are lost
+on every restart. Use it only if no AWS or Linux host is available.
 
 ---
 
-## 本机对照
+## Acceptance checklist (any route)
+
+- [ ] `GET /api/health` → 200, `gateway: UP`
+- [ ] `GET /api/tools` without the token → 401; with `Authorization: Bearer <token>` → 200
+- [ ] `/` without the token shows the English page "This server is private", not an error
+- [ ] `/?token=<token>` → redirect and cookie; `/demo` → **Run the linked demo** → rev A 6 × 40HQ, rev B 8 × 40HQ,
+      stale statements S2, S3, S6, S7
+- [ ] Upload `examples/facade-demo/facade_itt_doc.md` + `facade_panels.xlsx` on `/demo` → S1–S7 with sha256s
+- [ ] Reachable from a phone on mobile data (not the office LAN)
+
+## Running it locally instead
 
 ```bash
-# 仍可本机跑
 pip install -r requirements.txt
-uvicorn gateway.app:app --host 127.0.0.1 --port 8000
+python scripts/demo_facade.py                                   # the linked run on the SYNTHETIC files, no server
+uvicorn gateway.app:app --host 127.0.0.1 --port 8000            # the gateway on this machine only
 ```
 
-云上是同一套 `gateway.app:app`，只是 `--host 0.0.0.0` + 公网域名 + `CIVIL_TOKEN`（没口令监听 0.0.0.0 会拒绝启动）。
+On a server it is the same `gateway.app:app`, with `--host 0.0.0.0`, a public address and `CIVIL_TOKEN`
+(binding 0.0.0.0 without the token refuses to start).

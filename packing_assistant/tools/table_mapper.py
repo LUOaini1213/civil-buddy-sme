@@ -7,9 +7,11 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import math
 import re
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
@@ -155,7 +157,7 @@ COLUMN_SYNONYMS: Dict[str, Tuple[str, ...]] = {
     ),
     "category": ("category", "类别", "类型", "品类", "type", "class", "分类"),
     "spec": ("spec", "规格", "型号", "model", "规格型号"),
-    "note": ("note", "备注", "说明", "remark", "comments", "comment"),
+    "note": ("note", "备注", "说明", "remark", "remarks", "comments", "comment"),
 }
 
 CATEGORY_ALIASES: Dict[str, str] = {
@@ -257,6 +259,70 @@ _SHORT_DIM_FIELDS = {
 }
 
 
+# Panel and steel schedules abbreviate: "Unit Wt (kg)", "Total Wt (t)", "Mass (kg)", "Depth (mm)", "Thk", "Panel Mark",
+# "Nos". None of these mapped before, so a real panel list stopped with missing_weight or no_materials although the
+# solver was fine. They are matched as whole words (brackets dropped), and only for a header that nothing above maps,
+# so every header that mapped before maps the same. Two exceptions are checked before the substring rules, because
+# those rules read them wrong rather than not at all: a header that names a total weight ("Total Weight (kg)" was read
+# as the unit weight, i.e. qty times too heavy when it is the only weight column) and a two-dimension header
+# ("Width x Height (mm)" was read as a width, and its cell "1500 x 4200" as 15,004,200 mm).
+_WORD_SPLIT = re.compile(r"[^a-z0-9]+")
+_WEIGHT_WORDS = {"wt", "mass", "weight"}
+_THIRD_DIM_WORDS = {"depth", "thk", "thickness"}
+_MARK_WORDS = {"mark", "ref"}
+_MARK_PARTS = {"panel", "unit", "mark", "ref", "no", "id", "tag", "item"}
+_COUNT_NOUNS = {"panels", "pcs", "pieces", "units", "items", "crates", "packages", "pkgs"}
+# "W x H (mm)", "Width x Height", "L×W": exactly two dimension words joined by x / × / *, then an optional unit
+_PAIR_WORD = r"(l|len|length|w|wid|width|h|ht|height|d|depth|thk|thickness)"
+_PAIR_HEADER_RE = re.compile(r"^" + _PAIR_WORD + r"[x×*]" + _PAIR_WORD + r"(?:[(\[_/\-]?(?:mm|cm|m)[)\]]?)?$")
+_PAIR_FIELD = {"l": "length_mm", "len": "length_mm", "length": "length_mm", "w": "width_mm", "wid": "width_mm",
+               "width": "width_mm", "h": "height_mm", "ht": "height_mm", "height": "height_mm"}
+PAIR_PREFIX = "__pair:"
+THIRD_DIM = "__third__"
+# a force or a load per area is not a mass: "Self-load (kN)", "Wt (kN/m2)" stay unread and go to a person
+_FORCE_UNIT_RE = re.compile(r"[(\[/\s](?:k?n|kn/m2?|kpa|n/mm2?)[)\]\s]|[(\[/\s](?:k?n)$")
+
+
+def _header_words(raw: Any) -> List[str]:
+    s = re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", str(raw or "").lower())
+    return [w for w in _WORD_SPLIT.split(s) if w]
+
+
+def _pair_field(key: str) -> Optional[str]:
+    """"wxh(mm)" -> "__pair:width_mm:height_mm"; a depth word in the pair stands for the dimension left over."""
+    m = _PAIR_HEADER_RE.match(key)
+    if not m:
+        return None
+    a, b = _PAIR_FIELD.get(m.group(1)), _PAIR_FIELD.get(m.group(2))
+    if a and b and a != b:
+        return f"{PAIR_PREFIX}{a}:{b}"
+    return None
+
+
+def _total_weight_header(raw: Any) -> bool:
+    words = _header_words(raw)
+    return "total" in words and bool(_WEIGHT_WORDS & set(words))
+
+
+def _schedule_word_field(raw: Any) -> Optional[Tuple[str, int]]:
+    """Whole-word rules for a header nothing else mapped."""
+    words = _header_words(raw)
+    if not words:
+        return None
+    ws = set(words)
+    if _WEIGHT_WORDS & ws:
+        return ("total_weight_kg", 76) if "total" in ws else ("weight_kg", 74)
+    if _THIRD_DIM_WORDS & ws and len(words) <= 2:
+        return THIRD_DIM, 72
+    if _MARK_WORDS & ws and ws <= _MARK_PARTS:
+        return "id", 70
+    if words == ["nos"] or words[:2] == ["no", "off"] or (
+        len(words) == 3 and words[:2] in (["no", "of"], ["number", "of"]) and words[2] in _COUNT_NOUNS
+    ):
+        return "quantity", 70
+    return None
+
+
 def _weight_pref(key: str) -> int:
     """同为 weight_kg 候选时的偏好：毛重 > 未标明 > 净重。"""
     if "g.w" in key or "gross" in key or "毛重" in key:
@@ -286,19 +352,42 @@ def build_column_map(headers: Sequence[Any]) -> Dict[str, str]:
             if short:
                 std, score = _SHORT_DIM_FIELDS[short.group(1)], 92
         if not std:
+            pair = _pair_field(key)
+            if pair:
+                std, score = pair, 93
+            elif _total_weight_header(raw) and not _FORCE_UNIT_RE.search(raw.lower()):
+                std, score = "total_weight_kg", 90
+        if not std:
             for cand, field, sc in _FUZZY_RULES:
                 if cand in key:
                     if field == "__dims__" and _VOLUME_HEADER_RE.search(key):
                         continue
                     std, score = field, sc
                     break
+        if not std and not _FORCE_UNIT_RE.search(raw.lower()):
+            word = _schedule_word_field(raw)
+            if word:
+                std, score = word
         if not std:
+            continue
+        if std in ("weight_kg", "total_weight_kg") and _FORCE_UNIT_RE.search(raw.lower()):
+            # "Self weight (kN)" matched the plain "weight" rule above: a force is not a mass, so a person is asked
             continue
         if std == "weight_kg":
             score += _weight_pref(key)
         cur = best.get(std)
         if cur is None or score > cur[0]:
             best[std] = (score, order, raw)
+    third = best.pop(THIRD_DIM, None)
+    if third and "__dims__" not in best:
+        # a depth / thickness column is the one dimension the other headers leave over, and nothing else
+        covered = {k for k in ("length_mm", "width_mm", "height_mm") if k in best}
+        for k in best:
+            if k.startswith(PAIR_PREFIX):
+                covered.update(k[len(PAIR_PREFIX):].split(":"))
+        left = [k for k in ("length_mm", "width_mm", "height_mm") if k not in covered]
+        if len(left) == 1:
+            best[left[0]] = third
     ordered = sorted(best.items(), key=lambda kv: kv[1][1])
     return {raw: std for std, (_score, _order, raw) in ordered}
 
@@ -449,6 +538,9 @@ def _infer_weight_scale(header: str, values: List[Optional[float]]) -> float:
     # 规范化后的 "grossweight(t)" 落回 1.0，把吨当公斤，1000 倍少报。
     if "吨" in raw:
         return 1000.0
+    # "Unit Weight (tonnes)", "Mass (MT)": the unit spelled out fell through to the size heuristic and 0.45 t was read as 0.45 kg
+    if "kg" not in h and re.search(r"(?:^|[(\[_/).\-])(?:tonnes?|tons?|mt)(?:$|[)\].])", h):
+        return 1000.0
     if re.search(r"(^|_)(t)($|[^a-z])", h) or h.endswith("_t") or "(t)" in h:
         if "kg" not in h:
             return 1000.0
@@ -485,12 +577,41 @@ def normalize_category(raw: Any) -> str:
 
 
 # 最近一次 rows_to_ir 清洗统计（parse_table_* 读取，避免改动返回类型）
-_LAST_CLEAN_STATS: Dict[str, Any] = {}
+_LAST_CLEAN_STATS: ContextVar[Optional[Dict[str, Any]]] = ContextVar("table_clean_stats", default=None)
+
+# How the last table was read: which sheet row held the header, which columns were read as what and in which unit,
+# which were not read, which rows were skipped as totals, and the sheet row of every kept row (so a question to a
+# person can name the row). parse_table_* put it under "reading"; the materials themselves are unchanged.
+_LAST_READING: ContextVar[Optional[Dict[str, Any]]] = ContextVar("table_reading", default=None)
+
+# "TOTAL", "Sub-total L5", "Grand Total", "Total weight": a sum row, not cargo. Checked in the name and the mark
+# column. It must be followed by nothing, punctuation or a word that says what is summed: "Total station" is cargo.
+# A dash counts only with a space after it ("TOTAL - L9"): "Total-glass panel" and the mark "TOTAL-01" are cargo.
+# And a row that gives a size is cargo whatever its label says (see rows_to_ir): a sum row has no size.
+_SUMMARY_LABEL_RE = re.compile(
+    r"^(?:grand\s*|sub[\s\-]*)?totals?(?:\s*$|\s*[:：(=]|\s*[\-–](?:\s|$)|\s+(?:for|of|on|this|page|sheet|level|lvl|floor|block|"
+    r"elevation|zone|l\d+|weight|wt|mass|qty|quantity|kg|t|pcs|nos|panels|items)\b)",
+    re.I,
+)
 
 
 def last_clean_stats() -> Dict[str, Any]:
     """返回最近一次 rows_to_ir 的清洗计数。"""
-    return dict(_LAST_CLEAN_STATS)
+    return dict(_LAST_CLEAN_STATS.get() or {})
+
+
+def last_reading() -> Dict[str, Any]:
+    """How the last rows_to_ir / load_* call read its table (see _LAST_READING)."""
+    return json.loads(json.dumps(_LAST_READING.get() or {}, default=str))
+
+
+def _update_reading(values: Dict[str, Any]) -> None:
+    # Replace rather than mutate: another job or copied async context must keep its own source row evidence.
+    _LAST_READING.set({**(_LAST_READING.get() or {}), **values})
+
+
+def _is_summary_label(v: Any) -> bool:
+    return v is not None and not isinstance(v, (int, float)) and bool(_SUMMARY_LABEL_RE.match(str(v).strip()))
 
 
 def rows_to_ir(
@@ -500,9 +621,12 @@ def rows_to_ir(
     source: str = "dict",
     source_path: str = "",
     profile_hint: str = "generic_table",
+    row_numbers: Optional[Sequence[int]] = None,
 ) -> List[Dict[str, Any]]:
-    """字典行列表 → MaterialTableIR（同时兼容现有 materials API）。"""
-    global _LAST_CLEAN_STATS
+    """字典行列表 → MaterialTableIR（同时兼容现有 materials API）。
+
+    row_numbers: the sheet row of each input row, when the caller read a sheet; recorded in last_reading()."""
+    _LAST_READING.set({})
     clean_stats: Dict[str, int] = {
         "n_input_rows": 0,
         "n_kept": 0,
@@ -515,7 +639,7 @@ def rows_to_ir(
         "n_invalid_quantity": 0,
     }
     if not rows:
-        _LAST_CLEAN_STATS = {**clean_stats, "n_skipped_total": 0}
+        _LAST_CLEAN_STATS.set({**clean_stats, "n_skipped_total": 0})
         return []
 
     if headers is None:
@@ -530,6 +654,11 @@ def rows_to_ir(
     colmap = build_column_map(list(headers))
     # reverse: std -> original header
     std_to_raw = {std: raw for raw, std in colmap.items()}
+    # no name / description column: the mark is what the sheet calls the piece, so it is the name
+    name_from = std_to_raw.get("id") if "name" not in std_to_raw else None
+    pair_cols = [(raw, std[len(PAIR_PREFIX):].split(":")) for raw, std in colmap.items() if std.startswith(PAIR_PREFIX)]
+    kept_rows: List[Optional[int]] = []
+    summary_rows: List[Dict[str, Any]] = []
 
     # collect raw numeric series for unit inference
     def series(std: str) -> List[Optional[float]]:
@@ -564,6 +693,15 @@ def rows_to_ir(
     if dims_raw_h:
         _flat = [x for tri in dims_triples if tri for x in tri]
         dims_scale = length_scale("__dims__", _flat, [r.get(dims_raw_h) for r in rows])
+    # two-dimension columns ("W x H (mm)": "1500 x 4200"), unit inferred over the whole column like the triple above
+    pair_vals: Dict[str, List[Optional[Tuple[float, float]]]] = {}
+    pair_scale: Dict[str, float] = {}
+    for raw_h, _fields in pair_cols:
+        pair_vals[raw_h] = [_parse_dim_pair(r.get(raw_h)) for r in rows]
+        _flat = [x for p in pair_vals[raw_h] if p for x in p]
+        cells = [r.get(raw_h) for r in rows]
+        pair_scale[raw_h] = (_infer_length_scale(raw_h, _flat) if _header_has_length_unit(raw_h)
+                             else _cells_length_scale(cells) or _infer_length_scale(raw_h, _flat))
 
     out: List[Dict[str, Any]] = []
     # 汇总/小计行（整行品名，不误杀「合计架」类真货子串尾）
@@ -584,8 +722,16 @@ def rows_to_ir(
         got: Dict[str, Any] = {}
         for raw_h, std in colmap.items():
             got[std] = r.get(raw_h)
+        row_no = row_numbers[i - 1] if row_numbers is not None and i - 1 < len(row_numbers) else None
 
-        name = got.get("name")
+        summary = next((c for c in (got.get("name"), got.get("id")) if _is_summary_label(c)), None)
+        sized = any(str(v).strip() for k, v in got.items() if v is not None and (
+            k in ("length_mm", "width_mm", "height_mm", "__dims__") or k.startswith(PAIR_PREFIX)))
+        if summary is not None and not sized:
+            clean_stats["n_skip_summary_row"] += 1
+            summary_rows.append({"row": row_no, "text": str(summary).strip()})
+            continue
+        name = got.get("name") if name_from is None else r.get(name_from)
         if name is None or str(name).strip() == "" or str(name).strip("\u3000 \t") == "":
             clean_stats["n_skip_empty_name"] += 1
             continue
@@ -628,6 +774,7 @@ def rows_to_ir(
             continue
         if low_name in _SUMMARY_EXACT or name_s in _SUMMARY_EXACT:
             clean_stats["n_skip_summary_row"] += 1
+            summary_rows.append({"row": row_no, "text": name_s})
             continue
         # 仅标点/空白品名
         if all(not ch.isalnum() and ord(ch) < 128 for ch in name_s.replace(" ", "")):
@@ -648,6 +795,8 @@ def rows_to_ir(
         def dim(std: str) -> float:
             if _parse_dim_triple(got.get(std)):
                 return 0.0  # "1200*400*300" 不是一个数；见下方按合并格处理
+            if _parse_dim_pair(got.get(std)):
+                return 0.0  # "1500 x 4200" is two numbers, not 15,004,200: left unread, a person is asked
             v = _to_float(got.get(std))
             if v is None:
                 return 0.0
@@ -667,6 +816,14 @@ def rows_to_ir(
                     W = cand[1]
                 if H <= 0:
                     H = cand[2]
+        if pair_cols:
+            cur = {"length_mm": L, "width_mm": W, "height_mm": H}
+            for raw_h, fields in pair_cols:
+                pv = pair_vals[raw_h][i - 1]
+                for field, x in zip(fields, pv or ()):
+                    if cur[field] <= 0:
+                        cur[field] = round(x * pair_scale[raw_h], 3)
+            L, W, H = cur["length_mm"], cur["width_mm"], cur["height_mm"]
         dims_estimated = L <= 0 or W <= 0 or H <= 0
 
         unit_w = _to_float(got.get("weight_kg"))
@@ -742,12 +899,44 @@ def rows_to_ir(
             item["meta"]["quantity_invalid"] = True
             item["meta"]["quantity_raw"] = str(got.get("quantity"))
         out.append(item)
+        kept_rows.append(row_no)
         clean_stats["n_kept"] += 1
     clean_stats["n_skipped_total"] = int(clean_stats["n_input_rows"]) - int(
         clean_stats["n_kept"]
     )
-    _LAST_CLEAN_STATS = dict(clean_stats)
+    _LAST_CLEAN_STATS.set(dict(clean_stats))
+    units: List[Dict[str, Any]] = [{"column": std_to_raw[s], "field": s, "to_mm": len_scale[s]}
+                                   for s in ("length_mm", "width_mm", "height_mm") if s in std_to_raw]
+    if dims_raw_h:
+        units.append({"column": dims_raw_h, "field": "length_mm+width_mm+height_mm", "to_mm": dims_scale})
+    units += [{"column": raw_h, "field": "+".join(fields), "to_mm": pair_scale[raw_h]} for raw_h, fields in pair_cols]
+    units += [{"column": std_to_raw[s], "field": s, "to_kg": scale}
+              for s, scale in (("weight_kg", wt_scale), ("total_weight_kg", tw_scale)) if s in std_to_raw]
+    _LAST_READING.set({
+        "unmapped_columns": [h for h in (str(x or "").strip() for x in headers) if h and h not in colmap and h != "row_type"],
+        "units": units,
+        "name_from": name_from,
+        "skipped_summary_rows": summary_rows,
+        "rows": kept_rows if row_numbers is not None else None,
+    })
     return out
+
+
+# a number with thousands separators only in threes ("1,500"); "1,5" is not read
+_PAIR_NUM = r"((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)"
+_DIM_PAIR_RE = re.compile(
+    r"^\s*" + _PAIR_NUM + r"\s*" + _CELL_UNIT + r"?\s*[x×*✕]\s*" + _PAIR_NUM + r"\s*" + _CELL_UNIT + r"?\s*$", re.I
+)
+
+
+def _parse_dim_pair(v: Any) -> Optional[Tuple[float, float]]:
+    """"1500 x 4200" / "1,500 x 4,200" -> (1500, 4200). A triple is not a pair (the triple reader handles it)."""
+    if v is None or isinstance(v, (int, float)):
+        return None
+    m = _DIM_PAIR_RE.match(str(v))
+    if not m:
+        return None
+    return float(m.group(1).replace(",", "")), float(m.group(2).replace(",", ""))
 
 
 def _guess_category(L: float, W: float, H: float, weight: float, name: str) -> str:
@@ -765,6 +954,116 @@ def _guess_category(L: float, W: float, H: float, weight: float, name: str) -> s
     if max(L, W, H) <= 800 and weight <= 50:
         return "carton"
     return "generic"
+
+
+#: header detection looks this far down the sheet, and only when row 1 is not a header (see _choose_header_row)
+HEADER_SCAN_ROWS = 15
+
+
+def _required_groups(cells: Sequence[Any]) -> set:
+    """Which of name / quantity / weight / length / width / height a candidate header row maps."""
+    groups: set = set()
+    for std in build_column_map([str(c or "").strip() for c in cells]).values():
+        if std in ("name", "quantity", "length_mm", "width_mm", "height_mm"):
+            groups.add(std)
+        elif std in ("weight_kg", "total_weight_kg"):
+            groups.add("weight")
+        elif std == "__dims__":
+            groups.update(("length_mm", "width_mm", "height_mm"))
+        elif std.startswith(PAIR_PREFIX):
+            groups.update(std[len(PAIR_PREFIX):].split(":"))
+    return groups
+
+
+def _choose_header_row(data: Sequence[Sequence[Any]]) -> int:
+    """Index of the header row. Row 1 stays the header unless it maps fewer than two of the required fields (a title
+    block, "Prepared by ...", a blank line); then the row of the first 15 that maps the most wins, earliest on a tie,
+    and only if it maps at least two. So every sheet whose first row is a header reads exactly as before."""
+    if not data or len(_required_groups(data[0])) >= 2:
+        return 0
+    best, best_n = 0, 1
+    for idx, row in enumerate(data[:HEADER_SCAN_ROWS]):
+        n = len(_required_groups(row))
+        if n > best_n:
+            best, best_n = idx, n
+    return best
+
+
+def _is_number_cell(v: Any) -> bool:
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, (int, float)):
+        return True
+    try:
+        float(str(v).strip().replace(",", ""))
+        return True
+    except ValueError:
+        return False
+
+
+def _compose_header(parent: str, child: str) -> str:
+    """One label from a two-row header: "Dimensions (mm)" over "L" -> "L (mm)"; "Weight (kg)" over "Total" ->
+    "Weight (kg) Total". The first spelling that maps to a field wins; otherwise the child's own text."""
+    if not child:
+        return parent
+    if not parent:
+        return child
+    unit = re.search(r"\([^)]*\)|\[[^\]]*\]", parent)
+    group_of_dims = "__dims__" in build_column_map([parent]).values()
+    if group_of_dims and child.strip(". ").lower() in ("d", "t"):
+        child = "Depth"  # "D" / "T" under "Dimensions" is the depth / thickness, not a diameter
+    cands = []
+    if unit and not re.search(r"[(\[]", child):
+        cands.append(f"{child} {unit.group(0)}")
+    cands.append(child)
+    if not group_of_dims:  # under a group of dimensions one column is one dimension, never all three
+        cands.append(f"{parent} {child}")
+    for cand in cands:
+        if build_column_map([cand]) or (_schedule_word_field(cand) or ("",))[0] == THIRD_DIM:
+            return cand
+    return child
+
+
+def _two_row_header(ws_path: Path, sheet_title: str, data: Sequence[Sequence[Any]], h: int,
+                    first_row: int) -> Optional[List[str]]:
+    """Merged header cells: a group label merged across columns ("Dimensions (mm)" over L / W / D) with the labels
+    in the row below, and single labels merged down both rows. Returns the composed headers, or None when the row
+    below the header is not a sub-header (it holds a number, fewer than two labels, or no label sits under a merged
+    group). Merged ranges are read from the sheet itself, so a blank header cell that is not merged takes no label."""
+    if h + 1 >= len(data):
+        return None
+    head, sub = list(data[h]), list(data[h + 1])
+    width = max(len(head), len(sub))
+    head += [None] * (width - len(head))
+    sub += [None] * (width - len(sub))
+    labels = [c for c in sub if c not in (None, "") and str(c).strip()]
+    if len(labels) < 2 or any(_is_number_cell(c) for c in labels):
+        return None
+    if not any((head[j] in (None, "") or not str(head[j]).strip()) and sub[j] not in (None, "") for j in range(width)):
+        return None
+    import openpyxl
+
+    try:
+        wb = openpyxl.load_workbook(ws_path, data_only=True, read_only=False)
+        ranges = list(wb[sheet_title].merged_cells.ranges)
+        wb.close()
+    except Exception:  # noqa: BLE001 - no merge information: not a two-row header we can read safely
+        return None
+    header_row = first_row + h
+    parent = [str(c).strip() if c not in (None, "") else "" for c in head]
+    merged_any = False
+    for rng in ranges:
+        if rng.min_row <= header_row <= rng.max_row and rng.max_col > rng.min_col:
+            label = parent[rng.min_col - 1] if rng.min_col - 1 < width else ""
+            for col in range(rng.min_col, min(rng.max_col, width) + 1):
+                parent[col - 1] = label
+            merged_any = True
+        elif rng.min_row == header_row and rng.max_row >= header_row + 1:
+            merged_any = True
+    if not merged_any:
+        return None
+    child = [str(c).strip() if c not in (None, "") else "" for c in sub]
+    return [_compose_header(p, c) for p, c in zip(parent, child)]
 
 
 def load_csv(path: PathLike, encoding: str = "utf-8-sig") -> List[Dict[str, Any]]:
@@ -787,10 +1086,31 @@ def load_csv(path: PathLike, encoding: str = "utf-8-sig") -> List[Dict[str, Any]
                 delim = dialect.delimiter
             except csv.Error:
                 delim = ","
+        first = next(csv.reader(io.StringIO(sample), delimiter=delim), [])
+        if first and len(_required_groups(first)) < 2:
+            # row 1 is not a header (a title line): pick the header the way load_xlsx does
+            records = list(csv.reader(f, delimiter=delim))
+            h = _choose_header_row(records)
+            headers = [str(c or "").strip() for c in (records[h] if records else [])]
+            rows, numbers = [], []
+            for k, rec in enumerate(records[h + 1:]):
+                if not rec:
+                    continue
+                d: Dict[Any, Any] = {headers[i]: (rec[i] if i < len(rec) else None) for i in range(len(headers))}
+                rows.append(d)
+                numbers.append(h + 2 + k)
+            out = rows_to_ir(rows, headers=headers, source="csv", source_path=str(path), row_numbers=numbers)
+            _update_reading({"header_row": h + 1, "header_detected": h > 0, "header_rows": [h + 1]})
+            return out
         reader = csv.DictReader(f, delimiter=delim)
-        rows = [dict(r) for r in reader]
+        rows, numbers = [], []
+        for r in reader:
+            rows.append(dict(r))
+            numbers.append(reader.line_num)
         headers = list(reader.fieldnames or [])
-    return rows_to_ir(rows, headers=headers, source="csv", source_path=str(path))
+    out = rows_to_ir(rows, headers=headers, source="csv", source_path=str(path), row_numbers=numbers)
+    _update_reading({"header_row": 1, "header_detected": False, "header_rows": [1]})
+    return out
 
 
 def load_xlsx(path: PathLike, sheet: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -805,19 +1125,32 @@ def load_xlsx(path: PathLike, sheet: Optional[str] = None) -> List[Dict[str, Any
     else:
         ws = wb.active
     data = list(ws.iter_rows(values_only=True))
+    title = ws.title
+    # iter_rows() starts at sheet row 1 and pads the empty rows above the first used one, so data[k] is sheet row
+    # k + 1. ws.min_row is the first *used* row: taking it as the offset put every recorded row number (and the
+    # merged-header lookup) off by the number of blank rows above the table.
+    first_row = 1
     wb.close()
     if not data:
         return []
-    headers = [str(c or "").strip() for c in data[0]]
+    h = _choose_header_row(data)
+    composed = _two_row_header(path, title, data, h, first_row)
+    headers = composed if composed is not None else [str(c or "").strip() for c in data[h]]
+    start = h + (2 if composed is not None else 1)
     rows: List[Dict[str, Any]] = []
-    for row in data[1:]:
+    numbers: List[int] = []
+    for k, row in enumerate(data[start:]):
         d = {headers[i]: (row[i] if i < len(row) else None) for i in range(len(headers))}
         # skip full_flow non-material
         rt = d.get("row_type")
         if rt and str(rt) not in ("material", "materials", ""):
             continue
         rows.append(d)
-    return rows_to_ir(rows, headers=headers, source="xlsx", source_path=str(path))
+        numbers.append(first_row + start + k)
+    out = rows_to_ir(rows, headers=headers, source="xlsx", source_path=str(path), row_numbers=numbers)
+    _update_reading({"sheet": title, "header_row": first_row + h, "header_detected": h > 0,
+                          "header_rows": [first_row + h, first_row + h + 1] if composed is not None else [first_row + h]})
+    return out
 
 
 def load_json(path: PathLike) -> List[Dict[str, Any]]:
@@ -847,6 +1180,8 @@ def load_json(path: PathLike) -> List[Dict[str, Any]]:
 
 
 def load_table(path: PathLike, **kwargs: Any) -> List[Dict[str, Any]]:
+    _LAST_READING.set({})  # a PDF or IR-JSON read leaves no stale record from the previous table
+    _LAST_CLEAN_STATS.set({})
     path = Path(path)
     suf = path.suffix.lower()
     if suf in (".csv", ".tsv", ".txt"):
@@ -973,6 +1308,8 @@ def parse_table_file(path: PathLike, **kwargs: Any) -> Dict[str, Any]:
             "clean": clean,
         },
         "errors": [] if mats else [_no_rows_reason(path)],
+        # how the sheet was read: header row, units, unread columns, skipped total rows, sheet row per material
+        "reading": last_reading(),
     }
 
 

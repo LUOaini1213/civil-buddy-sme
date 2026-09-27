@@ -98,6 +98,7 @@ CHECKS = (
     Check("tender-packing-link", ("scripts/test_tender_packing_link.py",), timeout=600),
     # how the link reads clauses: nothing silently dropped, per-package limits apart, cites as written, the DEV set floors
     Check("tender-link-clauses", ("scripts/test_tender_link_clauses.py",), timeout=600),
+    Check("tender-link-sealed", ("test/benchmarks/tender_link_sealed/score_sealed.py", "--check"), timeout=600),
     # planted text in SYNTHETIC tender / panel-list files does not change statuses, approve anything or become a
     # statement (steps mode, gateway, and a scripted fake model that obeys the plant); a live model was not tested
     Check("injection-plants", ("scripts/test_injection_plants.py",), timeout=600),
@@ -106,6 +107,7 @@ CHECKS = (
     # not by this registry, not by the acceptance glob. They pin the parser the three bid posts stand on.
     Check("tender-parse", ("scripts/test_tender_parse.py",)),
     Check("tender-parse-engine", ("scripts/test_tender_parse_engine.py",)),
+    Check("tender-originals", ("scripts/test_tender_originals.py",)),
     Check("tender-handoff", ("scripts/test_tender_handoff.py",)),
     Check("tender-review", ("scripts/test_tender_review.py",)),
     Check("tender-ingest", ("scripts/test_tender_ingest.py",)),
@@ -140,6 +142,7 @@ CHECKS = (
     Check("task-intent-bench", ("scripts/eval_task_intent.py", "--check")),
     Check("english-intents", ("scripts/test_english_intents.py",)),
     Check("link-routing-bench", ("scripts/eval_link_routing.py", "--check")),
+    Check("english-requests-heldout", ("test/benchmarks/english_requests/score.py", "--check")),
     Check("link-confirmation", ("scripts/test_link_confirmation_regressions.py",), timeout=300),
     Check("verdict-bench", ("scripts/eval_verdicts.py", "--check")),
     Check("number-provenance-bench", ("scripts/eval_number_provenance.py", "--check")),
@@ -148,6 +151,8 @@ CHECKS = (
     Check("app-launcher", ("scripts/test_app_launcher.py",)),
     Check("workbench-settings", ("scripts/test_workbench_settings.py",)),
     Check("access-guard", ("scripts/test_access_guard.py",)),
+    Check("web-tender-link", ("scripts/test_web_link.py",), timeout=600),
+    Check("deploy-config", ("scripts/test_deploy_config.py",)),
     Check("workbench-uploads", ("scripts/test_workbench_uploads.py",)),
     Check("document-text", ("scripts/test_document_text.py",)),
     Check("workbench-flow", ("scripts/test_workbench_flow.py",)),
@@ -187,6 +192,8 @@ CHECKS = (
     Check("pack-ship-conservation", ("scripts/test_pack_ship_conservation.py",), timeout=300),
     Check("pack-ship-crates-structure", ("scripts/test_pack_ship_crates_structure.py",)),
     Check("table-quantity-cells", ("scripts/test_table_quantity_cells.py",)),
+    Check("panel-list-reading", ("scripts/test_panel_list_reading.py",), timeout=300),
+    Check("panel-lists-sealed", ("test/benchmarks/panel_lists_sealed/score_sealed.py", "--check"), timeout=300),
     Check("workbench-needs-human", ("scripts/test_workbench_needs_human.py",)),
     Check("storage-parent", ("scripts/test_storage_ensure_run.py",)),
     Check("offline-eval", ("-c", "from packing_assistant.runtime.eval_live import live_eval; "

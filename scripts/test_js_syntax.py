@@ -27,7 +27,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCAN_DIRS = ("frontend", "demo/static", "workbench/src")
+SCAN_DIRS = ("frontend", "demo/static", "gateway/pages", "workbench/src")
 SCRIPT_RE = re.compile(r"<script\b([^>]*)>(.*?)</script\s*>", re.S | re.I)
 STYLE_RE = re.compile(r"<style\b[^>]*>(.*?)</style\s*>", re.S | re.I)
 

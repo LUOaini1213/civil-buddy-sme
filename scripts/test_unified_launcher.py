@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import json
 import io
@@ -12,6 +13,7 @@ import time
 from pathlib import Path
 import sys
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -19,6 +21,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts import start_unified_workbench as launcher
+from scripts import test_unified_runtime_http as runtime_http
+from scripts.test_unified_runtime_http import wait_listener_closed
 
 
 class FakeProcess:
@@ -209,9 +213,7 @@ class LauncherTests(unittest.TestCase):
                 self.assertEqual(probe.connect_ex(("127.0.0.1", port)), 0)
             family.close([process])
             process.wait(timeout=10)
-            with socket.socket() as probe:
-                probe.settimeout(1)
-                self.assertNotEqual(probe.connect_ex(("127.0.0.1", port)), 0)
+            self.assertTrue(wait_listener_closed(port), "descendant listener survived process-family shutdown")
         finally:
             family.close([process])
             if process.poll() is None:
@@ -252,6 +254,62 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(plan_store.workspace, legacy)
             self.assertEqual(schedule.root, legacy / ".civil-buddy/out/engineering/schedules")
             self.assertEqual(plan_store.root, legacy / ".civil-buddy/out/engineering/plans")
+
+
+class ListenerShutdownTests(unittest.TestCase):
+    def listener(self, *, delayed_close=False):
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(0.05)
+        port = listener.getsockname()[1]
+        stop = threading.Event()
+        accepted = threading.Event()
+
+        def serve():
+            try:
+                while not stop.is_set():
+                    try:
+                        connection, _ = listener.accept()
+                    except socket.timeout:
+                        continue
+                    with connection:
+                        accepted.set()
+                    if delayed_close:
+                        # Only start the delay after the helper has observed a live listener. This prevents
+                        # scheduler timing from turning the test into a trivial already-closed-port check.
+                        stop.wait(0.15)
+                        return
+            finally:
+                listener.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+
+        def cleanup():
+            stop.set()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive(), "synthetic listener did not stop")
+
+        self.addCleanup(cleanup)
+        return port, accepted
+
+    def test_listener_closing_after_first_probe_is_awaited(self):
+        port, accepted = self.listener(delayed_close=True)
+        self.assertTrue(wait_listener_closed(port, timeout=4))
+        self.assertTrue(accepted.is_set(), "the first probe must see a live listener")
+
+    def test_listener_surviving_deadline_is_still_a_failure(self):
+        port, accepted = self.listener()
+        started = time.monotonic()
+        self.assertFalse(wait_listener_closed(port, timeout=0.2))
+        self.assertTrue(accepted.is_set())
+        self.assertLess(time.monotonic() - started, 1.5, "listener wait exceeded its bounded deadline")
+
+    def test_connect_timeout_does_not_count_as_a_closed_listener(self):
+        with patch.object(runtime_http.socket, "socket") as create:
+            create.return_value.__enter__.return_value.connect_ex.return_value = errno.ETIMEDOUT
+            self.assertFalse(runtime_http.port_closed(1))
 
 
 if __name__ == "__main__":

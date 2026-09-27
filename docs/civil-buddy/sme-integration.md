@@ -5,6 +5,9 @@ Its SME introduction (`0c0e803`) is retained. The unified workbench work from th
 (`718c61b`) was merged into this repository at `3667813`; subsequent fixes and release records belong here.
 The original repository's draft PR #70 is not a release of this competition entry.
 
+The [submission-time local audit](submission-sync-20260927.md) records additional branch and working-directory
+features recovered after this first integration, their entry points and remaining acceptance limits.
+
 ## What is being integrated
 
 - An authenticated Rust host with one named user, private workspace and state directory per instance.

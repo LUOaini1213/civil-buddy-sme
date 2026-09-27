@@ -36,7 +36,10 @@ STATIC = (
     "vendor/three/OrbitControls.js", "vendor/three/LICENSE.txt", "vendor/three/manifest.json",
 )
 EXPLICIT = (
-    "gateway/__init__.py", "gateway/app.py", "frontend/workbench.html",
+    "gateway/__init__.py", "gateway/app.py", "frontend/index.html", "frontend/workbench.html",
+    "gateway/web_link.py", "gateway/pages/access.html", "gateway/pages/demo.html",
+    "frontend/manifest.webmanifest", "frontend/icons/cb-icon.svg",
+    "frontend/icons/cb-icon-192.png", "frontend/icons/cb-icon-512.png",
     "frontend/vendor/vue.min.js", "frontend/vendor/vue.LICENSE",
     "frontend/vendor/marked.min.js", "frontend/vendor/marked.LICENSE.md",
     "frontend/vendor/cb-doc.js", "frontend/vendor/cb-fix.js",
@@ -65,6 +68,13 @@ EXPLICIT = (
     "examples/cad-to-3d/EXTENDED-SAMPLES.md", "examples/cad-to-3d/generate_extended_samples.py",
     "examples/cad-to-3d/synthetic-curved-building-mm.dxf", "examples/cad-to-3d/synthetic-curved-building-config.json",
     "examples/cad-to-3d/synthetic-bulge-section-mm.dxf", "examples/cad-to-3d/synthetic-bulge-section-config.json",
+    # The gateway /demo route and its documented offline command read these
+    # physical files; including only web_link.py leaves both entry points broken.
+    "scripts/demo_facade.py", "examples/facade-demo/README.md",
+    "examples/facade-demo/facade_itt_doc.md", "examples/facade-demo/facade_panels.xlsx",
+    "examples/facade-demo/facade_panels_rev_b.xlsx", "examples/facade-demo/facade_panels_zh.xlsx",
+    "examples/facade-demo/daily_report_input.txt", "examples/facade-demo/wah_briefing_input.txt",
+    "examples/facade-demo/facade_panels_mixed.xlsx", "examples/facade-demo/make_panels.py",
 )
 ASSET_ROOTS = ("demo/kb", "knowledge", "knowledge_base", "skills/civil-buddy", ".agents/skills")
 

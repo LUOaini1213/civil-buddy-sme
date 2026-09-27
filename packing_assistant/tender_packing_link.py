@@ -69,8 +69,8 @@ _NO_R = r"(?![A-Za-z])"
 _CONTEXT_RE = re.compile(r"transport|deliver|ship|pack|container|cargo|load|stillage|haul|lorr(?:y|ies)|truck|vehicle|"
                          r"crat(?:e|es|ing)|crane|hoist|lift|logistic|transit|freight|travel|call(?:ed)?[\s-]off|"
                          r"运输|包装|装柜|装箱|交货|发货|到货|集装箱|货物|货|柜", re.I)
-# a mass figure: kg / t / tonnes / "MT" (upper case only: "30 mt long" is metres) - always a number with its unit
-_MASS_RE = re.compile(r"(?<![\d.,])(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s*"
+# Mass figures include comma or space-grouped thousands; lower-case "mt" is metres.
+_MASS_RE = re.compile(r"(?<![\d.,])(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d{1,3}(?:[ \u00a0\u2009\u202f]\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s*"
                       r"(kg|kgs|kilograms?|kilos?|tonnes?|tons?|metric\s+ton(?:ne)?s?|(?-i:MT)|t|公斤|千克|吨)(?![A-Za-z])", re.I)
 _TONNES = ("t", "tonne", "tonnes", "ton", "tons", "mt", "吨")
 # a load that is no transport load: "the design wind load of 2.4 kPa", "the dead load of each panel"
@@ -363,7 +363,7 @@ def _mass_figures(text: str) -> List[Tuple[float, int, int]]:
     """Every mass figure in ``text`` as (kg, start, end)."""
     out = []
     for m in _MASS_RE.finditer(text):
-        number = float(m.group(1).replace(",", ""))
+        number = float(re.sub(r"[, \u00a0\u2009\u202f]", "", m.group(1)))
         unit = re.sub(r"\s+", " ", m.group(2).lower())
         tonnes = unit in _TONNES or unit.startswith("metric")
         out.append((number * 1000.0 if tonnes else number, m.start(), m.end()))
@@ -395,11 +395,16 @@ def _subject(sentence: str, at: int, end: Optional[int] = None) -> Tuple[Optiona
         local = before[previous_figures[-1][2]:]
         if _SUBJECT_RE.search(local):
             before = local
-    hits = [hit for frame in _SUBJECT_FRAMES for hit in frame.finditer(before)]
+    hits = [(index, hit) for index, frame in enumerate(_SUBJECT_FRAMES) for hit in frame.finditer(before)]
     if hits:
-        nearest = max(hits, key=lambda hit: (hit.end(), hit.start()))
+        index, nearest = max(hits, key=lambda item: (item[1].end(), -item[0], item[1].start()))
         subjects = list(_SUBJECT_RE.finditer(nearest.group(0)))
         if subjects:
+            if index == 1 and subjects[-1].lastgroup == "container" and any(
+                    item.lastgroup != "container" for item in _SUBJECT_RE.finditer(before, nearest.end())):
+                # "each container ... crane rated 50 t" does not set the box's
+                # mass limit. An explicit "gross mass of ..." frame is stronger.
+                return None, "ambiguous"
             return subjects[-1].lastgroup, "frame"
     previous = [m for m in _SUBJECT_RE.finditer(before)]
     if previous:
@@ -429,7 +434,10 @@ def _upper_bound(sentence: str) -> bool:
     """
     if _LOWER_BOUND_RE.search(sentence):
         return False
-    remaining = _NO_SUBJECT_UPPER_RE.sub(" ", _LIMIT_NOT_RE.sub(" ", sentence))
+    # A noun-only inclusion aside does not separate "no single lift" from its
+    # upper bound. Do not remove asides containing another numeric relation.
+    directional = re.sub(r",\s*(?:including|excluding)\b[^,;:\d]{1,120},", " ", sentence, flags=re.I)
+    remaining = _NO_SUBJECT_UPPER_RE.sub(" ", _LIMIT_NOT_RE.sub(" ", directional))
     if not _POSITIVE_COMPARISON_RE.search(remaining):
         return True
     # Do not borrow a "no" or refusal from another numeric relation in the sentence.
@@ -446,15 +454,21 @@ def _mass_limits(body: str, context: str = "") -> Dict[str, Any]:
     mass. A figure in a sentence that reads like a transport limit but names none of these is returned as not placed,
     for a person - it never disappears."""
     out: Dict[str, Any] = {"container": [], "basis": [], "package": [], "package_subjects": [], "vehicle": [], "unplaced": []}
+    clause_transport = bool(_TRANSPORT_RE.search(_STRUCTURAL_LOAD_RE.sub(" ", body)) or _CONTAINER_TERM_RE.search(body))
+    carried = (False, False, True)
     for sentence in (s for s in _SENTENCE_RE.split(body) if s and s.strip()):
         plain = _STRUCTURAL_LOAD_RE.sub(" ", sentence)
         figures = _mass_figures(plain)
+        own = (bool(_LIMIT_RE.search(plain)), bool(_MASS_WORD_RE.search(plain)), _upper_bound(plain))
+        limit, massy, upper = own if any(own[:2]) else carried
+        # Preserve the direction too: a lower or mixed bound before a semicolon
+        # cannot silently become an upper bound on the following bare figure.
+        carried = (limit, massy, upper) if sentence.rstrip().endswith((";", "；")) else (False, False, True)
         if not figures:
             continue
-        limit = bool(_LIMIT_RE.search(plain))
-        massy = bool(_MASS_WORD_RE.search(plain))
-        transport = bool(_TRANSPORT_RE.search(plain) or _CONTAINER_TERM_RE.search(plain) or _TRANSPORT_RE.search(context))
-        if limit and transport and not _upper_bound(plain):
+        transport = bool(_TRANSPORT_RE.search(plain) or _CONTAINER_TERM_RE.search(plain) or _TRANSPORT_RE.search(context)
+                         or clause_transport)
+        if limit and transport and not (upper and _upper_bound(plain)):
             out["unplaced"].append(sentence.strip())
             continue
         placed = False
@@ -674,6 +688,10 @@ def plan_sha256(plan: Optional[Dict[str, Any]]) -> Optional[str]:
     if not plan:
         return None
     stable = {k: v for k, v in plan.items() if k not in ("elapsed_s",)}
+    if isinstance(stable.get("parse"), dict):
+        # how the sheet was read is a function of the panel list's bytes (hashed in inputs.panel_list) and the reader;
+        # kept out so the plan hash names the plan, and a plan made before the reading record keeps its hash
+        stable["parse"] = {k: v for k, v in stable["parse"].items() if k != "reading"}
     return _sha(json.dumps(stable, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8"))
 
 
@@ -752,7 +770,10 @@ def build_checks(clauses: Sequence[Dict[str, Any]], decision: Dict[str, Any], pl
     if decision.get("type") is None:
         no_plan_why = decision.get("reason")
     else:
-        rows = [f"{r.get('id') or r.get('name')} ({r.get('reason')})" for r in (plan or {}).get("needs_human") or [] if isinstance(r, dict)]
+        from packing_assistant.tools.pack_ship_solve import cell_text
+
+        rows = [f"{cell_text(r.get('id') or r.get('name'))} ({r.get('reason')})" + (f" in row {r['sheet_row']}" if r.get("sheet_row") else "")
+                for r in (plan or {}).get("needs_human") or [] if isinstance(r, dict)]
         no_plan_why = (f"no plan ({(plan or {}).get('error') or 'not run'}): {(plan or {}).get('detail') or ''}".strip(": ")
                        + (f"; panel-list rows a person must fix first: {', '.join(rows[:6])}" + (" ..." if len(rows) > 6 else "")
                           if rows else ""))
@@ -1239,6 +1260,13 @@ def report_markdown(record: Dict[str, Any]) -> str:
     for key in ("tender", "panel_list", "plan"):
         item = record["inputs"][key]
         lines.append(f"- {key}: {item.get('name') or '—'} · sha256 {item.get('sha256') or '—'}")
+    read = record.get("panel_list_reading") or {}
+    if read.get("summary"):
+        lines.append(f"- panel list read: {read['summary']}")
+    if read.get("unmapped_columns"):
+        from packing_assistant.tools.pack_ship_solve import cell_text
+
+        lines.append("- panel list columns not read: " + ", ".join(cell_text(c) for c in read["unmapped_columns"]))
     lines += ["", f"Container type: {record['container']['reason']}", "", "## Logistics clauses found in the tender", ""]
     if not record["clauses"]:
         lines.append("- none: the tender states no logistics requirement the tool recognises; a person checks it.")
@@ -1300,7 +1328,7 @@ def run_link(tender_path: str, packing_list: str, *, previous: Optional[Dict[str
     ``container_type``: the type the request names, when a person chose it (the ITT names none, several, or a size
     only). It is planned as asked; a clause that names another type then reads human_required, never covered."""
     from packing_assistant.bidbook.sg_facade import build_sg_facade_bidbook
-    from packing_assistant.tools.pack_ship_solve import plan_record_json, run_plan
+    from packing_assistant.tools.pack_ship_solve import plan_record_json, reading_sentence, run_plan, unread_columns_sentence
     from packing_assistant.tools.tender_parse import (_count_by, _readiness_score, build_response_matrix, open_actions,
                                                       parse_tender_text)
 
@@ -1313,7 +1341,7 @@ def run_link(tender_path: str, packing_list: str, *, previous: Optional[Dict[str
     decision = container_decision(clauses, requested=container_type)
     plan: Optional[Dict[str, Any]] = None
     if decision["type"]:
-        plan = run_plan(file_path=str(table), container_type=decision["type"])
+        plan = run_plan(file_path=str(table), container_type=decision["type"], lang="en")
     solved = bool(plan and plan.get("ok") and plan.get("source") == "solver")
     checks = build_checks(clauses, decision, plan, table.name)
     record: Dict[str, Any] = {
@@ -1335,6 +1363,15 @@ def run_link(tender_path: str, packing_list: str, *, previous: Optional[Dict[str
         "confirmed_by_person": False,
         "submit_blocked": True,
     }
+    reading = ((plan or {}).get("parse") or {}).get("reading") or {}
+    read_note, unread = reading_sentence(reading), unread_columns_sentence(reading)
+    if read_note or unread:
+        # how the panel list was read, when it was more than "row 1 is the header, every column read, mm and kg"
+        record["panel_list_reading"] = {
+            "summary": read_note, "header_rows": reading.get("header_rows"), "name_from": reading.get("name_from"),
+            "unit_conversions": [u for u in reading.get("units") or [] if u.get("to_mm", u.get("to_kg")) not in (1, 1.0)],
+            "skipped_summary_rows": reading.get("skipped_summary_rows") or [],
+            "unmapped_columns": reading.get("unmapped_columns") or []}
     record["changes_since_previous"] = compare(previous, record, exports)
 
     parsed = parse_tender_text(text, source="tender-packing-link")
@@ -1361,12 +1398,25 @@ def run_link(tender_path: str, packing_list: str, *, previous: Optional[Dict[str
              + (f"Plan {plan.get('containers_used')} x {plan.get('container_type')} ({decision['reason']}) "
                 + ("" if plan.get("can_fit") is True else "DOES NOT FIT (can_fit is not true): no count or mass is stated. ")
                 if solved
-                else f"No plan: {decision['reason'] if not decision['type'] else (plan or {}).get('error')}. ")
+                else f"No plan: {decision['reason'] if not decision['type'] else (plan or {}).get('error')}. "
+                + _refusal_rows(plan))
+             + (f"Panel list read: {read_note}. " if read_note else "")
+             + (f"{unread} " if unread and not solved else "")
              + (f"Since the previous run: {record['changes_since_previous']['summary']}. " if record["changes_since_previous"] else "")
              + "Internal draft, submit_blocked=true; a person confirms the plan before booking.")
     return {"ok": True, "schema": SCHEMA, "record": record, "statements": record["statements"], "matrix": matrix,
             "handoff": parsed.get("handoff"), "bidbook_markdown": bidbook["markdown"], "deliverables": deliverables,
             "plan": plan, "reply": reply, "submit_blocked": True}
+
+
+def _refusal_rows(plan: Optional[Dict[str, Any]], limit: int = 4) -> str:
+    """The panel-list rows a person must fix, as the English questions name them (sheet row and mark)."""
+    rows = [r for r in (plan or {}).get("needs_human") or [] if isinstance(r, dict)]
+    if not rows:
+        return ""
+    asks = " ".join(str(r.get("ask") or r.get("reason")) for r in rows[:limit])
+    more = f" ({len(rows) - limit} more in tender-packing-link.json)" if len(rows) > limit else ""
+    return f"{len(rows)} panel-list row{'s' if len(rows) > 1 else ''} to fix first: {asks}{more} "
 
 
 def load_previous(path: str) -> Optional[Dict[str, Any]]:

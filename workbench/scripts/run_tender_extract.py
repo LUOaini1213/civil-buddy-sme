@@ -8,8 +8,81 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import sys
+import zipfile
 from pathlib import Path
+
+MAX_FILES = 12
+MAX_BYTES = 20 * 1024 * 1024
+
+
+def _checked_file(path: Path, root: Path) -> None:
+    if not path.is_absolute() or path.parent.resolve(strict=True) != root:
+        raise ValueError("附件路径超出当前会话")
+    for part in (path, *path.parents):
+        meta = part.lstat()
+        if stat.S_ISLNK(meta.st_mode) or getattr(meta, "st_file_attributes", 0) & 0x400:
+            raise ValueError("附件路径不允许链接或重解析点")
+    if not path.is_file() or path.stat().st_size > MAX_BYTES:
+        raise ValueError("附件原文件或摘录无效或过大")
+
+
+def read_originals(payload: dict) -> tuple[list[str], list[str], list[str]]:
+    """Read only the validated current-session upload directory supplied by the host."""
+    from packing_assistant import office_job
+
+    files = payload.get("files") or []
+    if not isinstance(files, list) or len(files) > MAX_FILES:
+        raise ValueError("附件清单无效或数量超限")
+    if not files:
+        return [], [], []
+    root = Path(str(payload.get("upload_dir") or ""))
+    if not root.is_absolute() or not root.is_dir():
+        raise ValueError("附件目录无效")
+    root = root.resolve(strict=True)
+    bodies, names, previews = [], [], []
+    for item in files:
+        if not isinstance(item, dict):
+            raise ValueError("附件条目无效")
+        name = item.get("name")
+        path = Path(str(item.get("path") or ""))
+        if not isinstance(name, str) or not name or any(c in name for c in "\r\n/\\"):
+            raise ValueError("附件名称无效")
+        _checked_file(path, root)
+        suffix = Path(name).suffix.lower()
+        limit = office_job.DOCUMENT_FILE_CHARS
+        if suffix == ".pdf":
+            # A stream keeps this reader read-only: scans require explicit OCR elsewhere.
+            with path.open("rb") as stream:
+                body = office_job.pdf_document_text(stream)
+        elif suffix == ".docx":
+            with zipfile.ZipFile(path) as archive:
+                entries = archive.infolist()
+                if len(entries) > 10_000 or sum(e.file_size for e in entries) > 100 * 1024 * 1024:
+                    raise ValueError("Word 解压大小超出限制")
+            body = office_job._read_docx_text(path, limit + 1)
+        elif suffix in (".txt", ".md"):
+            with path.open(encoding="utf-8-sig", errors="replace") as stream:
+                body = stream.read(limit + 1)
+        elif suffix in (".xlsx", ".csv", ".json", ".log"):
+            # Preserve the native tool's existing 20k uploaded excerpt alongside full documents.
+            # The name-to-id binding was checked by the host; never accept a caller-supplied cache path.
+            cached = path.with_suffix(".txt")
+            _checked_file(cached, root)
+            with cached.open(encoding="utf-8", errors="replace") as stream:
+                body = stream.read(20_000)
+            previews.append(name)
+        else:
+            raise ValueError("全文读取仅支持 PDF、DOCX、TXT、MD")
+        if len(body.strip()) < 8:
+            raise ValueError("附件未读取到有效文字；扫描 PDF 请先 OCR")
+        if len(body) > limit:
+            body = body[:limit] + "\n（未读完）附件超过全文读取上限，请拆分后重试。"
+        bodies.append(f"### {name}\n{body}")
+        if name not in previews:
+            names.append(name)
+    return bodies, names, previews
 
 
 def main() -> int:
@@ -25,7 +98,7 @@ def main() -> int:
         return 2
     sys.path.insert(0, str(root))
 
-    raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+    raw = sys.stdin.buffer.read().decode("utf-8", errors="replace") if not sys.stdin.isatty() else ""
     payload: dict = {}
     text = ""
     if raw.strip().startswith("{"):
@@ -36,6 +109,13 @@ def main() -> int:
             text = raw
     else:
         text = raw
+    try:
+        bodies, read, previews = read_originals(payload)
+    except Exception as exc:
+        reason = str(exc) if isinstance(exc, ValueError) else "附件原文件读取失败，请检查文件格式和权限"
+        sys.stdout.buffer.write(json.dumps({"ok": False, "error": reason}, ensure_ascii=False).encode("utf-8"))
+        return 1
+    text = "\n\n".join(([text] if text.strip() else []) + bodies)
     if not text.strip():
         text = " ".join(sys.argv[1:])
     from packing_assistant.tools.tender_parse import workbench_bid_extract
@@ -43,7 +123,13 @@ def main() -> int:
     out = workbench_bid_extract(
         text, project_name=str(payload.get("project_name") or "工作台招标解析")
     )
-    print(json.dumps(out, ensure_ascii=False))
+    out["files_read"] = read
+    out["files_previewed"] = previews
+    if previews:
+        disclosure = ("> 以下附件沿用上传时的文字摘录（每份最多 20,000 字），并非全文读取："
+                      + "、".join(previews) + "。表格行列可能未全部进入摘录，请核对原附件。\n\n")
+        out["extract_table_markdown"] = disclosure + out["extract_table_markdown"]
+    sys.stdout.buffer.write(json.dumps(out, ensure_ascii=False).encode("utf-8"))
     return 0 if out.get("ok") else 1
 
 

@@ -431,6 +431,25 @@ def front_rows(doc: Document) -> List[FrontRow]:
     return rows
 
 
+def front_remainder(doc: Document) -> List[FrontRow]:
+    """Keep meaningful front-table rows that no recognized field or requirement represents."""
+    used = {m.line for m in field_mentions(doc)}
+    used |= {p.line for p in obligations(doc)}
+    used |= {r.piece.line for r in rejections(doc)}
+    used |= {piece.line for _, piece in forms(doc)}
+    rows: List[FrontRow] = []
+    seen: set = set()
+    for row in front_rows(doc):
+        text = row.content.strip()
+        if "评标办法" in row.piece.table or row.piece.line in used or not text or re.fullmatch(r"[/／\-—–\s]+", text):
+            continue
+        key = (_flat(row.name), _flat(text))
+        if key not in seen:
+            seen.add(key)
+            rows.append(row)
+    return rows
+
+
 _SUBLABEL = re.compile(r"[：:]\s*(?=(?:\d+(?:\.\d+)+\s*)?([^：:；;，,。\s]{2,12})[：:])")
 _SUBLABEL_END = re.compile(r"(?:要求|条件|资格|形式|金额|时间|日期|地点|方式|比例|期限|年份|名称|地址|联系人|电话)$")
 

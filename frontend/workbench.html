@@ -2261,7 +2261,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
           <button type="button" id="cbLargeBtn" class="soft" title="大字模式：全站字号放大一档" aria-pressed="false" onclick="cbLargeToggle()">大</button>
           <a v-if="!unifiedWorkbench" href="/" class="soft" style="text-decoration:none;display:inline-flex;align-items:center">投标应答</a>
           <!-- ux(round16) 回跳：装柜台此前是单向终点，只能按浏览器后退；回环地址属 R12 零外链白名单 -->
-          <a :href="unifiedWorkbench ? '/static/index.html' : 'http://127.0.0.1:8765/'" class="soft" title="回 Civil Buddy 66 岗工作台"
+          <a v-if="unifiedWorkbench || isLocalHost" :href="unifiedWorkbench ? '/static/index.html' : 'http://127.0.0.1:8765/'" class="soft" title="回 Civil Buddy 66 岗工作台"
              style="text-decoration:none;display:inline-flex;align-items:center">回工作台</a>
           <span class="pill" v-if="loading || (streamProgress.done > 0 && streamProgress.total)">
             {{ streamProgress.done }}/{{ streamProgress.total || '—' }}
@@ -2785,8 +2785,14 @@ button.danger { background: var(--cb-red); box-shadow: none; }
             <div class="cb-ob-foot">产出永远是 AI 草稿，高风险岗需人工确认 · 全部完成自动收起</div>
           </div>
 
+          <!-- Missing credentials are distinct from an unavailable gateway. -->
+          <div class="cb-empty-down" v-if="needToken" data-cb-need-token="true" role="alert">
+            <p><strong class="cb-empty-k">Access token needed</strong>: this server is private. Open the link you were given (it ends in <code>?token=...</code>).</p>
+            <p lang="zh">需要访问口令：请打开发给你的带 <code>?token=...</code> 的链接。</p>
+          </div>
+
           <!-- ===== ux(round10) 网关兜底空态：/api/health 不可达（附录 I，命令一键复制） ===== -->
-          <div class="cb-empty-down" v-if="gatewayDown && !hasAnyResult" data-cb-down="true" role="alert">
+          <div class="cb-empty-down" v-if="gatewayDown && !needToken && !hasAnyResult" data-cb-down="true" role="alert">
             <p><strong class="cb-empty-k">网关未启动或不可达</strong> —— 界面在，但流水线跑不起来（{{ gatewayDownErr }}）。</p>
             <p>现在能做什么：在仓库根目录启动网关（LLM Key 按需配置），然后点「重试检测」。</p>
             <code id="cbGatewayCmd">python -m uvicorn gateway.app:app --port 8000</code>
@@ -4274,6 +4280,8 @@ window.CB_POSTS = [{"id":"bid-parse","name":"招标解析","aliases":["招标","
           cbOb: { s: [false, false, false], done: false, open: false },
           gatewayDown: false,
           gatewayDownErr: '',
+          needToken: false,
+          isLocalHost: ['localhost', '127.0.0.1', '[::1]', '::1'].indexOf(location.hostname) >= 0,
           copiedGatewayCmd: false,
           sessionId: 'web-' + Date.now(),
           containerType: '40HQ',
@@ -6337,6 +6345,10 @@ window.CB_POSTS = [{"id":"bid-parse","name":"招标解析","aliases":["招标","
             /* ux(round10)：网关兜底空态只在「确实探测过且不可用」时出现，避免首帧闪红 */
             this.gatewayDown = !this.gatewayOk;
             this.gatewayDownErr = this.gatewayOk ? '' : '网关自检 DOWN';
+            if (this.gatewayOk) {
+              const gated = await fetch(API + '/api/experts').catch(() => null);
+              this.needToken = !!gated && gated.status === 401;
+            }
           } catch (e) {
             this.gatewayOk = false;
             this.skjolberOk = false;

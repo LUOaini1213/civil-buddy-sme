@@ -132,11 +132,13 @@ Enforced in code, not in prompts; shipped as the security baseline (pull request
   gateway image on every push and checks that it refuses to start without `CIVIL_TOKEN` (exit 3),
   answers 401 without the token and 200 with it, parses the synthetic ITT through the API, and keeps a
   session in its SQLite database across a container re-create and across `docker compose down` / `up`.
-  The image starts the gateway only, not the browser workbench. Verified in GitHub Actions and local
-  Docker only.
+  The image starts the Python gateway and its browser demo; the Rust workbench uses the separate unified
+  launcher. Container checks are local/CI evidence, not a Lightsail deployment result.
 - **Amazon Bedrock:** configurable through the OpenAI-compatible Chat Completions setting, but **never
   run** from this repository. No result in this repository comes from a live model.
-- Operator guide: [docs/deploy-minimal.md](docs/deploy-minimal.md) (in Chinese). In short:
+- Operator guides: [minimal deployment](docs/deploy-minimal.md) and [Lightsail runbook](docs/deploy-aws-lightsail.md).
+  The gateway also provides the token-protected `/demo` page for tender and panel-list uploads.
+  The [submission audit](docs/civil-buddy/submission-sync-20260927.md) lists recovered local features and known limits.
 
 ```bash
 git clone https://github.com/LUOaini1213/civil-buddy-sme && cd civil-buddy-sme

@@ -1,15 +1,17 @@
-# Civil Buddy packing engine (gateway)
-# usage: CIVIL_TOKEN=<长随机串> docker compose up --build
-# open:  http://localhost:8000/?token=<口令>（只需一次，之后是 HttpOnly cookie）
-# 服务器上前面有 Caddy/nginx 做 HTTPS 时，把端口改成 "127.0.0.1:8000:8000"，只放行 80/443
+# Civil Buddy gateway (FastAPI + the browser pages)
+# usage: CIVIL_TOKEN=<a long random string> docker compose up --build
+# open:  http://localhost:8000/?token=<that string>   (once; after that an HttpOnly cookie carries it)
+#        http://localhost:8000/demo                     the English one-click tender <-> packing link page
+# On a server, do not publish 8000 to the world: put a TLS proxy in front and bind the gateway to 127.0.0.1.
+# deploy/lightsail/compose.override.yml does both (Caddy with automatic HTTPS); see docs/deploy-aws-lightsail.md.
 services:
   gateway:
     build: .
-    image: civil-buddy-gateway:0.6.4
+    image: civil-buddy-gateway:0.7.0
     ports:
       - "8000:8000"
     environment:
-      - CIVIL_TOKEN=${CIVIL_TOKEN:?请先设置 CIVIL_TOKEN（访问口令）}
+      - CIVIL_TOKEN=${CIVIL_TOKEN:?set CIVIL_TOKEN (the access token) first / 请先设置 CIVIL_TOKEN（访问口令）}
       - SKJOLBER_URL=${SKJOLBER_URL:-}
       - PACKING_OTEL=${PACKING_OTEL:-0}
       - PACKING_LANGFUSE=${PACKING_LANGFUSE:-0}
@@ -19,7 +21,12 @@ services:
       # or `docker compose down` keeps it; only `docker compose down -v` deletes it.
       - CB_DB_PATH=/app/output/db/civilbuddy.db
     volumes:
+      # sessions, the database, and the browser upload jobs (/app/output/web-link/<session>/<job>/)
       - packing_output:/app/output
+      # what agent turns write (the linked run's tender-packing-link.*, bidbook.en.*, session memory) lands in
+      # <repo>/demo/out, which is already a sandbox root; a volume there keeps it across `up --build` without
+      # widening the sandbox (CIVIL_WORKTREE_ROOT would also grant writes under the worktree)
+      - agent_out:/app/demo/out
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
       interval: 30s
@@ -28,3 +35,4 @@ services:
 
 volumes:
   packing_output:
+  agent_out:

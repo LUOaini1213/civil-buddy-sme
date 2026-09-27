@@ -21,6 +21,86 @@ fn state() -> AppState {
     AppState::live(paths())
 }
 
+#[test]
+fn test_bid_parse_original_upload_reads_tail_and_keeps_original() {
+    use civil_workbench::{attach, packing_bridge};
+    let mut p = paths();
+    let scratch = std::env::temp_dir().join(format!("civil-original-tender-{}", uuid::Uuid::new_v4().simple()));
+    p.out_root = scratch.join("out");
+    p.data_dir = scratch.join("data");
+    let session = "whole-tender";
+    let filler = "承包人应保留施工过程记录。\n".repeat(3000);
+    let tender = format!("第一章 招标公告\n项目名称：合成测试工程\n第二章 投标人须知\n投标人须知前附表\n\n| 条款号 | 条款名称 | 编列内容 |\n| --- | --- | --- |\n| 1.3.2 | 计划工期 | 120日历天 |\n\n第三章 合同条款及格式\n{filler}\n第四章 评标办法\n本次评标采用综合评估法。\n4.1 投标人不按要求提交投标保证金的，其投标将被否决。\n");
+    let meta = attach::save_upload(&p, session, "招标文件.txt", tender.as_bytes()).unwrap();
+    let originals = attach::upload_originals(&p, session).unwrap();
+    assert_eq!(originals.len(), 1);
+    let mut ctx = ToolCtx::new(p.clone(), "bid-parse", "bid", "low", true, session);
+    let out = packs::execute(&mut ctx, "bid-parse__extract", &json!({"project_name": "合成测试工程"}));
+    if packing_bridge::tender_extract("工期60日历天", "test").is_ok() {
+        assert!(out.contains("已写入"), "{out}");
+        let table = std::fs::read_to_string(ctx.out_dir.join("招标解析表.md")).unwrap();
+        assert!(table.contains("综合评估法"), "the end of the original document was omitted");
+        assert!(table.contains("120日历天"));
+    } else {
+        assert!(out.contains("拒绝写盘"), "an unavailable reader must not silently use the prompt prefix: {out}");
+        assert!(!ctx.out_dir.join("招标解析表.md").exists());
+    }
+    let original = p.out_root.join(session).join("uploads").join(format!("{}.bin", meta["id"].as_str().unwrap()));
+    assert_eq!(std::fs::read(original).unwrap(), tender.as_bytes());
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn test_original_upload_metadata_cannot_escape_session() {
+    use civil_workbench::attach;
+    let mut p = paths();
+    let scratch = std::env::temp_dir().join(format!("civil-original-boundary-{}", uuid::Uuid::new_v4().simple()));
+    p.out_root = scratch.join("out");
+    p.data_dir = scratch.join("data");
+    let meta = attach::save_upload(&p, "original-boundary", "tender.txt", b"Test tender original text").unwrap();
+    let dir = p.out_root.join("original-boundary/uploads");
+    let id = meta["id"].as_str().unwrap();
+    let mut forged = meta.clone();
+    forged["id"] = json!("../../other/private");
+    std::fs::write(dir.join(format!("{id}.json")), forged.to_string()).unwrap();
+    assert!(attach::upload_originals(&p, "original-boundary").is_err());
+    assert!(attach::upload_originals(&p, "../original-boundary").is_err());
+    std::fs::write(dir.join(format!("{id}.json")), meta.to_string()).unwrap();
+    #[cfg(unix)]
+    {
+        let original = dir.join(format!("{id}.bin"));
+        std::fs::remove_file(&original).unwrap();
+        let outside = scratch.join("private.bin");
+        std::fs::write(&outside, b"private original elsewhere").unwrap();
+        std::os::unix::fs::symlink(&outside, &original).unwrap();
+        assert!(attach::upload_originals(&p, "original-boundary").is_err());
+    }
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+#[test]
+fn test_bid_parse_mixed_uploads_keep_table_excerpt() {
+    use civil_workbench::{attach, packing_bridge};
+    let mut p = paths();
+    let scratch = std::env::temp_dir().join(format!("civil-mixed-tender-{}", uuid::Uuid::new_v4().simple()));
+    p.out_root = scratch.join("out");
+    p.data_dir = scratch.join("data");
+    let session = "mixed-tender";
+    attach::save_upload(&p, session, "tender.txt", b"INVITATION TO TENDER\nQuality 40%\nPrice 60%\nTime for Completion: 180 days").unwrap();
+    attach::save_upload(&p, session, "requirements.csv", b"requirement,value\nBCA workhead,CW02\n").unwrap();
+    let mut ctx = ToolCtx::new(p.clone(), "bid-parse", "bid", "low", true, session);
+    let out = packs::execute(&mut ctx, "bid-parse__extract", &json!({"project_name": "mixed synthetic"}));
+    if packing_bridge::tender_extract("Quality 40%", "test").is_ok() {
+        assert!(out.contains("已写入"), "{out}");
+        let table = std::fs::read_to_string(ctx.out_dir.join("招标解析表.md")).unwrap();
+        assert!(table.contains("CW02"), "table attachment was omitted: {table}");
+        assert!(table.contains("并非全文读取：requirements.csv"), "preview scope must be visible: {table}");
+    } else {
+        assert!(out.contains("拒绝写盘"), "{out}");
+    }
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
 async fn send(st: AppState, req: Request<Body>) -> (StatusCode, String) {
     let res = app(st).oneshot(req).await.unwrap();
     let status = res.status();

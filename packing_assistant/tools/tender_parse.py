@@ -341,6 +341,8 @@ def _document_summary(doc: Any) -> Dict[str, Any]:
             "candidates": [{"text": p.text[:300], "locator": p.ref} for p in tender_document.rejection_candidates(doc)],
             "cut": any(p.text.startswith("（未读完）") for p in doc.pieces),
             "forms": [{"name": name, "locator": piece.ref} for name, piece in tender_document.forms(doc)],
+            "remainder": [{"name": row.name, "text": row.content, "locator": row.piece.ref}
+                          for row in tender_document.front_remainder(doc)],
             "review": [{"group": group, "factor": factor, "standard": standard[:300], "locator": piece.ref}
                        for group, factor, standard, piece in tender_document.review_standards(doc)]}
 
@@ -783,6 +785,17 @@ def parse_tender_text(text: str, *, source: str = "text", sides: str = "auto") -
         eval_method=eval_method,
         facts=facts.to_dict(),
     )
+    # Keep the actual submission wording as well as the normalized scheme.
+    # `pieces` already excludes the bidder's statements in a mixed request.
+    envelope_sources = []
+    seen_envelopes: set = set()
+    for index, parts in enumerate(pieces):
+        for part in parts:
+            if _ENVELOPE_RE.search(part) and part not in seen_envelopes:
+                seen_envelopes.add(part)
+                envelope_sources.append({"text": part, "locator": _line_ref(index)})
+    if envelope_sources:
+        handoff["envelope_sources"] = envelope_sources
     # A job file that was named and gave no text (office_job writes "（读失败）why" under its heading).
     # The later posts only get the handoff: "未在原文检出" means something else when the 原文 was never read.
     from packing_assistant.office_job import material_role, unread_files

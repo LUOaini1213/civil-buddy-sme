@@ -526,6 +526,72 @@ pub fn import_url(paths: &Paths, session: &str, url: &str) -> Result<Vec<Value>,
     Ok(vec![save_upload(paths, session, &name, &bytes)?])
 }
 
+/// Original documents from this session only. Metadata may never introduce a path.
+pub fn upload_originals(paths: &Paths, session: &str) -> Result<Vec<(PathBuf, String)>, String> {
+    if sanitize_session(session)? != session {
+        return Err("session_id 无效".into());
+    }
+    fn checked(path: &Path, root: &Path) -> Result<(), String> {
+        let mut current = Some(path);
+        while let Some(p) = current {
+            let meta = fs::symlink_metadata(p).map_err(|_| "附件路径不可读")?;
+            let mut linked = meta.file_type().is_symlink();
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                linked |= meta.file_attributes() & 0x400 != 0;
+            }
+            if linked { return Err("附件路径不允许链接或重解析点".into()); }
+            if p == root { break; }
+            current = p.parent();
+        }
+        if !path.canonicalize().map_err(|_| "附件路径不可读")?
+            .starts_with(root.canonicalize().map_err(|_| "附件根目录不可读")?) {
+            return Err("附件路径超出当前会话".into());
+        }
+        Ok(())
+    }
+    let dir = paths.out_root.join(session).join("uploads");
+    if !dir.exists() { return Ok(Vec::new()); }
+    checked(&dir, &paths.out_root)?;
+    let mut originals = Vec::new();
+    for entry in fs::read_dir(&dir).map_err(|_| "附件目录不可读")? {
+        let p = entry.map_err(|_| "附件目录不可读")?.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("json") { continue; }
+        checked(&p, &dir)?;
+        if fs::metadata(&p).map_err(|_| "附件元数据不可读")?.len() > 64 * 1024 {
+            return Err("附件元数据过大".into());
+        }
+        let meta: Value = serde_json::from_str(&fs::read_to_string(&p).map_err(|_| "附件元数据不可读")?)
+            .map_err(|_| "附件元数据损坏")?;
+        let id = meta["id"].as_str().ok_or("附件 id 缺失")?;
+        let name = meta["name"].as_str().ok_or("附件名称缺失")?;
+        if id.is_empty() || id.len() > 32 || !id.chars().all(|c| c.is_ascii_alphanumeric())
+            || p.file_stem().and_then(|s| s.to_str()) != Some(id) || safe_filename(name) != name {
+            return Err("附件元数据无效".into());
+        }
+        if !ALLOWED_EXT.contains(&ext_of(name).as_str()) { return Err("附件类型无效".into()); }
+        let bin = dir.join(format!("{id}.bin"));
+        checked(&bin, &dir)?;
+        let meta = fs::metadata(&bin).map_err(|_| "附件原文件不可读")?;
+        if !meta.is_file() || meta.len() > MAX_BYTES as u64 {
+            return Err("附件原文件无效或过大".into());
+        }
+        if !matches!(ext_of(name).as_str(), "pdf" | "docx" | "txt" | "md") {
+            let preview = dir.join(format!("{id}.txt"));
+            checked(&preview, &dir)?;
+            let meta = fs::metadata(&preview).map_err(|_| "附件摘录不可读")?;
+            if !meta.is_file() || meta.len() > MAX_BYTES as u64 {
+                return Err("附件摘录无效或过大".into());
+            }
+        }
+        originals.push((bin.canonicalize().map_err(|_| "附件路径不可读")?, name.to_string()));
+        if originals.len() > MAX_FILES { return Err("附件数量超出限制".into()); }
+    }
+    originals.sort_by(|a, b| a.1.cmp(&b.1));
+    Ok(originals)
+}
+
 /// The http(s) addresses a message holds, in order, each once: up to the first blank or the first mark that ends an
 /// address in running Chinese text ("…见 https://example.org/a.pdf，请解析").
 pub fn addresses_in(message: &str) -> Vec<String> {

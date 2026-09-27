@@ -21,7 +21,16 @@ OPEN_LAN_ENV = "CIVIL_ALLOW_OPEN_LAN"
 LOOPBACK_NAMES = {"localhost", "127.0.0.1", "::1"}
 _FORWARDED = {b"forwarded", b"x-forwarded-for", b"x-forwarded-host", b"x-forwarded-proto",
               b"x-forwarded-port", b"x-real-ip", b"via"}
-NEED_TOKEN = "需要访问口令（CIVIL_TOKEN）"
+NEED_TOKEN = "Access token required (CIVIL_TOKEN): open the link you were given. 需要访问口令（CIVIL_TOKEN）"
+#: What a browser gets instead of JSON when it opens a page (not /api/, not /ws/) without the token. No app content.
+NEED_TOKEN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Access token required</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 16px;color:#1d2530;background:#fff}
+code{background:#f1f3f6;padding:1px 4px;border-radius:4px}</style></head><body>
+<h1>Access token required</h1>
+<p>This Civil Buddy server is private. Open the link with <code>?token=...</code> that you were given; the token is then
+kept in an HttpOnly cookie for this browser. <a href="/">What is Civil Buddy?</a></p>
+<p lang="zh">需要访问口令：请打开发给你的带 <code>?token=...</code> 的链接。</p></body></html>"""
 LOCAL_ONLY = "这台服务只接受本机访问。要给其他电脑用，请在服务器上设置 CIVIL_TOKEN（访问口令）后重启。"
 
 
@@ -130,6 +139,8 @@ class AccessGuard:
         if expected and stale is not None and not token_ok(stale, expected):
             extra.append((b"set-cookie", f"{COOKIE}=; Max-Age=0; Path=/; SameSite=Strict".encode()))
         status, detail = (401, NEED_TOKEN) if expected else (403, LOCAL_ONLY)
+        if status == 401 and _wants_page(scope, path):
+            return await _html(send, status, NEED_TOKEN_HTML, extra)
         await _json(send, status, {"detail": detail}, extra)
 
     async def _url_token(self, scope, send, path, pairs):
@@ -137,6 +148,8 @@ class AccessGuard:
         given = next(v for k, v in pairs if k == "token")
         expected = configured_token()
         if scope.get("method") not in ("GET", "HEAD") or not token_ok(given.strip(), expected):
+            if _wants_page(scope, path):
+                return await _html(send, 401, NEED_TOKEN_HTML, [])
             return await _json(send, 401, {"detail": NEED_TOKEN}, [])
         rest = urlencode([(k, v) for k, v in pairs if k != "token"])
         location = quote("/" + path.lstrip("/")) + ("?" + rest if rest else "")  # never //host
@@ -147,6 +160,21 @@ class AccessGuard:
             (b"location", location.encode("latin-1")), (b"set-cookie", cookie.encode("latin-1")),
             (b"referrer-policy", b"no-referrer"), (b"cache-control", b"no-store"), (b"content-length", b"0")]})
         await send({"type": "http.response.body", "body": b""})
+
+
+def _wants_page(scope, path: str) -> bool:
+    """A browser navigating to a page: GET/HEAD, not an API or socket path, and it accepts HTML."""
+    if scope.get("method") not in ("GET", "HEAD") or path.startswith(("/api/", "/ws/")):
+        return False
+    return "text/html" in _headers(scope).get("accept", "")
+
+
+async def _html(send, status, page, extra):
+    body = page.encode("utf-8")
+    await send({"type": "http.response.start", "status": status, "headers": [
+        (b"content-type", b"text/html; charset=utf-8"), (b"content-length", str(len(body)).encode()),
+        (b"cache-control", b"no-store"), *extra]})
+    await send({"type": "http.response.body", "body": body})
 
 
 async def _json(send, status, payload, extra):

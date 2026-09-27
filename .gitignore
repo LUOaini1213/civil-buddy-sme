@@ -107,3 +107,9 @@ data/backup/
 *.sqlite3
 *.sqlite-wal
 *.sqlite-shm
+
+# Local deployment credentials and one-time access-link state.
+model.env
+.link-shown
+deploy/lightsail/*.filled.sh
+deploy/lightsail/user-data.local.sh

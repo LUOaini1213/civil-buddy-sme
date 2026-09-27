@@ -1,0 +1,45 @@
+# One Linux host (AWS Lightsail, Ubuntu 24.04): the gateway on 127.0.0.1 only, Caddy in front with HTTPS.
+#
+#   docker compose -f docker-compose.yml -f deploy/lightsail/compose.override.yml --env-file .env up -d --build
+#
+# .env (mode 0600, written by deploy/lightsail/user-data.sh) holds CIVIL_TOKEN and SITE_ADDRESS:
+#   SITE_ADDRESS=203-0-113-10.sslip.io   the static IP, dashed, under sslip.io: a real certificate, no domain to buy
+#   SITE_ADDRESS=facade.example.com      a domain whose A record points at the static IP
+#   SITE_ADDRESS=http://localhost        plain HTTP (local test only); SITE_ADDRESS=localhost: Caddy's internal CA
+# No model key is passed by default: the linked run and the demo are deterministic and need none. OPT-IN only:
+# `civil-admin.sh model-on` writes model.env (mode 0600: the model endpoint, name and key) next to .env;
+# the gateway reads it if it exists (required: false, Compose >= 2.24) and runs without it otherwise.
+# Needs Docker Compose >= 2.24.4 (the !override tag); docs/deploy-aws-lightsail.md installs Docker's own packages.
+services:
+  gateway:
+    # replaces the base file's "8000:8000": reachable only from this host (Caddy talks to it on the compose network)
+    ports: !override
+      - "127.0.0.1:${GATEWAY_PORT:-8000}:8000"
+    environment:
+      # the typed agent request ("Link the tender facade_itt_doc.md to the packing list facade_panels.xlsx ...")
+      # reads this folder; user-data.sh seeds it with the SYNTHETIC demo files only. It is inside /app/output,
+      # which is already a sandbox root, so the sandbox is not widened.
+      - CIVIL_JOB_ROOT=/app/output/job
+    env_file:
+      - path: ./model.env
+        required: false
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    ports:
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+    environment:
+      - SITE_ADDRESS=${SITE_ADDRESS:?set SITE_ADDRESS (e.g. 203-0-113-10.sslip.io) in .env}
+    volumes:
+      - ./deploy/lightsail/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data        # certificates and the ACME account: keep them, or Let's Encrypt rate limits bite
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

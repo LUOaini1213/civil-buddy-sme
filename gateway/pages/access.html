@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Civil Buddy - access</title>
+<style>
+  :root { --ink:#1d2530; --muted:#556070; --line:#d9dee5; --bg:#ffffff; --panel:#f5f7fa; --accent:#1f5fae; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink:#e6eaf0; --muted:#a3adba; --line:#2f3844; --bg:#12161c; --panel:#1a2029; --accent:#7fb0ef; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:46rem; margin:0 auto; padding:40px 16px 56px; }
+  h1 { font-size:1.6rem; line-height:1.25; margin:0 0 6px; }
+  h2 { font-size:1.1rem; margin:28px 0 8px; }
+  p, li { color:var(--ink); }
+  .lede { color:var(--muted); margin:0 0 20px; }
+  .box { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  code { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:0 4px; font-size:.92em; overflow-wrap:anywhere; }
+  pre { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; overflow-x:auto; font-size:.9em; }
+  a { color:var(--accent); }
+  small { color:var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Civil Buddy: the tender response and the packing plan, linked</h1>
+  <p class="lede">For façade (curtain-wall) subcontractors who answer English tenders and ship panels in containers.</p>
+
+  <div class="box" role="note">
+    <strong>This server is private.</strong> To use it, open the link ending in <code>?token=...</code> that you were
+    given (for the hackathon judges: through the organiser's form). The browser then keeps the token in an HttpOnly
+    cookie for 30 days, and <a href="/demo">/demo</a> runs the linked demo in one click.
+    <br><small>需要访问口令：请打开发给你的带 <code>?token=...</code> 的链接。</small>
+  </div>
+
+  <h2>What it does</h2>
+  <ul>
+    <li>Reads the tender's logistics clauses: container type, gross mass per loaded container, securing, stillages
+      and handling, delivery sequence.</li>
+    <li>Plans the panel list (Excel or CSV) into containers of the type the tender names, with the same planner and
+      conservation checks as the packing tool.</li>
+    <li>Writes one English statement per clause, each tied to its clause, a plan figure, and the sha256 of the
+      tender, the panel list and the plan. A statement the plan does not support goes to a named person; nothing is
+      marked covered without plan evidence.</li>
+    <li>When the panel list changes, it names the statements that went stale and must be re-confirmed.</li>
+    <li>Qualifications and price stay with people. Every record is an internal draft: <code>submit_blocked = true</code>.</li>
+  </ul>
+
+  <h2>Run it yourself, without this server</h2>
+  <pre>pip install -r requirements.txt
+python scripts/demo_facade.py          # the same linked run on the SYNTHETIC demo files, no API key</pre>
+  <p>or with Docker: <code>CIVIL_TOKEN=&lt;a long random string&gt; docker compose up --build</code>, then open
+    <code>http://localhost:8000/?token=&lt;that string&gt;</code>.</p>
+
+  <p><small>Everything on a demo server is synthetic (fictional tender, fictional panels). Liveness:
+    <a href="/api/health">/api/health</a>.</small></p>
+</main>
+</body>
+</html>

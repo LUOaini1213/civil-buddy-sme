@@ -120,6 +120,22 @@ app.add_middleware(access_guard.AccessGuard,
 FRONTEND_DIR = ROOT / "frontend"
 if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+# The link from a browser: upload a tender + panel list, the /demo page (all behind the token; gateway/web_link.py)
+from gateway.web_link import router as _web_link_router  # noqa: E402
+
+app.include_router(_web_link_router)
+#: what a visitor without the token sees at / and /workbench: what this is and how to get access, in English
+ACCESS_PAGE = Path(__file__).resolve().parent / "pages" / "access.html"
+_NO_STORE = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"}
+
+
+def _access_page(request: Request):
+    """None for a caller the guard would let through; the landing page for everyone else. / and /workbench are
+    public paths, so without this a visitor with no token got the app shell, whose first API call failed with 401
+    and was shown as 'gateway down, run uvicorn locally'."""
+    if access_guard.authorised(request.scope) or not ACCESS_PAGE.exists():
+        return None
+    return FileResponse(ACCESS_PAGE, media_type="text/html", headers=_NO_STORE)
 
 
 @app.on_event("startup")
@@ -201,7 +217,10 @@ class DemoRequest(BaseModel):
 
 
 @app.get("/")
-def index():
+def index(request: Request):
+    landing = _access_page(request)
+    if landing is not None:
+        return landing
     index_html = FRONTEND_DIR / "index.html"
     if index_html.exists():
         # 禁止浏览器缓存旧 index（否则修卡死/解锁按钮不生效）
@@ -216,8 +235,11 @@ def index():
 
 
 @app.get("/workbench")
-def workbench():
+def workbench(request: Request):
     """工程装柜工作台（非默认；产品主线为投标应答+交付）。"""
+    landing = _access_page(request)
+    if landing is not None:
+        return landing
     wb = FRONTEND_DIR / "workbench.html"
     if wb.exists():
         return FileResponse(
