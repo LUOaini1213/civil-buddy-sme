@@ -407,7 +407,7 @@ class EndingTests(JobFolderCase):
         self.assertTrue(asked.startswith("[System check]") and "5 containers" in asked and "ready to ship" in asked, asked)
         body, warnings = out["reply"].split("⚠", 1)
         self.assertEqual((out["provenance"]["untraced"], out["provenance"]["verdicts"]), (["5 containers"], ["ready to ship"]))
-        self.assertIn("[verdict removed: not the system's to give]", body)
+        self.assertIn("(verdict removed: not this system's call)", body)
         self.assertNotIn("ready to ship", body)
         self.assertIn("These verdicts are not this system's to give", warnings)
         self.assertIn("These numbers or clause references have no source", warnings)

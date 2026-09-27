@@ -64,20 +64,33 @@ Then open `https://<host>/?token=<token>` once (it sets an HttpOnly cookie and r
    in the host firewall; never 8000.
 2. **Caddy is in the repository** (`deploy/lightsail/Caddyfile`). With nginx instead, the proxy needs:
    ```nginx
-   location / {
-       proxy_pass http://127.0.0.1:8000;
-       proxy_http_version 1.1;
-       proxy_set_header Host $host;
-       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-       proxy_set_header X-Forwarded-Proto $scheme;
-       proxy_set_header Upgrade $http_upgrade;      # /ws/
-       proxy_set_header Connection "upgrade";
-       client_max_body_size 16m;                    # the upload route takes 10 MB + 5 MB
+   # http { } level. nginx's default "combined" log writes $request, the request line WITH its query string,
+   # so the one-time ?token= link would land in the log. This format logs the path without the query ($uri)
+   # and no header (Authorization: Bearer <token> is never logged unless a format names $http_authorization).
+   log_format civil '$remote_addr [$time_local] "$request_method $uri $server_protocol" $status $body_bytes_sent';
+
+   server {
+       # ... listen 443 ssl; server_name; certificates ...
+       access_log /var/log/nginx/civil.access.log civil;   # or: access_log off;
+       error_log /var/log/nginx/civil.error.log crit;      # error lines quote the request line, ?token= included
+       location / {
+           proxy_pass http://127.0.0.1:8000;
+           proxy_http_version 1.1;
+           proxy_set_header Host $host;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+           proxy_set_header Upgrade $http_upgrade;      # /ws/
+           proxy_set_header Connection "upgrade";
+           client_max_body_size 16m;                    # the upload route takes 10 MB + 5 MB
+           proxy_read_timeout 120s;                     # a linked run may take the tool's 60 s plus the parse
+       }
    }
    ```
    A request with forwarding headers, or over HTTP/1.0, is treated as remote, and the token is required from
    loopback too, so no proxy setting bypasses it. `X-Forwarded-Proto: https` makes the cookie `Secure`. Do not set
-   uvicorn's `FORWARDED_ALLOW_IPS` to `*`. Keep the token out of proxy access logs (the Caddyfile filters it).
+   uvicorn's `FORWARDED_ALLOW_IPS` to `*`. Keep the token out of proxy logs: never log `$request`,
+   `$request_uri`, `$args`, `$query_string`, `$http_authorization` or `$http_cookie` (the Caddyfile filters the
+   query, the Authorization header and the cookie).
 3. **The `?token=` link** appears once in the browser history; do not forward it. Scripts use
    `Authorization: Bearer <token>`. Changing the token = edit `.env` and `up -d`; old cookies get 401 and are cleared.
    Never set `CIVIL_ALLOW_OPEN_LAN`.

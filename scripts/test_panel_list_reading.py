@@ -246,6 +246,54 @@ class Reading(unittest.TestCase):
         text = {s["kind"]: s["text"] for s in out["statements"]}["containers_used"]
         self.assertIn("UCW-L6 (missing_weight) in row 3", text)
 
+    # review of PR #68/#69, round 3 (2026-09-27) ----------------------------------------------------------------------
+    def test_packaging_equipment_rows_go_to_a_person_not_into_crates(self):
+        # A steel A-frame stillage listed like a panel was packed as 4 more "panels" (a sealed list: 20 pcs / 7,816 kg
+        # instead of 16 / 6,136). Now the row stops the plan and the question names it; a panel whose remark or name
+        # says it rides on a stillage is still cargo, and goods on a pallet (the generic tables) still plan.
+        head = ["Mark", "Description", "Qty", "Length (mm)", "Width (mm)", "Depth (mm)", "Unit Wt (kg)", "Remarks"]
+        rows = [head,
+                ["UCW-E1", "Unitised panel east (SYNTHETIC)", 6, 3900, 1500, 220, 398, "ship on A-frame stillage"],
+                ["UCW-E2", "Unitised panel on A-frame stillage (SYNTHETIC)", 4, 3900, 1500, 220, 340, ""],
+                ["RK-01", "Returnable steel rack (SYNTHETIC)", 2, 4200, 1800, 2100, 380, "return empty"],
+                ["A-frame stillage, galvanised", "Steel, returnable (SYNTHETIC)", 3, 4200, 1800, 2100, 420, "carries 4 panels"]]
+        path = self.sheet("stillage.xlsx", rows)
+        en = run_plan(file_path=str(path), container_type="40HQ", lang="en")
+        self.assertEqual((en["ok"], en["source"], en["error"]), (False, "needs_human", "packaging_not_cargo"))
+        asks = [(n["reason"], n.get("sheet_row")) for n in en["needs_human"]]
+        self.assertEqual(asks, [("packaging_not_cargo", 4), ("packaging_not_cargo", 5)])
+        self.assertTrue(en["needs_human"][0]["ask"].startswith("Row 4 (RK-01) reads as packaging or transport equipment"),
+                        en["needs_human"][0]["ask"])
+        self.assertIn("A-frame stillage", en["needs_human"][1]["ask"])
+        zh = run_plan(file_path=str(path), container_type="40HQ")
+        self.assertIn("包装 / 运输器具", zh["needs_human"][0]["ask"])
+        # without the two equipment rows the same list plans, the panels on stillages included
+        path = self.sheet("stillage_panels_only.xlsx", rows[:3])
+        plan = run_plan(file_path=str(path), container_type="40HQ", lang="en")
+        self.assertEqual((plan["source"], plan["conservation"]["pieces_in"]), ("solver", 10))
+        # goods on a pallet are cargo (the generic tables)
+        self.assertEqual(rows_blocking_plan([{"id": "PLT-01", "name": "Motor pallet", "quantity": 1, "weight_kg": 80,
+                                              "length_mm": 1200, "width_mm": 1000, "height_mm": 900}]), [])
+
+    def test_equipment_named_for_what_it_carries_is_still_equipment(self):
+        # independent review of PR #76: on 8282779 any cargo word in the row made it cargo, so "Glass stillage",
+        # "A-frame for panels", "Returnable rack for glazing units", "Stillage unit" and "玻璃周转架" were crated as panels
+        def stops(**row):
+            return bool(rows_blocking_plan([{**row, "quantity": 1, "weight_kg": 400, "length_mm": 4200, "width_mm": 1800,
+                                             "height_mm": 2100}]))
+
+        for name in ("Glass stillage, returnable", "A-frame for panels", "Returnable rack for glazing units",
+                     "Stillage unit, galvanised", "Glass panel stillage, steel", "玻璃周转架"):
+            with self.subTest(name=name):
+                self.assertTrue(stops(id="EQ-1", name=name))
+        # a panel that rides on equipment is a panel; each cell is read on its own
+        for row in ({"id": "UCW-01", "name": "Unitised panel on A-frame stillage"},
+                    {"id": "UCW-9", "name": "Glazed unit, delivered on returnable steel rack"},
+                    {"id": "P-1", "name": "Spandrel panel (stillage bay)"},
+                    {"id": "UCW-10", "name": "Vision panel", "spec": "A-frame"}):
+            with self.subTest(row=row):
+                self.assertFalse(stops(**row))
+
     # review of PR #69 (2026-09-27) -----------------------------------------------------------------------------
     def test_a_total_word_on_a_sized_row_is_cargo(self):
         # the first cut dropped these three as sum rows: 2 x 300 kg of panels and a bracket kit lost from the plan
