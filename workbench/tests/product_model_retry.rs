@@ -236,6 +236,7 @@ fn fast() -> providers::RetryPolicy {
         max_retries: 2,
         base_delay: Duration::from_millis(20),
         max_delay: Duration::from_secs(8),
+        ..providers::RetryPolicy::default()
     }
 }
 
@@ -484,13 +485,68 @@ async fn a_hung_attempt_is_cut_at_the_task_deadline_and_not_retried() {
         "hang with 6 s deadline: elapsed_ms={}",
         c.elapsed.as_millis()
     );
-    assert!(matches!(c.result, Err(providers::ProviderError::Transport)));
+    assert!(matches!(c.result, Err(providers::ProviderError::TimedOut)));
     assert!(c.notices.is_empty());
     assert!(
         c.elapsed >= Duration::from_secs(5) && c.elapsed < Duration::from_secs(9),
         "{:?}",
         c.elapsed
     );
+}
+
+/// A hung provider is given one attempt window, not three: a timeout is not
+/// retried even when the task deadline has plenty of room left. Covers a
+/// provider that never sends headers and one that stalls mid-body.
+#[tokio::test]
+async fn a_timed_out_attempt_is_not_retried() {
+    for stall_after_headers in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let accepted = Arc::new(Mutex::new(0usize));
+        let counter = accepted.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                *counter.lock().unwrap() += 1;
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+                    if stall_after_headers {
+                        let _ = socket
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4000\r\n\r\n{\"choices\":[")
+                            .await;
+                    }
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                });
+            }
+        });
+        let policy = providers::RetryPolicy {
+            attempt_timeout: Duration::from_secs(1),
+            ..fast()
+        };
+        let c = call(
+            base,
+            BudgetLimits::default(),
+            policy,
+            CancellationToken::new(),
+        )
+        .await;
+        server.abort();
+        println!(
+            "hang (stall_after_headers={stall_after_headers}) with 1 s attempts, 120 s deadline: connections={} elapsed_ms={}",
+            accepted.lock().unwrap(),
+            c.elapsed.as_millis()
+        );
+        assert!(
+            matches!(c.result, Err(providers::ProviderError::TimedOut)),
+            "{:?}",
+            c.result.err()
+        );
+        assert_eq!(*accepted.lock().unwrap(), 1);
+        assert!(c.notices.is_empty());
+        assert!(c.elapsed < Duration::from_secs(4), "{:?}", c.elapsed);
+        assert_eq!(c.budget.snapshot().unwrap().model_calls, 1);
+    }
 }
 
 #[tokio::test]

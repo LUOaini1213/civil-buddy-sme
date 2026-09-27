@@ -20,6 +20,10 @@ pub enum ProviderError {
     },
     #[error("provider request failed or timed out")]
     Transport,
+    /// The attempt ran to its timeout. The provider may still be working on
+    /// it, so this is not retried: another attempt would only wait again.
+    #[error("provider did not answer before the request timeout; retry later")]
+    TimedOut,
     #[error(transparent)]
     Runtime(#[from] crate::runtime_core::RuntimeError),
 }
@@ -125,17 +129,13 @@ async fn attempt(
             .json(&payload)
             .send()
             .await
-            .map_err(|_| ProviderError::Transport)?;
+            .map_err(transport_error)?;
         let status = response.status();
         if !status.is_success() {
             return Err(status_error(status.as_u16(), response.headers()));
         }
         let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| ProviderError::Transport)?
-        {
+        while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
             if bytes.len() + chunk.len() > 4 * 1024 * 1024 {
                 return Err(ProviderError::Invalid(
                     "provider response exceeds 4 MiB".into(),
@@ -222,6 +222,14 @@ fn wait_hint(wait: &Option<Duration>) -> String {
     }
 }
 
+fn transport_error(error: reqwest::Error) -> ProviderError {
+    if error.is_timeout() {
+        ProviderError::TimedOut
+    } else {
+        ProviderError::Transport
+    }
+}
+
 fn status_error(status: u16, headers: &reqwest::header::HeaderMap) -> ProviderError {
     match status {
         429 => ProviderError::RateLimited(retry_after(headers)),
@@ -260,8 +268,9 @@ impl ProviderError {
             Self::Http(_) | Self::RateLimited(_) | Self::Unavailable { .. }
         )
     }
-    /// 429, 5xx, timeouts and connection errors are worth another attempt;
-    /// the inner value is the provider's Retry-After, if it sent one.
+    /// 429, 5xx and connection errors are worth another attempt; a timeout is
+    /// not (the attempt already waited its whole window). The inner value is
+    /// the provider's Retry-After, if it sent one.
     fn transient(&self) -> Option<Option<Duration>> {
         match self {
             Self::RateLimited(wait)
@@ -282,6 +291,8 @@ pub struct RetryPolicy {
     pub base_delay: Duration,
     /// Also the longest Retry-After honoured; a longer one ends the retries.
     pub max_delay: Duration,
+    /// Each attempt's timeout (never past the task deadline).
+    pub attempt_timeout: Duration,
 }
 impl Default for RetryPolicy {
     fn default() -> Self {
@@ -289,6 +300,7 @@ impl Default for RetryPolicy {
             max_retries: 2,
             base_delay: Duration::from_secs(2),
             max_delay: Duration::from_secs(8),
+            attempt_timeout: MODEL_REQUEST_TIMEOUT,
         }
     }
 }
@@ -339,10 +351,12 @@ fn remaining(budget: &BudgetTree) -> Duration {
         .unwrap_or(MODEL_REQUEST_TIMEOUT)
 }
 
-/// [`complete`] with bounded retry of transient failures (429, 5xx, timeouts,
-/// connection errors): at most `policy.max_retries` more attempts after a
+/// [`complete`] with bounded retry of transient failures (429, 5xx, dropped
+/// connections): at most `policy.max_retries` more attempts after a
 /// full-jitter backoff or the provider's Retry-After, never past the task
-/// deadline, and cancellation ends the backoff sleep at once. Every attempt
+/// deadline, and cancellation ends the backoff sleep at once. A timed-out
+/// attempt is not retried, so a hung provider fails after one attempt window
+/// (120 s) instead of holding the turn to its 300 s limit. Every attempt
 /// makes its own budget reservation and consumes a model call. The caller
 /// decides when a retry is safe; the product agent retries only before any
 /// tool has run in the turn.
@@ -360,7 +374,7 @@ pub async fn complete_with_retry(
 ) -> Result<Completion> {
     let mut retry = 0;
     loop {
-        let timeout = remaining(budget).min(MODEL_REQUEST_TIMEOUT);
+        let timeout = remaining(budget).min(policy.attempt_timeout);
         let error = match attempt(
             cfg, messages, tools, max_output, window, budget, task, cancel, timeout,
         )
