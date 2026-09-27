@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Civil Buddy SME · Team Mintang</title>
+  <meta name="description" content="An agent workflow linking façade tender clauses, container plans, and draft responses.">
+  <style>
+    :root{font-family:Inter,ui-sans-serif,system-ui,Arial,sans-serif;color:#e9f1fb;background:#0a1321;font-size:16px}
+    *{box-sizing:border-box}body{margin:0}a{color:#8fd8fa}a:focus-visible{outline:3px solid #7cddc6}header,main,footer{max-width:1120px;margin:auto;padding:0 28px}
+    header{display:flex;justify-content:space-between;align-items:center;padding-top:25px;padding-bottom:25px;border-bottom:1px solid #253449}
+    .brand{font-size:1.06rem;font-weight:800;letter-spacing:.04em}.tag{font-size:.82rem;color:#9db4ca}.hero{padding:76px 0 62px}
+    h1{font-size:clamp(2.4rem,6vw,5rem);line-height:1.07;letter-spacing:-.055em;max-width:850px;margin:16px 0 23px}
+    h2{font-size:1.8rem;letter-spacing:-.025em;margin:0 0 24px}h3{font-size:1.1rem;margin:0 0 12px}p{line-height:1.65;color:#bbccdc}
+    .eyebrow{color:#7cddc6;font-weight:700;letter-spacing:.11em;text-transform:uppercase;font-size:.75rem}
+    .lead{font-size:1.24rem;max-width:750px}.note{border-left:3px solid #7cddc6;padding:12px 18px;background:#112237;color:#d3e2ee;max-width:790px}
+    .buttons{display:flex;gap:12px;flex-wrap:wrap;margin-top:28px}.button{padding:13px 20px;border-radius:10px;font-weight:700;text-decoration:none;background:#7cddc6;color:#092322}
+    .button.secondary{background:#1b2c40;color:#e9f1fb;border:1px solid #435770}.section{padding:45px 0;border-top:1px solid #253449}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:17px}.card{padding:24px;background:#132338;border:1px solid #2c425a;border-radius:16px}.number{font-size:.8rem;color:#7cddc6;font-weight:800}
+    .result{padding:25px;border-radius:16px;background:#14253a;border:1px solid #36566f}.result strong{color:#e9f1fb}ul{padding-left:22px;color:#bbccdc;line-height:1.8}
+    footer{padding-top:32px;padding-bottom:44px;color:#9db4ca;font-size:.87rem;border-top:1px solid #253449}
+    @media(max-width:750px){.grid{grid-template-columns:1fr}.hero{padding:50px 0 42px}header{display:block}.tag{display:block;margin-top:6px}}
+  </style>
+</head>
+<body>
+  <header><div class="brand">▣ CIVIL BUDDY</div><div class="tag">Team Mintang · NUS-ISS Show Me Your Agents 2026</div></header>
+  <main>
+    <section class="hero">
+      <div class="eyebrow">Façade SME workflow · Synthetic demonstration</div>
+      <h1>Connect the tender clause to the container plan.</h1>
+      <p class="lead">Civil Buddy links a façade tender, a real panel list, a packing plan and the corresponding draft response. Every logistics statement points back to its clause and the calculated plan figure.</p>
+      <div class="note"><strong>Project showcase:</strong> this free Static Space presents the workflow and recorded sample results. It does not run the Python backend or process uploaded documents.</div>
+      <div class="buttons"><a class="button" href="https://github.com/LUOaini1213/civil-buddy-sme">View source and run instructions →</a><a class="button secondary" href="https://github.com/LUOaini1213/civil-buddy-sme/tree/main/examples/facade-demo">Synthetic demo inputs</a></div>
+    </section>
+    <section class="section"><h2>One linked workflow</h2><div class="grid">
+      <div class="card"><div class="number">01 / READ</div><h3>Tender requirements</h3><p>Identify logistics clauses, container type and human review items, retaining their source clauses.</p></div>
+      <div class="card"><div class="number">02 / PLAN</div><h3>Panel packing</h3><p>Read the Excel panel list, calculate a container plan and track the figures used in the response.</p></div>
+      <div class="card"><div class="number">03 / LINK</div><h3>Draft and trace</h3><p>Write English logistics statements from plan figures and flag drafts needing a person to confirm.</p></div>
+    </div></section>
+    <section class="section"><h2>Recorded example</h2><div class="result">
+      <p><strong>Clause 4.8 · 40HQ · Partial:</strong> in the repository’s synthetic example, the recorded plan reports 6 × 40HQ for 24 pieces and 10,800 kg net.</p>
+      <p><strong>Clause 4.9 · gross mass · Partial:</strong> a recorded heaviest container of 6,472.8 kg gross against this synthetic tender’s 20,000 kg limit.</p>
+      <div class="note"><strong>Calculation limits:</strong> A-frame stillages are not modelled. Gross mass uses an approximate 40HQ tare and excludes dunnage, lashing and stillage weight. These figures do not establish a final shipping plan or tender compliance. A competent person must review and sign off the loading plan before booking; the signed verified gross mass (VGM) governs.</div>
+      <p>Those numbers are a snapshot from the published example; they are not calculated by this page. The source repository contains the reproducible offline command and test data.</p>
+    </div></section>
+    <section class="section"><h2>Human review remains essential</h2><ul><li>Lashing, handling and crate structure require competent review.</li><li>Qualifications and price remain for people to fill in.</li><li>Generated drafts do not book containers or submit a tender.</li></ul></section>
+  </main>
+  <footer>Team Mintang · PJ2U63AF · All displayed input data is synthetic. Static showcase only.</footer>
+</body>
+</html>

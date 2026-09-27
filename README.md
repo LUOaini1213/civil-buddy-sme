@@ -4,6 +4,10 @@
 
 中文说明：[README.zh.md](README.zh.md)
 
+[Public static showcase](https://huggingface.co/spaces/Niki68868/civil-buddy-sme)
+— workflow and recorded synthetic results, without an online Python backend.
+[Showcase source and publishing instructions](deploy/huggingface-space/README.md).
+
 **Who it is for.** Singapore façade and curtain-wall SMEs that supply and install façade packages and
 must answer English tenders *and* ship the panels to site in containers.
 
