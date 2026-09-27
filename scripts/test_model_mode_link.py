@@ -217,6 +217,22 @@ class LinkFirst(Case):
         self.assertEqual(out["model_explanation"], "")
 
 
+class RecordQuestionRouting(unittest.TestCase):
+    def test_naming_both_files_does_not_turn_a_question_into_a_link_run(self):
+        for text in (
+            "How many containers does facade_panels.xlsx need, and which clause of facade_itt_doc.md "
+            "limits the gross mass? Just answer.",
+            "Explain the logistics response for facade_panels.xlsx and facade_itt_doc.md.",
+            "Do not regenerate the logistics response. Which clauses of facade_itt_doc.md "
+            "does the plan for facade_panels.xlsx answer?",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(model_loop.record_question(text))
+        self.assertFalse(model_loop.record_question(LINK))
+        self.assertFalse(model_loop.record_question("Check facade_panels.xlsx against the shipping requirements "
+                                                   "in facade_itt_doc.md"))
+
+
 class Questions(Case):
     def test_a_question_cannot_write(self):
         script = Script([("run_skill", {"skill_id": "bid-parse", "files": ["facade_itt_doc.md"]})], "Only an answer.")
@@ -238,6 +254,27 @@ class Questions(Case):
         self.assertIn("6 x 40HQ", shown)
         self.assertNotIn("Clause 4.3", shown)          # untraced in a record question: struck, not only listed
         self.assertFalse(out["wrote"])
+
+    def test_a_question_naming_both_files_reads_without_rewriting_the_record(self):
+        run_turn(LINK, session_id="model-q-files", mode="steps")
+        records = {path: path.read_bytes() for path in self.job.rglob("tender-packing-link.json")}
+        script = Script("It needs 1 container. Clause 4.3 limits the gross mass.",
+                        "The linked plan uses 6 x 40HQ. Clause 4.9 limits the gross mass "
+                        "of each loaded container to 20,000 kg.")
+        out, asked = self.model_turn("How many containers does facade_panels.xlsx need, and which clause "
+                                     "of facade_itt_doc.md limits the gross mass? Just answer.", script, "model-q-files")
+        self.assertEqual(out["tools_run"], ["read_link_record"])
+        self.assertTrue(any(event["type"] == "tool_call" and event["payload"].get("forced")
+                            for event in out["events"]))
+        shown = "\n".join(line for line in out["reply"].splitlines() if not line.startswith("⚠"))
+        for correct in ("6 x 40HQ", "Clause 4.9 limits the gross mass", "20,000 kg"):
+            self.assertIn(correct, shown)
+        for invented in ("1 container", "Clause 4.3"):
+            self.assertNotIn(invented, shown)
+        self.assertFalse(out["wrote"])
+        self.assertEqual(out["files"], [])
+        self.assertEqual(asked, [])
+        self.assertEqual(records, {path: path.read_bytes() for path in self.job.rglob("tender-packing-link.json")})
 
 
 class Workbench(Case):

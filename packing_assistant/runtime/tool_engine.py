@@ -35,6 +35,10 @@ WRITE_TOOLS = frozenset(
 )
 
 _PATH_KEYS = ("path", "write_path", "output_path", "dest", "file")
+# A completed read can report an expected missing business object. Keep the
+# error visible, but do not latch the shared tool off before that object exists.
+# Exact tool/code pairs only: unreadable records, exceptions and timeouts fail.
+_EXPECTED_ABSENCE = frozenset({("read_link_record", "no_link_record")})
 
 
 def _write_path(args: Dict[str, Any]) -> Optional[str]:
@@ -351,7 +355,8 @@ class ToolEngine:
                         "reason": "工具返回值不符合契约：" + problem,
                         "duration_ms": ms, "contract_error": True}
         error_code = str(data.get("error_code") or ERR_UNSPECIFIED) if failed else ERR_OK
-        self._fail_streak[name] = self._fail_streak.get(name, 0) + 1 if failed else 0
+        fault = failed and (name, error_code) not in _EXPECTED_ABSENCE
+        self._fail_streak[name] = self._fail_streak.get(name, 0) + 1 if fault else 0
         self.audit_log.append(Audit(name=name, error_code=error_code, duration_ms=ms, expert_id=expert_id))
         out: Dict[str, Any] = {
             "ok": not failed,

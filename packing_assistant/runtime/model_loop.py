@@ -741,10 +741,14 @@ _READS = frozenset({"read_link_record", "read_job_file", "pack_plan", "run_skill
 
 def record_question(text: str) -> bool:
     """A question (not a request to draft or plan) about the tender's clauses, the statements or the loading plan."""
-    from packing_assistant.runtime.task_router import _QUESTION, _READ_REQUEST, wants_link
+    from packing_assistant.runtime.task_router import _QUESTION, _READ_REQUEST, _link_requests_execution, wants_link
 
     body = text or ""
-    if not _RECORD_TOPIC.search(body) or wants_link(body):
+    # Naming the tender and packing files identifies a link topic, not permission
+    # to regenerate it. Read-only questions still need the existing record, even
+    # when the same words would also identify the deterministic link workflow.
+    link_topic = wants_link(body)
+    if (not _RECORD_TOPIC.search(body) and not link_topic) or (link_topic and _link_requests_execution(body)):
         return False
     return bool(_QUESTION.search(body) or _READ_REQUEST.search(body) or body.rstrip().endswith(("?", "？")))
 

@@ -18,6 +18,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import unittest
@@ -339,6 +340,45 @@ class FolderLimitTests(JobFolderCase):
 
 
 class EndingTests(JobFolderCase):
+    def test_missing_link_queries_do_not_block_reading_a_subsequently_generated_record(self):
+        from packing_assistant.runtime.tool_engine import get_engine
+
+        # The generic model fixture has unrelated tender/response/table files;
+        # this recovery scenario starts with a new job and one explicit pair.
+        job = self.job / "link-only"
+        job.mkdir()
+        os.chdir(job)
+        workspace.activate(job)
+        engine = get_engine()
+        for _ in range(3):
+            missing = engine.execute("read_link_record", {"session_id": "missing-link"},
+                                     expert_id="bid-parse", intent="chat")
+            self.assertFalse(missing["ok"])
+            self.assertEqual(missing["error_code"], "no_link_record")
+            self.assertIn("No tender-packing link record", missing["data"]["reason"])
+        self.assertEqual(engine._fail_streak.get("read_link_record", 0), 0)
+        for name in ("facade_itt_doc.md", "facade_panels.xlsx"):
+            shutil.copyfile(ROOT / "examples" / "facade-demo" / name, job / name)
+        created = run_turn("Link the tender facade_itt_doc.md to the packing list facade_panels.xlsx "
+                           "and write the logistics response", session_id="missing-link", mode="steps")
+        self.assertTrue(created["ok"] and created["wrote"], created.get("reply"))
+        found = engine.execute("read_link_record", {"session_id": "missing-link"},
+                               expert_id="bid-parse", intent="chat")
+        self.assertTrue(found["ok"], found)
+        self.assertEqual(found["data"]["container_type"], "40HQ")
+        self.assertEqual(engine._fail_streak.get("read_link_record", 0), 0)
+
+    def test_only_expected_link_absence_is_exempt_from_the_fault_circuit(self):
+        from packing_assistant.runtime.tool_engine import ToolEngine
+
+        for tool_name, error_code in (("read_link_record", "unreadable"), ("other_read", "no_link_record")):
+            with self.subTest(tool=tool_name, error=error_code):
+                engine = ToolEngine()
+                engine.register(tool_name, lambda _args: {"ok": False, "error_code": error_code})
+                for _ in range(3):
+                    self.assertEqual(engine.execute(tool_name, intent="chat")["error_code"], error_code)
+                self.assertEqual(engine.execute(tool_name, intent="chat")["error_code"], "circuit_open")
+
     def test_a_repeated_call_is_refused_and_the_step_budget_is_a_hard_stop(self):
         loop = [("list_job_files", {})]
         script = Script(*[loop] * 6)
@@ -367,7 +407,8 @@ class EndingTests(JobFolderCase):
         self.assertTrue(asked.startswith("[System check]") and "5 containers" in asked and "ready to ship" in asked, asked)
         body, warnings = out["reply"].split("⚠", 1)
         self.assertEqual((out["provenance"]["untraced"], out["provenance"]["verdicts"]), (["5 containers"], ["ready to ship"]))
-        self.assertIn("(verdict removed: not this system's call)", body)
+        self.assertIn("[verdict removed: not the system's to give]", body)
+        self.assertNotIn("ready to ship", body)
         self.assertIn("These verdicts are not this system's to give", warnings)
         self.assertIn("These numbers or clause references have no source", warnings)
         self.assertIsNone(re.search(r"[一-鿿]", warnings), warnings)       # no Chinese notice on an English reply
