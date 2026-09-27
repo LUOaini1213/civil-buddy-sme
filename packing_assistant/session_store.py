@@ -85,8 +85,10 @@ def _checkpoint_status(state: Dict[str, Any]) -> str:
         # confirm 后可能仍在跑 B；finalize 后 phase 多为 done
         if phase == "await_user_confirm":
             return "interrupted"
-        if phase == "team_b_running":
-            return "resumed"  # Team A's final_response is still in the state: that is not Team B being done
+        if phase == "team_b_running" and not state.get("container_plan"):
+            # the confirm checkpoint: Team A's final_response is still in the state, Team B has not packed yet.
+            # A finished LLM-path run also ends in team_b_running, with its container_plan: that one is done.
+            return "resumed"
         return "done" if phase in ("done", "cancelled") or state.get("final_response") else "resumed"
     if state.get("final_response") and phase not in ("await_user_confirm",):
         return "done"
@@ -413,11 +415,32 @@ def _interrupted_state(state: Dict[str, Any], sid: str, rid: str, was: str, at: 
     return s
 
 
+def _done_since(run_id: str, saved_at: str) -> bool:
+    """True when the run's JSONL trace has a done event at or after `saved_at` (json store; the sqlite sweep
+    asks the events table the same question). A run that finished after its last save is not mid-run."""
+    from packing_assistant.trace_events import run_trace_path
+
+    path = run_trace_path(run_id)
+    if not saved_at or not path.is_file():
+        return False
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            if '"done"' not in line:
+                continue
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if ev.get("type") == "done" and str(ev.get("ts") or "") >= saved_at:
+                return True
+    return False
+
+
 def recover_interrupted(*, reason: str = "gateway_restart") -> Dict[str, int]:
     """Startup sweep: whatever a crash left mid-run is marked interrupted, never resumed or replayed.
 
     The gateway counterpart of the Rust host's recover_interrupted (runtime_core/persistence.rs): a session
-    in team_a_running / team_b_running, a run_start placeholder whose run never reached done/hitl, and a
+    in team_a_running / team_b_running with no done event since its last save, a run_start placeholder whose run never reached done/hitl, and a
     runs row with no outcome. /api/confirm then answers 409 for it instead of silently running Team B from
     a half-written state. Like the Rust sweep it assumes one server process owns this store; call it before
     serving. Never raises: a failed sweep must not stop the gateway from starting.
@@ -451,6 +474,9 @@ def recover_interrupted(*, reason: str = "gateway_restart") -> Dict[str, int]:
                 state = load_session(sid)
                 if not state or state.get("phase") not in RUNNING_PHASES:
                     continue
+                rid = str(state.get("run_id") or sid)
+                if _done_since(rid, str(state.get("_session_saved_at") or idx.get("saved_at") or "")):
+                    continue  # a finished LLM-path run keeps team_b_running; its trace says done
                 save_session(sid, _interrupted_state(state, sid, str(state.get("run_id") or ""),
                                                      str(state.get("phase")), at, reason))
                 seen.add(sid)

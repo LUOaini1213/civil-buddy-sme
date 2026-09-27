@@ -1308,10 +1308,11 @@ def api_revise_nl(body: ReviseNlRequest):
 
 
 class _SessionLock:
-    __slots__ = ("lock", "__weakref__")
+    __slots__ = ("lock", "waiters", "__weakref__")
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
+        self.waiters = 0
 
 
 # One confirm/revise per session at a time. Held only while a request uses it (weak values), so the map does
@@ -1320,6 +1321,10 @@ _CONFIRM_LOCKS: "weakref.WeakValueDictionary[str, _SessionLock]" = weakref.WeakV
 _CONFIRM_LOCKS_GUARD = threading.Lock()
 #: a second confirm waits this long for the first to finish Team B, then gets the stored result
 _CONFIRM_WAIT_S = 600.0
+#: requests allowed to wait behind a running confirm of one session (a double click, one client retry). More get
+#: 409 at once: every waiter holds a worker thread, and 45 of them held a cancel back 65.6 s on a real server.
+_CONFIRM_MAX_WAITERS = 2
+_CONFIRM_BUSY = "该会话的上一个确认仍在运行。The previous confirm for this session is still running."
 _CANCELLED_DURING_TEAM_B = ("拼柜运行期间该会话已被取消，结果未采用。"
                             "This session was cancelled while Team B was running; its result was discarded.")
 
@@ -1348,6 +1353,25 @@ def _session_lock(session_id: str) -> _SessionLock:
             holder = _SessionLock()
             _CONFIRM_LOCKS[sid] = holder
         return holder
+
+
+def _acquire_confirm_turn(session_id: str) -> _SessionLock:
+    """The session's confirm lock: wait at most _CONFIRM_WAIT_S, behind at most _CONFIRM_MAX_WAITERS others."""
+    holder = _session_lock(session_id)
+    if holder.lock.acquire(blocking=False):
+        return holder
+    with _CONFIRM_LOCKS_GUARD:
+        if holder.waiters >= _CONFIRM_MAX_WAITERS:
+            raise HTTPException(409, _CONFIRM_BUSY, headers={"Retry-After": "5"})
+        holder.waiters += 1
+    try:
+        got = holder.lock.acquire(timeout=_CONFIRM_WAIT_S)
+    finally:
+        with _CONFIRM_LOCKS_GUARD:
+            holder.waiters -= 1
+    if not got:
+        raise HTTPException(409, _CONFIRM_BUSY, headers={"Retry-After": "5"})
+    return holder
 
 
 def _run_team_b_guarded(sid: str, before: Dict[str, Any], run) -> Dict[str, Any]:
@@ -1416,9 +1440,7 @@ def api_confirm(body: ConfirmRequest):
             _cancel.request(asked)  # a pipeline may be registered under the alias
     if body.action == "cancel":
         return _api_confirm(body)
-    holder = _session_lock(body.session_id)
-    if not holder.lock.acquire(timeout=_CONFIRM_WAIT_S):
-        raise HTTPException(409, "该会话的上一个确认仍在运行。The previous confirm for this session is still running.")
+    holder = _acquire_confirm_turn(body.session_id)
     try:
         return _api_confirm(body)
     finally:
@@ -1560,9 +1582,7 @@ def api_resume_team_b(session_id: str, body: ConfirmRequest):
     from packing_assistant.graph_resume import load_resume_state, resume_team_b_segment
 
     session_id = _canonical_session_id(session_id)
-    holder = _session_lock(session_id)  # the same door to Team B as /api/confirm: the same once-only rule
-    if not holder.lock.acquire(timeout=_CONFIRM_WAIT_S):
-        raise HTTPException(409, "该会话的上一个确认仍在运行。The previous confirm for this session is still running.")
+    holder = _acquire_confirm_turn(session_id)  # the same door to Team B as /api/confirm: the same once-only rule
     try:
         st = _get_session(session_id) or load_resume_state(session_id)
         if not st:

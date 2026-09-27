@@ -355,12 +355,15 @@ class Storage:
     _SETTLED_EVENTS = "('done','hitl')"
 
     def stale_sessions(self, running_phases: tuple) -> List[tuple]:
-        """(session_id, run_id, phase, state_json) for sessions a crash left mid-run: a running phase, or a
-        run_start placeholder (ensure_run) whose run never reached a done/hitl event."""
+        """(session_id, run_id, phase, state_json) for sessions a crash left mid-run: a running phase with no
+        done event at or after the save, or a run_start placeholder (ensure_run) whose run never reached a
+        done/hitl event. A finished LLM-path run keeps phase team_b_running in its last save; its done event
+        is what says it finished."""
         marks = ",".join("?" for _ in running_phases)
         return self._read_conn().execute(
             "SELECT session_id, run_id, phase, state_json FROM sessions s"
-            f" WHERE s.phase IN ({marks})"
+            f" WHERE (s.phase IN ({marks}) AND NOT EXISTS(SELECT 1 FROM events e"
+            " WHERE e.run_id=s.run_id AND e.type='done' AND e.ts >= s.saved_at))"
             " OR (s.status='placeholder' AND NOT EXISTS(SELECT 1 FROM events e"
             f" WHERE e.run_id=s.run_id AND e.type IN {self._SETTLED_EVENTS}))",
             tuple(running_phases),

@@ -315,7 +315,7 @@ def test_restart_marks_running_sessions_interrupted() -> None:
     st.ensure_run({"run_id": "run-rc-fin", "session_id": "rc-fin", "started_at": "2026-09-28T00:00:00+00:00"})
     st.insert_event({"run_id": "run-rc-fin", "session_id": "rc-fin", "type": "done", "ts": "2026-09-28T00:00:01+00:00",
                      "status": "ok", "schema": "packing.stream.v1"})
-    # before the sweep the crashed Team B reads as done: Team A's final_response is still in its state
+    # before the sweep the crashed Team B reads as resumed, not done, though Team A's final_response is in its state
     assert (load_checkpoint_meta("rc-b") or {}).get("status") == "resumed"
     G._SESSIONS.clear()
     with TestClient(G.app, raise_server_exceptions=False) as client:  # runs the startup handlers
@@ -401,6 +401,67 @@ def test_a_bad_concurrency_setting_does_not_take_the_gateway_down() -> None:
             assert G._pipeline_concurrency() == want, (raw, G._pipeline_concurrency())
 
 
+def _held_team_b(release: threading.Event, started: threading.Event):
+    def held(*args, **kwargs):
+        TEAM_B["runs"] += 1
+        started.set()
+        assert release.wait(60), "the test never released Team B"
+        return _REAL_TEAM_B(*args, **kwargs)
+    return held
+
+
+def test_waiting_confirms_are_bounded() -> None:
+    """Every confirm behind a running one held a worker thread for up to 600 s: on a real uvicorn server 45 of
+    them held a cancel back 65.6 s (PR #7 head 244ccc3). Now at most 2 wait; the rest get 409 + Retry-After."""
+    _paused("ss-many")
+    release, started, out = threading.Event(), threading.Event(), []
+    with patch.object(H, "run_team_b", _held_team_b(release, started)):
+        before = TEAM_B["runs"]
+        first = threading.Thread(target=lambda: out.append(_confirm("ss-many")))
+        first.start()
+        assert started.wait(30)
+        extra = [threading.Thread(target=lambda: out.append(_confirm("ss-many"))) for _ in range(5)]
+        [t.start() for t in extra]
+        deadline = time.time() + 30
+        while len(out) < 3 and time.time() < deadline:  # the 3 over the limit answer while Team B still runs
+            time.sleep(0.05)
+        busy = list(out)
+        release.set()
+        first.join()
+        [t.join() for t in extra]
+        runs = TEAM_B["runs"] - before
+    assert len(busy) == 3 and all(r.status_code == 409 and r.headers.get("retry-after") == "5" for r in busy), \
+        [(r.status_code, r.text[:80]) for r in busy]
+    assert sorted(r.status_code for r in out) == [200] * 3 + [409] * 3, [r.status_code for r in out]
+    assert runs == 1, runs
+
+
+def test_a_finished_llm_run_is_not_marked_interrupted() -> None:
+    """The LLM tool-call path ends a finished run in phase team_b_running (agent_loop.py), with its container_plan
+    and a done event. The sweep marked it interrupted (4 of 321 sessions in a real 2.2 GB development store), and
+    its checkpoint read "resumed" where main says "done" (PR #7 head 244ccc3)."""
+    from packing_assistant.session_store import load_checkpoint_meta, load_session, recover_interrupted, save_session
+    from packing_assistant.trace_events import append_trace_event
+
+    _paused("ss-llm-src")
+    src = {**G._get_session("ss-llm-src"), "phase": "team_b_running", "user_action": "confirm",
+           "container_plan": {"can_fit": True, "containers": [{"container_no": 1}]}}
+    for mode in ("sqlite", "json"):
+        sid, rid = f"ss-llm-{mode}", f"run-ss-llm-{mode}"
+        with patch.dict(os.environ, {"CB_STORAGE": mode}):
+            save_session(sid, {**src, "session_id": sid, "run_id": rid})
+            append_trace_event(rid, {"type": "run_start", "session_id": sid})
+            append_trace_event(rid, {"type": "done", "session_id": sid})
+            assert (load_checkpoint_meta(sid) or {}).get("status") == "done", mode
+            recover_interrupted()
+            assert load_session(sid)["phase"] == "team_b_running", f"{mode}: a finished run was marked interrupted"
+    # the same state with no done event since its last save is a crash, and is still marked
+    with patch.dict(os.environ, {"CB_STORAGE": "sqlite"}):
+        save_session("ss-llm-crash", {**src, "session_id": "ss-llm-crash", "run_id": "run-ss-llm-sqlite"})
+        recover_interrupted()
+        assert load_session("ss-llm-crash")["phase"] == "interrupted"
+
+
 def main() -> int:
     tests = [
         test_sequential_double_confirm_runs_team_b_once,
@@ -418,6 +479,8 @@ def main() -> int:
         test_confirm_by_run_id_alias_still_runs_team_b_once,
         test_cancel_during_the_resume_door_wins,
         test_a_bad_concurrency_setting_does_not_take_the_gateway_down,
+        test_waiting_confirms_are_bounded,
+        test_a_finished_llm_run_is_not_marked_interrupted,
     ]
     for test in tests:
         test()
