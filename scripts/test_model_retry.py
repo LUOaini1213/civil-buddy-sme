@@ -319,6 +319,21 @@ class SharedLLM(Case):
         self.assertNotIn(KEY, out)
         self.assertEqual(len(fake.stamps), 1)
 
+    def test_a_refused_connection_is_not_retried(self):
+        # langchain-openai 1.x wraps the SDK error again, so httpx.ConnectError is two causes down; before this
+        # was checked through the whole chain, a dead endpoint was retried until the 8 s budget ran out.
+        import socket
+        from packing_assistant import llm
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        os.environ.update(CIVIL_API_KEY=KEY, CIVIL_API_BASE=f"http://127.0.0.1:{port}/v1", CIVIL_MODEL="fixture")
+        with self.assertNoLogs("civil.model_retry", "WARNING"):
+            out = llm.chat("system", "user")
+        self.assertTrue(out.startswith("[LLM_ERROR]"), out)
+        self.assertNotIn(KEY, out)
+
 
 class ToolsAreNotRerun(Case):
     def test_a_5xx_after_a_tool_ran_retries_only_the_model_request(self):

@@ -75,6 +75,18 @@ def llm_available() -> bool:
     return bool(llm_config().get("api_key"))
 
 
+def _refused(exc: BaseException) -> bool:
+    """True when an httpx.ConnectError (refused, DNS, TLS) is anywhere in the cause chain. langchain-openai 1.x
+    re-raises the SDK's APIConnectionError as its own OpenAIConnectionError, so the httpx error is two causes
+    down, not one."""
+    seen = 0
+    while exc is not None and seen < 8:
+        if type(exc).__name__ == "ConnectError":
+            return True
+        exc, seen = exc.__cause__ or (None if exc.__suppress_context__ else exc.__context__), seen + 1
+    return False
+
+
 def chat(
     system: str,
     user: str,
@@ -120,7 +132,7 @@ def chat(
                     excerpt=model_retry.safe_excerpt(exc.body if exc.body is not None else "", (cfg["api_key"],)),
                 ) from None
             except openai.APIConnectionError as exc:   # includes APITimeoutError
-                if type(exc.__cause__).__name__ == "ConnectError":
+                if _refused(exc):
                     raise                               # refused: a dead endpoint, not a blip
                 raise model_retry.Transient(exc, reason=type(exc).__name__) from None
 
