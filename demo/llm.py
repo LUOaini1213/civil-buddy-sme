@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from packing_assistant import model_retry
 from packing_assistant.llm import llm_config
 
 
@@ -28,7 +29,10 @@ def _headers(key: str) -> dict[str, str]:
     }
 
 
-def _check_status(response: httpx.Response) -> None:
+def _check_status(response: httpx.Response, secrets: tuple = ()) -> None:
+    """A 429 or 5xx raises model_retry.Transient (retried by the caller); anything else outside 2xx raises
+    LLMError. The provider's body is never put in the message (see below); for a 429/5xx a redacted excerpt of it
+    goes to the civil.model_retry log line."""
     status = response.status_code
     if 200 <= status < 300:
         return
@@ -43,7 +47,67 @@ def _check_status(response: httpx.Response) -> None:
     else:
         hint = "模型请求失败，请检查 Base URL 和模型名称"
     # Provider responses may echo credentials or submitted documents.
+    if model_retry.retryable_status(status):
+        raise model_retry.Transient(
+            lambda attempts: LLMError(f"LLM HTTP {status}：{hint}（已尝试 {attempts} 次）"),
+            reason=f"HTTP {status}", retry_after=model_retry.parse_retry_after(response.headers.get("retry-after")),
+            excerpt=model_retry.safe_excerpt(model_retry.read_body(response), secrets))
     raise LLMError(f"LLM HTTP {status}：{hint}")
+
+
+def _cancel_requested(cancel_event=None) -> bool:
+    from turn_control import _CURRENT
+
+    control = _CURRENT.get()
+    return bool((control is not None and control.event.is_set())
+                or (cancel_event is not None and cancel_event.is_set()))
+
+
+def _transient_transport(exc: BaseException, final: LLMError, cancel_event=None) -> LLMError | model_retry.Transient:
+    """Connect/read timeouts and a reset or dropped connection are worth another attempt; a refused
+    connection, a bad URL or a write/pool timeout are not. A cancel closes the socket and shows up here as a
+    dropped connection: that is not retried, and ends with the same error it did before retries existed."""
+    if _cancel_requested(cancel_event):
+        return final
+    if isinstance(exc, (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ReadError, httpx.WriteError,
+                        httpx.RemoteProtocolError)):
+        return model_retry.Transient(final, reason=type(exc).__name__)
+    return final
+
+
+def _retry_budget() -> float:
+    """The retries share the single-request read budget (CIVIL_LLM_READ_TIMEOUT): a hung endpoint still fails
+    within it, and a quick 429/5xx is retried inside it."""
+    timeout = default_timeout()
+    return float(timeout.read or 180.0)
+
+
+def _attempt_timeout(remaining: float) -> httpx.Timeout:
+    timeout = default_timeout()
+    return httpx.Timeout(connect=min(timeout.connect or 15.0, remaining), read=min(timeout.read or 180.0, remaining),
+                         write=min(timeout.write or 30.0, remaining), pool=min(timeout.pool or 15.0, remaining))
+
+
+def _retry_wait(cancel_event=None):
+    """Sleep between attempts, but not past a cancel: this turn's TurnControl or the child deadline event."""
+    import time
+
+    def wait(seconds: float) -> None:
+        from turn_control import _CURRENT
+
+        control = _CURRENT.get()
+        deadline = time.monotonic() + seconds
+        while True:
+            if control is not None:
+                control.check()
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("子任务已停止")
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return
+            time.sleep(min(left, 0.05))
+
+    return wait
 
 
 def _event_data(lines: Iterator[str]) -> Iterator[tuple[str, str]]:
@@ -188,28 +252,35 @@ def chat(
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
-    try:
-        from turn_control import interrupt_http, interrupt_event
-        with ModelConnection() as connection, interrupt_http(connection), interrupt_event(connection, cancel_event):
-            with connection.stream("POST", f"{config['base_url']}/chat/completions",
-                                   headers=_headers(config["api_key"]), json=payload) as response:
-                with interrupt_http(response), interrupt_event(response, cancel_event):
-                    _check_status(response)
-                    response.read()
-                    try:
-                        data = response.json()
-                        if not isinstance(data, dict) or data.get("error") is not None:
-                            raise ValueError("invalid response")
-                        message = data["choices"][0]["message"]
-                        if not isinstance(message, dict):
-                            raise ValueError("invalid message")
-                    except (ValueError, KeyError, IndexError, TypeError):
-                        raise LLMError("模型返回了无效回复，请检查接口兼容性后重试") from None
-                    return message
-    except httpx.TimeoutException:
-        raise LLMError("模型响应超时，请稍后重试") from None
-    except (httpx.RequestError, httpx.InvalidURL):
-        raise LLMError("无法连接模型接口，请检查 Base URL 和网络后重试") from None
+    headers = _headers(config["api_key"])
+    secrets = (config["api_key"],)
+
+    def attempt(remaining: float) -> dict[str, Any]:
+        try:
+            from turn_control import interrupt_http, interrupt_event
+            with ModelConnection(_attempt_timeout(remaining)) as connection, interrupt_http(connection), \
+                    interrupt_event(connection, cancel_event):
+                with connection.stream("POST", f"{config['base_url']}/chat/completions",
+                                       headers=headers, json=payload) as response:
+                    with interrupt_http(response), interrupt_event(response, cancel_event):
+                        _check_status(response, secrets)
+                        response.read()
+                        try:
+                            data = response.json()
+                            if not isinstance(data, dict) or data.get("error") is not None:
+                                raise ValueError("invalid response")
+                            message = data["choices"][0]["message"]
+                            if not isinstance(message, dict):
+                                raise ValueError("invalid message")
+                        except (ValueError, KeyError, IndexError, TypeError):
+                            raise LLMError("模型返回了无效回复，请检查接口兼容性后重试") from None
+                        return message
+        except httpx.TimeoutException as exc:
+            raise _transient_transport(exc, LLMError("模型响应超时，请稍后重试"), cancel_event) from None
+        except (httpx.RequestError, httpx.InvalidURL) as exc:
+            raise _transient_transport(exc, LLMError("无法连接模型接口，请检查 Base URL 和网络后重试"), cancel_event) from None
+
+    return model_retry.run(attempt, budget_s=_retry_budget(), label="llm.chat", wait=_retry_wait(cancel_event))
 
 
 def _request_budget(messages: list[dict], *, tools: list | None = None) -> dict:
@@ -231,18 +302,47 @@ def stream_plain(messages: list[dict[str, Any]], temperature: float = 0.6) -> It
         "stream": True,
         "max_tokens": budget["reserve"],
     }
+    headers = _headers(config["api_key"])
+    secrets = (config["api_key"],)
+    # Only the wait for the first byte is retried: once text has been shown, a repeat would duplicate it.
+    started = {"yielded": False}
+
+    def attempt(remaining: float):
+        try:
+            connection = ModelConnection(_attempt_timeout(remaining))
+            try:
+                with interrupt_http(connection):
+                    with connection.stream("POST", f"{config['base_url']}/chat/completions",
+                                           headers=headers, json=payload) as response:
+                        with interrupt_http(response):
+                            _check_status(response, secrets)
+                            pieces = _stream_content(response)
+                            first = next(pieces, None)
+                            if first is None:
+                                return
+                            started["yielded"] = True
+                            yield first
+                            yield from pieces
+            finally:
+                connection.close()
+        except httpx.TimeoutException as exc:
+            final = LLMError("模型响应超时，回复可能不完整，请重试")
+            raise (final if started["yielded"] else _transient_transport(exc, final)) from None
+        except (httpx.RequestError, httpx.InvalidURL) as exc:
+            final = LLMError("模型连接异常，回复可能不完整，请检查网络后重试")
+            raise (final if started["yielded"] else _transient_transport(exc, final)) from None
+
+    def opened(remaining: float):
+        """Run an attempt up to its first piece of text, so the retry loop sees every pre-text failure."""
+        pieces = attempt(remaining)
+        first = next(pieces, None)
+        return first, pieces
+
+    first, pieces = model_retry.run(opened, budget_s=_retry_budget(), label="llm.stream_plain", wait=_retry_wait())
+    if first is None:
+        return
     try:
-        with ModelConnection() as connection, interrupt_http(connection):
-            with connection.stream(
-                "POST",
-                f"{config['base_url']}/chat/completions",
-                headers=_headers(config["api_key"]),
-                json=payload,
-            ) as response:
-                with interrupt_http(response):
-                    _check_status(response)
-                    yield from _stream_content(response)
-    except httpx.TimeoutException:
-        raise LLMError("模型响应超时，回复可能不完整，请重试") from None
-    except (httpx.RequestError, httpx.InvalidURL):
-        raise LLMError("模型连接异常，回复可能不完整，请检查网络后重试") from None
+        yield first
+        yield from pieces
+    finally:
+        pieces.close()   # a reader that stops early still releases the connection now

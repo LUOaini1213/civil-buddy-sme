@@ -32,7 +32,7 @@
 ### Agent Middleware（赛道 1 · 完全合格）
 
 对照表：[docs/civil-buddy/track1-qualified.md](docs/civil-buddy/track1-qualified.md)。  
-Runtime 只深做两层：**策略引擎**（拒绝弹原因）和 **失败恢复**（retry → `UNSPECIFIED` 审计链）。  
+Runtime 深做 **策略引擎**（拒绝弹原因）。**失败恢复**（retry → `UNSPECIFIED` 审计链）是演示脚本 `scripts/demo_agent_middleware.py` 里的一拍，不是运行时能力：生产路径不自动重试工具（`execute_with_recovery` 只有这个脚本调用）；运行时只有工具熔断（同一工具连续 3 次故障后拒绝，45 s 冷却后放一次试探调用）。  
 剧本写死：正常下单 → 越权被拒 → 工具挂掉自动恢复 → 成本超限熔断。  
 行业现网总判（人改口）：[industry-agent-eval-2026-08-25.md](docs/civil-buddy/industry-agent-eval-2026-08-25.md) — 内部起草搭子 **合格**；签认/投标 **不合格**。
 
