@@ -13,9 +13,13 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 _ROOT = Path(__file__).resolve().parents[2]
-# The licensed sign-off sentence, the one place it is defined. A person types one of the two, exactly, in the turn it
-# approves; every surface (CLI, TUI, desktop, workbench HTTP, gateway, the CAD / planning / logistics pages) accepts
-# either and nothing else, and every scrub (history, memory, model output, MCP text) removes both.
+# The licensed sign-off sentence, the one place it is defined. A person types one of the two, exactly and on its own:
+# the workbench's confirmation box (confirm_text), the gateway's and civil serve's confirm_text, the CAD / planning /
+# logistics pages, the terminal's approve> prompt or the desktop dialog. A task that carries the sentence among other
+# words approves nothing (confirms_in_message). Every approval covers that turn only, on every surface (the terminal and
+# the desktop app ask again for the next high-risk turn); /confirm in the terminal and `civil exec --confirm` are the
+# local operator's own switch and take no sentence. Every scrub (history, memory, model
+# output, MCP text) removes both. Not covered: the undeployed Rust workbench and civil-mcp, which still read confirm_ok.
 CONFIRM = "我明白，将由持证人员签认"
 CONFIRM_EN = "I understand; a licensed person will sign this off."
 CONFIRM_SENTENCES = (CONFIRM, CONFIRM_EN)
@@ -30,48 +34,21 @@ def is_confirmation(value: Any, *, strip: bool = True) -> bool:
 
 
 def contains_confirmation(text: Any) -> bool:
-    """Detect a copy for scrubbing/notices; this substring check must never authorize a write."""
+    """The text carries one of the two sentences anywhere. For scrubs and refusals (memory, history, a reply); the
+    approval check on a person's typed task is ``confirms_in_message``."""
     return type(text) is str and any(sentence in text for sentence in CONFIRM_SENTENCES)
 
 
-_CONFIRM_QUOTED = re.compile(
-    r"```[\s\S]*?(?:```|\Z)|`[^`\n]*`|“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』|\"[^\"\n]*\""
-    r"|(?<!\w)'[^'\n]*'|^\s*>[^\n]*", re.M)
-_CONFIRM_REFUSAL = re.compile(
-    r"(?i)不同意|不确认|不签认|不授权|拒绝|暂不|先不|撤销(?:确认|签认|授权)|"
-    r"(?:不要|不应|不能|尚未|还没|没有|不再)(?:确认|签认|授权|同意)|"
-    r"\b(?:refus(?:e[ds]?|ing)|declin(?:e[ds]?|ing)|reject(?:s|ed|ing)?|withdraw(?:s|n|ing)?|revok(?:e[ds]?|ing))\b|"
-    r"\b(?:not|never|don[’']t|do\s+not)\s+(?:approv(?:e[ds]?|ing)|confirm(?:s|ed|ing)?|agre(?:e[ds]?|eing)|"
-    r"sign(?:s|ed|ing)?|authori[sz](?:e[ds]?|ing)|consent(?:s|ed|ing)?)\b|"
-    r"(?:^|[.!?;\n])\s*(?:(?:actually|but)\s+)?no\b|\bor\s+not\s*\?|leave\s+signing\s+for\s+later")
-_CONFIRM_REFERENCE = re.compile(
-    r"(?i)(?:earlier|previous|historical|quoted|example|sample)\s+(?:confirmation|sign.off|statement|message)|"
-    r"(?:确认|签认)(?:示例|样例)|(?:此前|上次|历史|引用)(?:的)?(?:确认|签认|消息)|"
-    r"(?:said|wrote|typed)\s+(?:earlier|yesterday|previously)|"
-    r"(?:said|says|wrote|writes|typed)\s*:")
-
-
-def message_confirmation(text: Any) -> bool:
-    """Accept an unquoted, standalone affirmative sentence in this current message only.
-
-    The task may precede it (Chinese and English). Quoting, discussing, or refusing the sentence is not consent.
-    Dedicated confirmation fields continue to use is_confirmation; stored text uses contains_confirmation only.
-    """
-    if type(text) is not str:
-        return False
-    clean = _CONFIRM_QUOTED.sub("", text)
-    if _CONFIRM_REFUSAL.search(clean) or _CONFIRM_REFERENCE.search(clean):
-        return False
-    for sentence in CONFIRM_SENTENCES:
-        for match in re.finditer(re.escape(sentence), clean):
-            prefix, suffix = clean[:match.start()], clean[match.end():]
-            # Do not split the semicolon or comma inside the confirmation itself.
-            lead = re.split(r"[。！？.!?;；\n]", prefix)[-1]
-            if (lead.strip() or suffix.lstrip().startswith(("?", "？", "吗"))
-                    or (suffix.strip() and not re.match(r"^\s*(?:[。.!;；\n]|$)", suffix))):
-                continue
-            return True
-    return False
+def confirms_in_message(text: Any) -> bool:
+    """The typed task itself (the TUI line, the desktop task, the workbench message) approves only when the whole of
+    it, trimmed, is one of the two sentences. The sentence among other words approves nothing, however it is put:
+    quoted from a tender or a file ('Per the ITT: "..."', '> Form C: ...'), deferred ('the PE will later type ...'),
+    conditional ('Unless the PE objects, ...'), retracted right after ('... Actually wait, don't write it yet.') or
+    simply appended to the request. A rule that tried to tell those apart kept approving new phrasings (review of
+    PR #67: 18 phrasings in both languages, pinned in scripts/test_human_approval.py), so the task is never read for approval: the person types the sentence on
+    its own, in the confirmation box, at the approve> prompt or in the desktop dialog, where ``is_confirmation``
+    decides."""
+    return is_confirmation(text)
 
 
 def count_confirmations(text: str) -> int:
@@ -240,7 +217,8 @@ def hitl_reply(who: str = "", *, english: bool = False) -> str:
     label = (who or "").strip()
     if english:
         return (f"{label or 'This post'} is a high-risk post: nothing was written. A licensed person types the sign-off "
-                f"sentence \"{CONFIRM_EN}\" (or 「{CONFIRM}」) in the turn that writes it.")
+                f"sentence \"{CONFIRM_EN}\" (or 「{CONFIRM}」) on its own, in the confirmation box, and sends the "
+                "request again; typed inside the request it approves nothing.")
     prefix = f"高风险岗 {label} " if label else "高风险岗 "
     return f"{prefix}写盘须确认句「{CONFIRM}」。本轮未写盘。"
 

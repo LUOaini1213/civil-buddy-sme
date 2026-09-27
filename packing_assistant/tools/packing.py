@@ -19,6 +19,7 @@ import math
 from typing import Any, Dict, List, Optional, Tuple
 
 from packing_assistant.knowledge import clearance_mm, merge_rules, standard_box_types_for_packing
+from packing_assistant.runtime.cancel import check as _cancel_check
 from packing_assistant.tools.structure_calc import (
     orient_dims,
     run_structure_calc,
@@ -339,6 +340,8 @@ def _can_merge(
     - 硬：结构过 + 外廓进柜
     - 软：截面过大（宽且高同时占满柜截面）→ 拒绝合箱，拆成多箱
     """
+    # the merge search is quadratic in pieces: a run the tool engine timed out stops here, not minutes later
+    _cancel_check()
     trial = existing + [new_item]
     net = sum(float(i.get("总重_kg") or 0) for i in trial)
     if max_combined_net_kg is not None and net > float(max_combined_net_kg) + 1e-6:

@@ -1124,7 +1124,15 @@ def load_xlsx(path: PathLike, sheet: Optional[str] = None) -> List[Dict[str, Any
         ws = wb["materials"]
     else:
         ws = wb.active
-    data = list(ws.iter_rows(values_only=True))
+    from packing_assistant.runtime.cancel import check as cancel_check
+
+    data = []
+    # openpyxl pads the gap before a far row number with empty rows: a run the tool engine timed out stops here
+    # (the check does nothing outside a timed-out or cancelled run)
+    for n, values in enumerate(ws.iter_rows(values_only=True)):
+        if not n % 1024:
+            cancel_check()
+        data.append(values)
     title = ws.title
     # iter_rows() starts at sheet row 1 and pads the empty rows above the first used one, so data[k] is sheet row
     # k + 1. ws.min_row is the first *used* row: taking it as the offset put every recorded row number (and the
@@ -1140,6 +1148,8 @@ def load_xlsx(path: PathLike, sheet: Optional[str] = None) -> List[Dict[str, Any
     rows: List[Dict[str, Any]] = []
     numbers: List[int] = []
     for k, row in enumerate(data[start:]):
+        if not k % 256:
+            cancel_check()
         d = {headers[i]: (row[i] if i < len(row) else None) for i in range(len(headers))}
         # skip full_flow non-material
         rt = d.get("row_type")

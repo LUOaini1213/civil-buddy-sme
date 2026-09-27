@@ -1,0 +1,202 @@
+{
+ "schema": "tender_link.dev.v1",
+ "label": "DEV (round 3, reviewer) - adversarial inputs written by the independent reviewer of PR #76 on 2026-09-28. Used while fixing; not held out. Every case is SYNTHETIC (fictional clauses, no real tender).",
+ "wrapped_file": "each case's text is written to <id>.md and read as a tender; cites name that file",
+ "cases": [
+  {
+   "id": "RV01",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Crates shall not exceed 2 t each and containers shall not exceed 24 t each.",
+   "kinds": [
+    "gross_mass",
+    "per_package_limit"
+   ],
+   "optional_kinds": [
+    "crating"
+   ],
+   "container_limit_kg": 24000,
+   "note": "a trailing 'each' reads its own part of the sentence; on the round-3 head the 24 t became a per-crate limit"
+  },
+  {
+   "id": "RV02",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Panels shall be packed in crates of not more than 2 t each, loaded in 40HQ containers of not more than 24 t each.",
+   "kinds": [
+    "container_type",
+    "gross_mass",
+    "per_package_limit"
+   ],
+   "optional_kinds": [
+    "crating"
+   ],
+   "container_limit_kg": 24000,
+   "type": "40HQ",
+   "note": "the same after a comma"
+  },
+  {
+   "id": "RV03",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Crates and containers shall weigh no more than 2 t each.",
+   "kinds": [
+    "unplaced"
+   ],
+   "optional_kinds": [
+    "crating"
+   ],
+   "container_limit_kg": null,
+   "note": "one limit shared by a crate and a container: a person reads it (the 'and' of a list is no break)"
+  },
+  {
+   "id": "RV04",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Containers loaded with crates and stillages shall not exceed 26 t each.",
+   "kinds": [
+    "unplaced"
+   ],
+   "optional_kinds": [
+    "crating",
+    "handling"
+   ],
+   "container_limit_kg": null,
+   "note": "crates stand between the container and the figure: a person, never a 26 t per-package limit (round-3 head)"
+  },
+  {
+   "id": "RV05",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Crates, when delivered in containers, shall weigh no more than 1,500 kg each.",
+   "kinds": [
+    "per_package_limit"
+   ],
+   "optional_kinds": [
+    "crating"
+   ],
+   "container_limit_kg": null,
+   "package_limit_kg": 1500,
+   "note": "an aside between commas does not move the subject"
+  },
+  {
+   "id": "RV06",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.14 Late delivery of containers: the Contractor shall pay up to 5,000 pounds per container per day.",
+   "kinds": [
+    "unplaced"
+   ],
+   "container_limit_kg": null,
+   "note": "pounds sterling; the round-3 head read a 2,268 kg container limit (a false gap on the demo plan)"
+  },
+  {
+   "id": "RV07",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.14 Liquidated damages for late delivery shall not exceed 20,000 pounds per container.",
+   "kinds": [
+    "unplaced"
+   ],
+   "container_limit_kg": null,
+   "note": "pounds sterling; the round-3 head read a 9,071.8 kg container limit"
+  },
+  {
+   "id": "RV08",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 The gross mass of each loaded container shall not exceed 20.000 kg.",
+   "kinds": [
+    "unplaced"
+   ],
+   "container_limit_kg": null,
+   "note": "a European thousands point: 20 kg is no container limit, a person reads it (main and round 3: a 20 kg gap)"
+  },
+  {
+   "id": "RV09",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 The gross mass of each loaded container shall not exceed 20​000 kg.",
+   "kinds": [
+    "unplaced"
+   ],
+   "container_limit_kg": null,
+   "note": "a zero-width space splits the figure: read as 0 kg on main and round 3; now a person"
+  },
+  {
+   "id": "RV10",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 The gross mass of each loaded container shall not exceed 20 000 kg.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 20000,
+   "basis": "gross",
+   "note": "a narrow no-break space groups thousands: 20,000 kg (counter-probe)"
+  },
+  {
+   "id": "RV11",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 The gross mass of each loaded container shall not exceed 20 t (44,092 lbs).",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 20000,
+   "basis": "gross",
+   "note": "the same limit in brackets is one limit; round 3 gave [19,999.8, 20,000] and cited the 19,999.8"
+  },
+  {
+   "id": "RV12",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 LOGISTICS\n\nTable 4-1 Container limits\n\n| Item | Max gross weight (lbs) |\n|---|---|\n| Loaded 40HQ container | 44000 |",
+   "kinds": [
+    "container_type",
+    "gross_mass"
+   ],
+   "container_limit_kg": 19958.1,
+   "basis": "gross",
+   "type": "40HQ",
+   "note": "a bare number under a '(lbs)' header; silent on main and round 3"
+  },
+  {
+   "id": "RV13",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 LOGISTICS\n\nTable 4-1 Container limits\n\n| Item | Max gross (kg) |\n|---|---|\n| Loaded 40HQ container | 26500 |",
+   "kinds": [
+    "container_type",
+    "gross_mass"
+   ],
+   "container_limit_kg": 26500,
+   "basis": "gross",
+   "type": "40HQ",
+   "note": "a five-digit bare number under '(kg)'; silent on main and round 3"
+  },
+  {
+   "id": "RV14",
+   "origin": "reviewer-round3",
+   "text": "SECTION 3 DRAWINGS\n\n3.2 Shop drawings shall be issued at scales 1:50 to 1:100.",
+   "kinds": [],
+   "container_limit_kg": null,
+   "note": "a drawing scale; round 3 made it 'delivery hours 1:50 to 1:10'"
+  },
+  {
+   "id": "RV15",
+   "origin": "reviewer-round3",
+   "text": "SECTION 3 SEALANTS\n\n3.4 Sealant joints shall have a width-to-depth ratio between 1:2 and 2:1; slopes 1:12 to 1:20.",
+   "kinds": [],
+   "container_limit_kg": null,
+   "note": "ratios and slopes are no delivery hours"
+  },
+  {
+   "id": "RV16",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.11 Deliveries: 7:30 to 18:00, Monday to Saturday.",
+   "kinds": [
+    "site_access"
+   ],
+   "container_limit_kg": null,
+   "note": "delivery hours still read (counter-probe)"
+  },
+  {
+   "id": "RV17",
+   "origin": "reviewer-round3",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Total mass of panels per container: max 5 t.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 5000,
+   "note": "what a container holds, per container (counter-probe)"
+  }
+ ]
+}
