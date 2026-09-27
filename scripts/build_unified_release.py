@@ -28,6 +28,7 @@ EXTRA = (
     "SECURITY.md", "docs/civil-buddy/release-handoff.md",
     "docs/civil-buddy/sme-integration.md", "README.zh.md",
     "docs/civil-buddy/submission-sync-20260927.md",
+    "docs/civil-buddy/review-fixes-20260927.md",
     "docs/deploy-minimal.md", "docs/deploy-aws-lightsail.md",
     "Dockerfile", "docker-compose.yml", ".dockerignore",
     "deploy/lightsail/Caddyfile", "deploy/lightsail/compose.override.yml",

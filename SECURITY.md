@@ -123,7 +123,7 @@ See [the handoff guide](docs/civil-buddy/release-handoff.md) for deployment and 
 
 ## Reporting a problem
 
-Please open an issue at <https://github.com/LUOaini1213/civil-buddy/issues> and put "security" in the title. If the
+Please open an issue at <https://github.com/LUOaini1213/civil-buddy-sme/issues> and put "security" in the title. If the
 problem could be exploited, describe what is affected and how to reproduce it at a high level, and leave out working
 exploit code, tokens or keys; a maintainer will follow up in the issue. Never paste a real API key, token or
 customer file into an issue.

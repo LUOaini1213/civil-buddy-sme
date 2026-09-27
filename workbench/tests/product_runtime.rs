@@ -21,6 +21,8 @@ use std::{
 };
 use tower::ServiceExt;
 
+static SCRIPTED_MODEL_LOCK: Mutex<()> = Mutex::new(());
+
 async fn request(app: &Router, method: &str, url: &str, body: Value) -> (StatusCode, Value) {
     let response = app
         .clone()
@@ -148,6 +150,7 @@ async fn provider_accounts_usage_and_cancellation_consumes_attempt() {
 
 #[tokio::test]
 async fn api_runs_persistent_scoped_tools_and_shared_child_tasks() {
+    let _model_guard = SCRIPTED_MODEL_LOCK.lock().unwrap();
     let root = std::env::temp_dir().join(format!(
         "civil-product-test-{}",
         uuid::Uuid::new_v4().simple()
@@ -262,4 +265,133 @@ async fn api_runs_persistent_scoped_tools_and_shared_child_tasks() {
         request(&app, "GET", &url, Value::Null).await.1["turn"]["status"],
         "completed"
     );
+}
+
+#[tokio::test]
+async fn full_completion_endpoint_and_base_url_use_the_same_provider_route() {
+    let received = Arc::new(Mutex::new(0));
+    let count = received.clone();
+    let router = Router::new().route("/v1/chat/completions", post(move || {
+        let count = count.clone();
+        async move {
+            *count.lock().unwrap() += 1;
+            Json(json!({"choices":[{"message":{"role":"assistant","content":"Local fixture"},"finish_reason":"stop"}],
+                "usage":{"prompt_tokens":5,"completion_tokens":3}}))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    for suffix in ["/v1", "/v1/", "/v1/chat/completions", "/v1/chat/completions/"] {
+        let cfg = LlmConfig { api_key: "offline-only".into(), base_url: format!("{base}{suffix}"), model: "fixture".into() };
+        let task = TaskId::new();
+        let budget = BudgetTree::new(task.clone(), BudgetLimits::default()).unwrap();
+        let response = providers::complete(&cfg, &[json!({"role":"user","content":"hello"})], &[], 100, 4096,
+            &budget, &task, &CancellationToken::new()).await.unwrap();
+        assert_eq!(response.message["content"], "Local fixture");
+    }
+    assert_eq!(*received.lock().unwrap(), 4);
+    for suffix in ["/v1/chat/completions?token=fixture", "/v1#fragment"] {
+        let cfg = LlmConfig { api_key: "offline-only".into(), base_url: format!("{base}{suffix}"), model: "fixture".into() };
+        let task = TaskId::new();
+        let budget = BudgetTree::new(task.clone(), BudgetLimits::default()).unwrap();
+        assert!(providers::complete(&cfg, &[json!({"role":"user","content":"hello"})], &[], 100, 4096,
+            &budget, &task, &CancellationToken::new()).await.is_err());
+    }
+    assert_eq!(*received.lock().unwrap(), 4, "Invalid addresses must be rejected before an HTTP request");
+    server.abort();
+}
+
+#[tokio::test]
+async fn final_publication_claims_require_registered_outputs_but_explanations_remain_available() {
+    let _model_guard = SCRIPTED_MODEL_LOCK.lock().unwrap();
+    struct ResetModel;
+    impl Drop for ResetModel {
+        fn drop(&mut self) { civil_workbench::config::set_runtime_llm(None); }
+    }
+    let _reset = ResetModel;
+    let root = std::env::temp_dir().join(format!("civil-final-report-{}", uuid::Uuid::new_v4().simple()));
+    let workspace = root.join("job");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join("brief.txt"), "Source quantity: 12 panels\n").unwrap();
+    let mut paths = Paths::from_demo(root.join("demo"));
+    paths.repo_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+    let state = ProductState::open(paths).unwrap();
+    let wid = state.register(workspace.to_str().unwrap()).unwrap()["id"].as_str().unwrap().to_owned();
+    let app = router(state.clone());
+    let explanation = "保存副本会保留原件。请先预览差异，再保存副本。";
+    let conditional = "如果文件已保存，界面会显示下载链接。For example, the document has been saved is a status message.";
+    let router = Router::new().route("/chat/completions", post(move |Json(payload): Json<Value>| async move {
+        let has_tool = payload["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool");
+        let scenario = payload["model"].as_str().unwrap();
+        let message = if !has_tool && matches!(scenario, "read_only" | "failed_read" | "failed_apply") {
+            let (name, args) = if scenario == "failed_apply" {
+                ("apply_document", json!({"preview_id":"unknown"}))
+            } else {
+                ("read_file", json!({"source":if scenario=="failed_read" {"unauthorized.txt"}else{"brief.txt"}}))
+            };
+            json!({"role":"assistant","content":null,"tool_calls":[{"id":"proof","type":"function","function":{"name":name,"arguments":args.to_string()}}]})
+        } else {
+            let text = match scenario {
+                "explain" => explanation,
+                "conditional" => conditional,
+                "done" | "create_en" => "Done.",
+                "formatted_done" => "**Done.**",
+                "emoji_done" => "✅ 已完成。",
+                "edit_done" | "create_zh" => "完成了。",
+                "negative_explanation" => "文件尚未保存成功，请检查目录权限。",
+                "english" => "I have saved the report. All files have been generated with quantity 987654.",
+                _ => "已将报告修改并保存为新副本，所有文件已生成，数量已经更新为 987654。",
+            };
+            json!({"role":"assistant","content":text})
+        };
+        let finish = if message["tool_calls"].is_array() {"tool_calls"} else {"stop"};
+        Json(json!({"choices":[{"message":message,"finish_reason":finish}],"usage":{"prompt_tokens":20,"completion_tokens":20}}))
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    for scenario in ["no_tools", "read_only", "failed_read", "failed_apply", "english", "done", "formatted_done", "emoji_done", "edit_done", "create_zh", "create_en", "explain", "conditional", "negative_explanation"] {
+        civil_workbench::config::set_runtime_llm(Some(LlmConfig { api_key:"offline-only".into(), base_url:base_url.clone(), model:scenario.into() }));
+        let conversational = matches!(scenario, "explain" | "conditional" | "negative_explanation");
+        let task = if scenario == "negative_explanation" {"为什么没有保存成功？"}
+            else if conversational {"解释如何保存副本，不要执行。"}
+            else if scenario == "edit_done" {"把 brief.txt 的标题改成 X。"}
+            else if scenario == "create_zh" {"帮我生成一份报告。"}
+            else if scenario == "create_en" {"Create a report.docx"}
+            else {"请修改所选资料并保存新副本。"};
+        let files = if matches!(scenario, "create_zh" | "create_en") {json!([])}else{json!(["brief.txt"])};
+        let (status, started) = request(&app, "POST", "/api/agent/turns", json!({"workspace":wid,"session_id":scenario,
+            "message":task,"mode":"model","sandbox":"workspace-write","files":files})).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+        let url = format!("/api/agent/turns/{}?workspace={wid}&session_id={scenario}",started["turn_id"].as_str().unwrap());
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        let mut record = Value::Null;
+        while tokio::time::Instant::now() < deadline {
+            record = request(&app,"GET",&url,Value::Null).await.1;
+            if !matches!(record["turn"]["status"].as_str(), Some("running" | "cancelling")) { break; }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert_eq!(record["turn"]["status"], "completed", "{scenario}: {record}");
+        let result = &record["turn"]["result"];
+        assert!(result["artifacts"].as_array().unwrap().is_empty());
+        assert_eq!(result["execution_evidence"]["registered_documents"], 0);
+        assert_eq!(result["execution_evidence"]["requested_task_complete"], if conversational {Value::Null}else{json!(false)}, "{scenario}: {result}");
+        assert_eq!(result["execution_evidence"]["requested_document_publication"], !conversational, "{scenario}: {result}");
+        assert_eq!(result["partial"], !conversational, "{scenario}: {result}");
+        let reply = result["reply"].as_str().unwrap();
+        if conversational {
+            assert_eq!(reply, match scenario { "explain" => explanation, "negative_explanation" => "文件尚未保存成功，请检查目录权限。", _ => conditional });
+            assert_eq!(result["execution_evidence"]["publication_summary_from_receipts"], false);
+        } else {
+            assert!(reply.contains("本轮没有成功保存"), "{scenario}: {reply}");
+            assert!(!reply.contains("987654"));
+            assert!(!reply.contains("所有文件已生成"));
+            assert!(!reply.contains("I have saved"));
+        }
+    }
+    server.abort();
+    assert_eq!(std::fs::read_to_string(workspace.join("brief.txt")).unwrap(), "Source quantity: 12 panels\n");
+    drop(app); drop(state);
+    std::fs::remove_dir_all(root).unwrap();
 }

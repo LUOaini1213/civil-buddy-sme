@@ -1413,7 +1413,13 @@ def _refusal_rows(plan: Optional[Dict[str, Any]], limit: int = 4) -> str:
     """The panel-list rows a person must fix, as the English questions name them (sheet row and mark)."""
     rows = [r for r in (plan or {}).get("needs_human") or [] if isinstance(r, dict)]
     if not rows:
-        return ""
+        detail = (plan or {}).get("detail")
+        if not detail:
+            return ""
+        if isinstance(detail, list):
+            detail = "; ".join(str(item) for item in detail[:limit])
+        detail = " ".join(str(detail).split())
+        return f"Panel-list reading stopped: {detail[:900]}. "
     asks = " ".join(str(r.get("ask") or r.get("reason")) for r in rows[:limit])
     more = f" ({len(rows) - limit} more in tender-packing-link.json)" if len(rows) > limit else ""
     return f"{len(rows)} panel-list row{'s' if len(rows) > 1 else ''} to fix first: {asks}{more} "

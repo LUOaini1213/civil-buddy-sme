@@ -633,7 +633,7 @@ async fn preview_ids_apply_the_cached_patch_and_reject_unknown_or_mixed_argument
         json!({"id":id,"type":"function","function":{"name":name,"arguments":args.to_string()}})
     }
 
-    for scenario in ["cached", "unknown", "mixed"] {
+    for scenario in ["cached", "unknown", "mixed", "partly_saved"] {
         let fixture = Fixture::new();
         let original = std::fs::read(fixture.workspace.root().join("report.docx")).unwrap();
         let args = fixture.args(
@@ -641,14 +641,18 @@ async fn preview_ids_apply_the_cached_patch_and_reject_unknown_or_mixed_argument
             word("Source record remains subject to review."),
         );
         let expected_preview_id = sha256(args.to_string().as_bytes());
+        let pending = fixture.args("quantities.xlsx", cell("text", json!("Requires review")));
         let server = Router::new().route("/chat/completions",post(move |Json(payload): Json<Value>| {
             let args = args.clone();
+            let pending = pending.clone();
             async move {
                 let messages = payload["messages"].as_array().unwrap();
                 let preview_response = messages.iter().find(|m| m["role"] == "tool" && m["tool_call_id"] == "preview");
                 let applied = messages.iter().any(|m| m["role"] == "tool" && m["tool_call_id"] == "apply");
                 let message = if applied {
-                    json!({"role":"assistant","content":"待核查内容已记录。"})
+                    // The host must report actual saved files rather than this
+                    // false all-complete statement or its invented quantity.
+                    json!({"role":"assistant","content":"所有文档已修改并保存，数量已更新为 987654，全部工作完成。"})
                 } else if let Some(preview) = preview_response {
                     let result: Value = serde_json::from_str(preview["content"].as_str().unwrap()).unwrap();
                     let mut apply = json!({"preview_id":result["result"]["preview_id"]});
@@ -656,9 +660,14 @@ async fn preview_ids_apply_the_cached_patch_and_reject_unknown_or_mixed_argument
                     if scenario == "mixed" { apply["source"] = json!("report.docx"); }
                     json!({"role":"assistant","content":null,"tool_calls":[call("apply","apply_document",apply)]})
                 } else {
-                    json!({"role":"assistant","content":null,"tool_calls":[
+                    let mut calls = vec![
                         call("inspect","read_file",json!({"source":"report.docx","operation":"inspect"})),
-                        call("preview","preview_document",args)]})
+                        call("preview","preview_document",args)];
+                    if scenario == "partly_saved" {
+                        calls.push(call("inspect_pending","read_file",json!({"source":"quantities.xlsx","operation":"inspect"})));
+                        calls.push(call("preview_pending","preview_document",pending));
+                    }
+                    json!({"role":"assistant","content":null,"tool_calls":calls})
                 };
                 let finish = if message["tool_calls"].is_array() { "tool_calls" } else { "stop" };
                 Json(json!({"model":"preview-id-scripted","choices":[{"message":message,"finish_reason":finish}],
@@ -726,10 +735,19 @@ async fn preview_ids_apply_the_cached_patch_and_reject_unknown_or_mixed_argument
             "original modified"
         );
         let artifacts = result["turn"]["result"]["artifacts"].as_array().unwrap();
-        if scenario == "cached" {
+        let summary = result["turn"]["result"]["reply"].as_str().unwrap();
+        assert!(!summary.contains("987654"), "Unsupported model quantity survived: {summary}");
+        assert!(!summary.contains("全部工作完成"), "Unverified task completion survived: {summary}");
+        assert_eq!(result["turn"]["result"]["execution_evidence"]["publication_summary_from_receipts"], true);
+        assert_eq!(result["turn"]["result"]["execution_evidence"]["requested_task_complete"], if scenario == "cached" {Value::Null}else{json!(false)});
+        if matches!(scenario, "cached" | "partly_saved") {
             assert_eq!(applied["data"]["result"]["ok"], true, "{applied}");
             assert_eq!(artifacts.len(), 1);
             assert_eq!(result["turn"]["result"]["tool_errors"], 0);
+            assert!(summary.contains(artifacts[0]["name"].as_str().unwrap()), "Saved file missing from authoritative report");
+            assert!(summary.contains(artifacts[0]["source_sha256"].as_str().unwrap()), "Source evidence missing");
+            assert_eq!(result["turn"]["result"]["partial"], scenario == "partly_saved");
+            assert_eq!(result["turn"]["result"]["execution_evidence"]["unapplied_previews"], if scenario == "partly_saved" {1} else {0});
             let path = applied["data"]["result"]["result"]["output_path"]
                 .as_str()
                 .unwrap();

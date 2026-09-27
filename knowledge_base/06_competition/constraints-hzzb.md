@@ -42,7 +42,7 @@ status: active
 
 | # | 提交物 | 本仓对应 |
 |---|--------|----------|
-| 1 | 智能体链接或代码包 | GitHub 仓库 github.com/LUOaini1213/civil-buddy（工作台 exe 见 Releases） |
+| 1 | 智能体链接或代码包 | GitHub 仓库 github.com/LUOaini1213/civil-buddy-sme（工作台 exe 见 Releases） |
 | 2 | 项目技术说明文档 | 见 [docs/submission/haizizhi-positioning.md](../../docs/submission/haizizhi-positioning.md) 定位陈述 + 三维度证据映射 |
 | 3 | 核心功能介绍视频 | 脚本见 haizizhi-positioning.md 视频脚本表（3 分钟） |
 | 4 | 人机协同履历表 | 骨架见 haizizhi-positioning.md 履历表节 |

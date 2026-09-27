@@ -24,11 +24,14 @@ Every sheet here is SYNTHETIC and built in a temp folder. No model, no network. 
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
+import zipfile
+from xml.etree import ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -335,6 +338,120 @@ class Reading(unittest.TestCase):
         parsed = parse_table_file(path)
         self.assertEqual(parsed["reading"], {})
         self.assertEqual(parsed["stats"]["clean"], {})
+
+    def test_explicit_kg_wins_over_large_number_inference(self):
+        for header in ("weight_kg", "Gross Weight (kg)", "毛重(千克)", "Total Weight (kg)"):
+            for mass in (49999, 50000, 50001, 60000):
+                with self.subTest(header=header, mass=mass):
+                    path = self.sheet("explicit_mass.xlsx", [
+                        ["name", "quantity", header, "length_mm", "width_mm", "height_mm"],
+                        ["SYNTHETIC mass boundary", 2, mass, 1000, 1000, 1000]])
+                    parsed = parse_table_file(path)
+                    self.assertTrue(parsed["ok"], parsed)
+                    row = parsed["materials"][0]
+                    field = "total_weight_kg" if header.startswith("Total") else "weight_kg"
+                    self.assertEqual(row[field], mass)
+                    self.assertEqual(row["total_weight_kg"], mass if field == "total_weight_kg" else mass * 2)
+                    self.assertEqual(parsed["reading"]["units"][-1]["to_kg"], 1.0)
+
+    def test_ambiguous_written_mass_is_not_repaired_by_the_other_weight(self):
+        from packing_assistant.tools.table_mapper import parse_table_rows
+
+        base = {"name": "SYNTHETIC mass", "quantity": 2, "length_mm": 1200, "width_mm": 400, "height_mm": 300}
+        for field in ("weight_kg", "total_weight_kg"):
+            for invalid in ("450/500", "400+50", "1,5", "450 kg or 500 kg", True, float("nan"), float("inf")):
+                with self.subTest(field=field, value=invalid):
+                    parsed = parse_table_rows([{**base, "weight_kg": 12.5, "total_weight_kg": 25, field: invalid}])
+                    self.assertFalse(parsed["ok"])
+                    self.assertEqual(parsed["materials"], [])
+                    self.assertIn(field, parsed["errors"][0])
+        path = self.sheet("invalid_mass.xlsx", [list(base) + ["weight_kg"], list(base.values()) + ["450/500"]])
+        plan = run_plan(file_path=str(path))
+        self.assertFalse(plan["ok"])
+        self.assertNotIn("containers_used", plan)
+        self.assertIn("weight", " ".join(plan["detail"]))
+        for mass, expected in (("12.5 kg", 12.5), ("1,250", 1250), ("1.25e3", 1250), (12.5, 12.5)):
+            parsed = parse_table_rows([{**base, "weight_kg": mass}])
+            self.assertTrue(parsed["ok"], parsed)
+            self.assertEqual(parsed["materials"][0]["weight_kg"], expected)
+        missing = parse_table_rows([{**base, "weight_kg": "", "total_weight_kg": 25}])
+        self.assertEqual(missing["materials"][0]["weight_kg"], 12.5)
+
+    def test_uncached_numeric_formulas_stop_all_packing_entry_points(self):
+        from packing_assistant.tools.pack_ship_solve import draft_booking, draft_vgm
+
+        head = ["name", "quantity", "weight_kg", "total_weight_kg", "length_mm", "width_mm", "height_mm"]
+        values = ["SYNTHETIC formula", 12, 450, 5400, 4200, 1500, 250]
+        for column in range(1, len(head)):
+            with self.subTest(field=head[column]):
+                row = list(values)
+                row[column] = "=6+6"
+                path = self.sheet("uncached.xlsx", [head, row])
+                parsed = parse_table_file(path)
+                self.assertFalse(parsed["ok"])
+                self.assertIn(f"'Panel Schedule'!{openpyxl.utils.get_column_letter(column + 1)}2", parsed["errors"][0])
+                self.assertIn("recalculate", parsed["errors"][0])
+                for reader in (run_plan, draft_booking, draft_vgm):
+                    plan = reader(file_path=str(path))
+                    self.assertFalse(plan["ok"], (reader, plan))
+                    self.assertNotIn("containers_used", plan)
+                    self.assertIn("cached result", " ".join(plan["detail"]))
+
+    def test_cached_quantity_formula_and_literal_blank_keep_their_meaning(self):
+        path = self.sheet("cached.xlsx", [["name", "quantity", "weight_kg", "length_mm", "width_mm", "height_mm"],
+                                          ["SYNTHETIC cached quantity", "=6+6", 450, 4200, 1500, 250]])
+        # Write an Excel-compatible stored result; openpyxl intentionally does not calculate formulas.
+        with zipfile.ZipFile(path) as archive:
+            members = {name: archive.read(name) for name in archive.namelist()}
+        ns = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        xml = ET.fromstring(members["xl/worksheets/sheet1.xml"])
+        cell = xml.find(".//s:c[@r='B2']", ns)
+        cell.find("s:v", ns).text = "12"
+        members["xl/worksheets/sheet1.xml"] = ET.tostring(xml)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+            for name, body in members.items():
+                archive.writestr(name, body)
+        path.write_bytes(buf.getvalue())
+        parsed = parse_table_file(path)
+        self.assertEqual(parsed["materials"][0]["quantity"], 12)
+        plan = run_plan(file_path=str(path))
+        self.assertEqual((plan["can_fit"], plan["containers_used"], plan["conservation"]["pieces_in"]), (True, 3, 12))
+        blank = self.sheet("blank_qty.xlsx", [["name", "quantity", "weight_kg", "length_mm", "width_mm", "height_mm"],
+                                               ["SYNTHETIC single listed crate", None, 450, 4200, 1500, 250]])
+        self.assertEqual(parse_table_file(blank)["materials"][0]["quantity"], 1)
+        # An Excel error is a cached result, but it is not a usable count.
+        cell.set("t", "e")
+        cell.find("s:v", ns).text = "#DIV/0!"
+        members["xl/worksheets/sheet1.xml"] = ET.tostring(xml)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+            for name, body in members.items():
+                archive.writestr(name, body)
+        path.write_bytes(buf.getvalue())
+        self.assertFalse(parse_table_file(path)["ok"])
+
+    def test_formula_checks_follow_merged_headers_and_skip_non_cargo(self):
+        rows = [["SYNTHETIC schedule"],
+                ["Mark", "Qty", "Dimensions (mm)", None, None, "Weight (kg)", None],
+                [None, None, "L", "W", "H", "Unit", "Total"],
+                ["P1", 12, 4200, 1500, 250, 450, "=B4*F4"],
+                ["TOTAL", "=SUM(B4:B4)", None, None, None, None, "=SUM(G4:G4)"]]
+        merge = ["A2:A3", "B2:B3", "C2:E2", "F2:G2"]
+        bad = parse_table_file(self.sheet("merged_formula.xlsx", rows, merge))
+        self.assertFalse(bad["ok"])
+        self.assertIn("!G4", bad["errors"][0])
+        rows[3][-1] = 5400
+        good = parse_table_file(self.sheet("merged_formula.xlsx", rows, merge))
+        self.assertTrue(good["ok"], good)
+        self.assertEqual(good["materials"][0]["quantity"], 12)
+        self.assertEqual(good["reading"]["skipped_summary_rows"], [{"row": 5, "text": "TOTAL"}])
+        not_cargo = self.sheet("skip_formula.xlsx", [
+            ["name", "quantity", "weight_kg", "length_mm", "width_mm", "height_mm", "row_type"],
+            ["SYNTHETIC cargo", 1, 20, 1200, 400, 300, "material"],
+            ["SYNTHETIC metadata", "=1+1", None, None, None, None, "note"],
+            ["SYNTHETIC not shipped", 0, "=1+1", None, None, None, "material"]])
+        self.assertEqual(len(parse_table_file(not_cargo)["materials"]), 1)
 
     def test_fixtures_parse_byte_identically(self):
         files, rows, digest = canonical_fixture_parse()

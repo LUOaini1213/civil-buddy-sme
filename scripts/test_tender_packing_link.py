@@ -211,6 +211,23 @@ class Link(unittest.TestCase):
             self.assertFalse([s for s in out["statements"] if s["status"] == "covered"], panels)
 
     # mass ----------------------------------------------------------------------------------------------------
+    def test_uncached_formula_names_the_cell_in_reply_and_refuses_a_plan(self):
+        import openpyxl
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "materials"
+        ws.append(["name", "quantity", "weight_kg", "length_mm", "width_mm", "height_mm"])
+        ws.append(["SYNTHETIC formula panel", "=6+6", 450, 4200, 1500, 250])
+        wb.save(self.job / "uncached_formula.xlsx")
+        out = self.link(panels="uncached_formula.xlsx")
+        self.assertIsNone(out["record"]["plan"])
+        self.assertIn("'materials'!B2", out["reply"])
+        self.assertIn("Panel-list reading stopped", out["reply"])
+        self.assertNotIn("pack-plan.json", [d["name"] for d in out["deliverables"]])
+        self.assertFalse([s for s in out["statements"] if s["status"] == "covered"])
+        self.assertTrue(out["submit_blocked"])
+
     def test_mass_clause_is_checked_per_container(self):
         row = self.by_kind(self.link())["gross_mass"]
         f = row["figures"]
