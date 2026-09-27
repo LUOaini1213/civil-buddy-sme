@@ -330,6 +330,15 @@ class IdempotencyKeyTest(unittest.TestCase):
         # without a key a resend is a new job, as before
         self.assertEqual(200, send(rev_a, key=None).status_code)
         self.assertEqual(2, len(list(root.iterdir())))
+        # no session_id: the server names a session; a resend with the key gets that first run back
+        h = {"Authorization": "Bearer " + TOKEN, "Idempotency-Key": "link-unnamed"}
+        files = lambda: {"tender": (itt.name, itt.read_bytes()), "panel_list": (rev_a.name, rev_a.read_bytes())}  # noqa: E731
+        first = client.post("/api/tender/link", headers=h, files=files())
+        again = client.post("/api/tender/link", headers=h, files=files())
+        self.assertEqual((200, 200), (first.status_code, again.status_code), (first.text[:300], again.text[:300]))
+        self.assertEqual((first.json()["session_id"], first.json()["job_id"]),
+                         (again.json()["session_id"], again.json()["job_id"]))
+        self.assertTrue(again.json()["replayed"])
 
 
 # ---------------------------------------------------------------- atomic deliverable writes

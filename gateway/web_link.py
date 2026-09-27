@@ -590,6 +590,9 @@ async def api_tender_link(request: Request):
             # no session_id: a session of its own, returned in the reply (a shared default would compare one
             # caller's upload with another caller's previous job)
             session = str(form.get("session_id") or "").strip() or "web-" + secrets.token_hex(8)
+            # an Idempotency-Key is scoped to the session the caller named ("" when it named none, so a resend
+            # without session_id finds the first run and its generated session)
+            key_session = str(form.get("session_id") or "").strip()
             if not SESSION_RE.match(session) or session.startswith("demo-"):
                 raise Refusal(400, "bad_session", "session_id: 1-64 of A-Z a-z 0-9 _ - (not starting with demo-)")
             container_type = str(form.get("container_type") or "").strip()
@@ -601,20 +604,20 @@ async def api_tender_link(request: Request):
         finally:
             await form.close()          # the spooled upload temp files; the bytes are in memory now
         # the parsed form, not the raw bytes: a browser picks a new multipart boundary on every send
-        fp = idempotency.fingerprint(session, container_type, project_name,
+        fp = idempotency.fingerprint(key_session, container_type, project_name,
                                      [tender[1], hashlib.sha256(tender[2]).hexdigest()],
                                      [panel[1], hashlib.sha256(panel[2]).hexdigest()])
         if key:
             # a finished resend is answered without taking a run slot (no 429 while the server is busy)
             try:
-                stored = await run_in_threadpool(idempotency.lookup, f"/api/tender/link|{session}", key, fp)
+                stored = await run_in_threadpool(idempotency.lookup, f"/api/tender/link|{key_session}", key, fp)
             except idempotency.KeyReused as e:
                 raise Refusal(422, "idempotency_key_reused", str(e)) from None
             if stored is not None:
                 return idempotency.replayed(stored)
         return await run_in_threadpool(
             _locked_run, session,
-            lambda: _once(session, key, fp, lambda: _upload_job(session, tender, panel, container_type, project_name)))
+            lambda: _once(key_session, key, fp, lambda: _upload_job(session, tender, panel, container_type, project_name)))
     except Refusal as r:
         return r.response()
 
