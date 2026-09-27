@@ -7,7 +7,7 @@ import { createUploads } from "./modules/uploads.js";
 import { createTurnStream } from "./modules/turn-stream.js";
 import { createDeliverables } from "./modules/deliverables.js";
 import { createSessionWatch } from "./modules/session-watch.js";
-import { createSessionNav, sessionId } from "./modules/session-nav.js";
+import { createSessionNav, sessionId, cadProjectFromUrl } from "./modules/session-nav.js";
 
 const state = {
   experts: [],
@@ -199,9 +199,12 @@ function cbRememberSession(id) { return nav.rememberSession(id); }
 function cbRememberedSession() { return nav.rememberedSession(); }
 async function cbResumeSession(id, request) { return nav.resumeSession(id, request); }
 
+// The two sign-off sentences (packing_assistant/runtime/civil_config.py CONFIRM_SENTENCES); the server decides.
+const CB_SIGNOFF = ["我明白，将由持证人员签认", "I understand; a licensed person will sign this off."];
+
 function cbConfirmText() {
   const input = $("confirmOk");
-  return input && input.value === "我明白，将由持证人员签认" ? input.value : "";
+  return input && CB_SIGNOFF.includes(input.value) ? input.value : "";
 }
 
 function cbConfirmed() {
@@ -221,6 +224,8 @@ function cbEnableServerHitl(data) {
   if (!cbServerHitlInput) cbServerHitlInput = { disabled: !!input.disabled, placeholder: input.placeholder || "" };
   input.disabled = false;
   input.placeholder = "服务器要求本轮确认，请键入完整签认句";
+  const disclosure = $("riskDisclosure");
+  if (disclosure) disclosure.open = true;
 }
 
 function cbClearServerHitl() {
@@ -388,7 +393,7 @@ function cbApplyHealth(health) {
     ["cbLlmOpen", "model_settings", "当前工作台未提供模型设置"],
     ["cbEmptyModel", "model_settings", "当前工作台未提供模型设置"],
     ["btnAttach", "attachments", "当前工作台未提供附件上传"],
-    ["cbPackSample", "packing", "当前工作台未连接装箱工具"],
+    ["cbPackSample", "packing", "装箱示例执行需连接装箱服务；可从上方装箱拼柜入口查看状态"],
     ["cbBackupExport", "session_backup", "当前服务不支持任务备份"],
     ["cbBackupImport", "session_backup", "当前服务不支持任务导入"],
   ]) {
@@ -775,6 +780,8 @@ const nav = createSessionNav({
   proj: cbProj,
   request: { current: () => cbSessionRequest, bump: () => ++cbSessionRequest },
   storage: localStorage,
+  location: globalThis.location,
+  history: globalThis.history,
   fetch: (url, init) => fetch(url, init),
   doc: document,
   el: (id) => $(id),
@@ -782,6 +789,7 @@ const nav = createSessionNav({
   addStatus: (text) => addStatus(text),
   addMsg: (role, who, text) => addMsg(role, who, text),
   reset: {
+    cancelVoice: () => window.CivilBuddyVoice?.cancel("已切换项目或会话，旧语音草稿已取消。"),
     toEmpty: () => cbResetToEmpty(),
     contextReset: () => cbContextReset(),
     clearServerHitl: () => cbClearServerHitl(),
@@ -2357,7 +2365,7 @@ function cbSubsequence(q, names) {
 const CB_LLM_VENDORS = {
   deepseek: {
     base: "https://api.deepseek.com",
-    models: ["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash"],
+    models: ["deepseek-flash", "deepseek-v4-pro"],
   },
   zai: {
     base: "https://api.z.ai/api/paas/v4",
@@ -2579,11 +2587,13 @@ cbLlmWire();
 /* ===== ux(round15) 装箱直达（docs/ux/ux-design-spec.md 附录 M）=====
    整条输入即"装箱"类词 → 打开装柜台 3D 工程台（成箱 → 人确认 → 拼柜/重心）。
    只在 trim 后整条等于触发词时接管；句中含"装箱"的正常提问（如"帮我装箱一下"）
-   仍走 pack-ship 专家问答，不抢话。装柜台由装箱引擎网关提供（同机回环 :8000，
-   属 R12 零外链白名单）；不可达时出纠偏卡而不是默默开一个报错空白页。 */
-const CB_PACK_STUDIO_ORIGIN = "http://127.0.0.1:8000";
-const CB_PACK_STUDIO_PATH = "/workbench";
-const CB_PACK_STUDIO_CMD = "uvicorn gateway.app:app --host 127.0.0.1 --port 8000";
+   仍走 pack-ship 专家问答，不抢话。统一工作台通过同源 /packing 连接装箱引擎；
+   不可达时保留入口与重试提示。 */
+const CB_PACK_PAGE_ORIGIN = globalThis.location && globalThis.location.origin || "";
+let CB_PACK_STUDIO_ORIGIN = CB_PACK_PAGE_ORIGIN;
+let CB_PACK_STUDIO_PATH = "/packing";
+const CB_PACK_STUDIO_CMD = "python scripts/start_unified_workbench.py";
+const CB_PACK_LEGACY_ORIGIN = "http://127.0.0.1:8000";
 const CB_PACK_OPEN_WORDS = ["装箱", "装柜", "拼柜", "装箱拼柜", "装箱作业单", "装柜台"];
 
 /* ux(round16) 直达词泛化：不止装箱，CB_SLASH 每一项都能整条直达。
@@ -2639,13 +2649,22 @@ async function cbDirectRun(it) {
   cbCmdApplyDraft(cbSlashTemplate(it.id, ""));
 }
 
-/* 健康探针：网关 CORS 为 *，跨端口 fetch 可读；超时当不可达，不阻塞 UI */
+/* 使用统一工作台的同源装箱健康探针；超时当不可达，不阻塞 UI。 */
 async function cbPackStudioUp(ms) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), ms || 2500);
   try {
-    const r = await fetch(CB_PACK_STUDIO_ORIGIN + "/api/health", { signal: ctl.signal });
-    return r.ok;
+    const r = await fetch("/packing/api/health", { signal: ctl.signal });
+    if (r.status !== 404) {
+      CB_PACK_STUDIO_ORIGIN = CB_PACK_PAGE_ORIGIN;
+      CB_PACK_STUDIO_PATH = "/packing";
+      return r.ok;
+    }
+    // Only a missing unified route permits the legacy standalone gateway fallback.
+    CB_PACK_STUDIO_ORIGIN = CB_PACK_LEGACY_ORIGIN;
+    CB_PACK_STUDIO_PATH = "/workbench";
+    const legacy = await fetch(CB_PACK_LEGACY_ORIGIN + "/api/health", { signal: ctl.signal });
+    return legacy.ok;
   } catch (e) {
     return false;
   } finally {
@@ -2653,13 +2672,11 @@ async function cbPackStudioUp(ms) {
   }
 }
 
-/* ux(round16) 试用包判别（附录 M.2）：Rust 工作台 /api/health 挂 packing_agent 探针；
-   python_root 为空 = 磁盘上找不到 packing_assistant/ 目录 = 试用 zip，没有引擎可启动，
-   此时给"完整仓库"指引而不是一条它跑不了的 uvicorn 命令。
-   Python 参考实现无此字段 → 返回 null（未知），按完整仓库口径走，安全降级。 */
+/* 兼容旧服务的安装探针。缺少 python_root 只表示当前服务未发现装箱组件，
+   不能据此断言发布包不包含装箱引擎。统一预览包已携带该组件。 */
 let CB_PACK_TRIAL = null;
 
-/* 判据单点：http.up=false 且 python_root 为空 = 磁盘上根本没有引擎可启动。
+/* 旧探针判据：http.up=false 且 python_root 为空 = 当前服务未发现可用引擎。
    注意不能用 packing_agent.connected —— url_configured() 有默认值故它恒为 true。 */
 function cbPackTrialFrom(h) {
   const pa = h && h.packing_agent;
@@ -2691,21 +2708,23 @@ function cbPackCardRender(up) {
   const k = document.createElement("strong");
   k.className = "cb-empty-k";
   const trial = !up && CB_PACK_TRIAL === true;
-  k.textContent = up ? "装柜台已打开" : (trial ? "装柜台不在试用包内" : "装柜台未启动");
+  k.textContent = up ? "装柜台已打开" : (trial ? "装箱组件未就绪" : "装柜台未启动");
   h.appendChild(k);
   h.appendChild(document.createTextNode(up
     ? " —— 成箱 → 人确认 → 拼柜 3D / 重心，都在这一页。"
     : (trial
-      ? " —— 试用包只含工作台本体，不含装箱引擎（3D 拼柜 / 重心 / 出运裁决）。"
-      : " —— 装箱引擎网关（:8000）不可达，界面在但算不了。")));
+      ? " —— 当前服务未检测到可用装箱组件，请检查是否完整解压了统一工作台。"
+      : " —— 装箱引擎暂不可达，入口和已有材料仍保留。")));
   card.appendChild(h);
 
   const p1 = document.createElement("p");
   p1.textContent = up
-    ? "浏览器若拦了新标签，点下面的链接手动打开。"
+    ? "装箱方案会先供你检查；确认后才继续拼柜。也可用下面的链接打开完整工作台。"
     : (trial
-      ? "现在能做什么：装箱引擎随完整仓库分发，按仓库 README「装箱引擎」一节或「TRY.md」取用；工作台其余 66 岗不受影响，照常可用。"
-      : "现在能做什么：在仓库根目录启动装箱引擎网关，然后点「重试」。");
+      ? "现在能做什么：完整解压预览包，按照包内 README 的「统一入口」启动，然后点「重试」。"
+      : (CB_PACK_STUDIO_PATH === "/workbench"
+        ? "现在能做什么：当前是旧版独立工作台。启动装箱网关后点「重试」，或按照预览包 README 使用统一入口。"
+        : "现在能做什么：按预览包 README 的「统一入口」重新启动，它会一并启动装箱服务，然后点「重试」。"));
   card.appendChild(p1);
 
   const acts = document.createElement("div");
@@ -2730,14 +2749,16 @@ function cbPackCardRender(up) {
     acts.appendChild(a);
   } else {
     const code = document.createElement("code");
-    code.textContent = CB_PACK_STUDIO_CMD;
+    const startCommand = CB_PACK_STUDIO_PATH === "/workbench"
+      ? "uvicorn gateway.app:app --host 127.0.0.1 --port 8000" : CB_PACK_STUDIO_CMD;
+    code.textContent = startCommand;
     card.appendChild(code);
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
     copyBtn.textContent = "复制启动命令";
     copyBtn.addEventListener("click", async () => {
       try {
-        if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(CB_PACK_STUDIO_CMD);
+        if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(startCommand);
         else throw new Error("no clipboard");
         copyBtn.textContent = "已复制";
       } catch (e) {
@@ -2829,7 +2850,7 @@ function cbPackEmbed() {
 async function cbOpenPackStudio() {
   const prev = document.getElementById("cbPackCard");
   if (prev && prev.parentElement) prev.parentElement.removeChild(prev);
-  addStatus("正在检测装箱引擎网关 " + CB_PACK_STUDIO_ORIGIN + " …");
+  addStatus("正在连接装箱拼柜工作台…");
   const up = await cbPackStudioUp(2500);
   /* CB_PACK_TRIAL 已由 boot 的 health 填好；仅当那次没拿到（如 Python 参考实现无该字段，
      或 boot 时 health 失败）才现场补探一次。 */
@@ -2841,12 +2862,8 @@ async function cbOpenPackStudio() {
     log.scrollTop = log.scrollHeight;
   }
   if (up) {
-    /* ux(round19)：装柜台不再跳走，改为对话流内嵌面板（附录 P）。
-       跨端口 iframe 可行的三个前提已核实：:8000 不设 X-Frame-Options 也不设 CSP
-       frame-ancestors（gateway/app.py:202/217 只设 Cache-Control）；sandbox 必须含
-       allow-same-origin，否则 workbench.html 自己的同源 fetch 会被判成 opaque origin
-       全挂；回环地址属 R12 零外链白名单，无需新增豁免。
-       卡片里原有的「打开装柜台」链接保留作兜底（iframe 被策略拦时仍可点）。 */
+    /* 装柜台以同源面板嵌入对话。allow-same-origin 让装箱页可以请求其代理 API；
+       原有「打开装柜台」链接保留作完整页面入口。 */
     cbPackEmbed();
     return;
   }
@@ -3684,7 +3701,7 @@ function cbTlCreate(bodyEl, sourceMessage) {
       '<span class="cb-apr-chip is-warn">签认 <b>未确认</b> · 本岗未出稿</span>' +
       "</div>" +
       '<div class="cb-apr-block" data-cb-approval-blockers="true">输入下方完整签认句后，才能重新提交这条任务并生成内部讨论草稿。</div>' +
-      '<label class="cb-apr-ack">请键入：我明白，将由持证人员签认' +
+      '<label class="cb-apr-ack">请键入：我明白，将由持证人员签认（或 / or: I understand; a licensed person will sign this off.）' +
       '<input class="cb-apr-ack-input" type="text" autocomplete="off" spellcheck="false" /></label>' +
       '<div class="cb-apr-actions" data-cb-approval-actions="true">' +
       '<button type="button" class="cb-apr-confirm" disabled aria-label="确认并重提（须完整键入签认句）">确认并重提</button>' +
@@ -3701,7 +3718,7 @@ function cbTlCreate(bodyEl, sourceMessage) {
     const acknowledgment = card.querySelector(".cb-apr-ack-input");
     const approve = card.querySelector(".cb-apr-confirm");
     acknowledgment.addEventListener("input", () => {
-      approve.disabled = acknowledgment.value !== "我明白，将由持证人员签认";
+      approve.disabled = !CB_SIGNOFF.includes(acknowledgment.value);
     });
 
     function settle(kind, reason) {
@@ -3735,7 +3752,7 @@ function cbTlCreate(bodyEl, sourceMessage) {
     }
 
     card.querySelector(".cb-apr-confirm").addEventListener("click", () => {
-      if (state.decided || acknowledgment.value !== "我明白，将由持证人员签认") return;
+      if (state.decided || !CB_SIGNOFF.includes(acknowledgment.value)) return;
       if (runState.active) {
         cbAnnounce("请等待当前回答结束后，再确认重提");
         return;

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#17181a" />
+  <title>Agent 工作台 · Civil Buddy</title>
+  <link rel="icon" href="/static/icons/cb-icon.svg" type="image/svg+xml" />
+  <script src="/static/theme.js?v=unified1"></script>
+  <link rel="stylesheet" href="/static/theme.css?v=unified1" />
+  <link rel="stylesheet" href="/static/agent.css?v=unified1" />
+  <link rel="stylesheet" href="/static/workbench-shell.css?v=unified1" />
+</head>
+<body>
+  <header class="cb-app-header">
+    <a class="cb-app-brand" href="/static/index.html"><span class="cb-app-mark">CB</span><span>Civil Buddy<small>Agent 工作台</small></span></a>
+    <div class="cb-app-actions"><button type="button" data-cb-theme-toggle>切换主题</button></div>
+    <nav class="cb-app-nav" aria-label="工作台导航">
+      <a href="/static/index.html">工作台</a>
+      <a href="/static/agent.html" aria-current="page">Agent</a>
+      <a href="/packing">装箱拼柜</a>
+      <a href="/cad">CAD</a>
+      <a href="/engineering">工程计算</a>
+      <a href="/engineering/planning">施工计划</a>
+      <a href="/engineering/schedule">日期计划</a>
+      <a href="/engineering/routes">现场路线</a>
+    </nav>
+  </header>
+  <main id="agentWorkbench" class="workbench">
+    <aside class="sidebar">
+      <div class="eyebrow">工程资料与任务</div>
+      <h1>Agent 工作台</h1>
+      <p class="muted">选择工程文件，说明要读、核对或修改的内容。</p>
+      <form id="agentWorkspaceForm">
+        <label for="agentWorkspacePath">工程文件夹</label>
+        <input id="agentWorkspacePath" required autocomplete="off" spellcheck="false" placeholder="输入本机工程文件夹的完整路径" />
+        <button id="agentWorkspaceOpen" type="submit">打开工程文件夹</button>
+      </form>
+      <p id="agentWorkspaceStatus" class="muted wrap" role="status">尚未选择文件夹</p>
+      <div class="section-title"><h2>本次资料</h2><button id="agentRefreshFiles" type="button" class="quiet" disabled>刷新</button></div>
+      <p class="muted small">勾选的文件随下一条任务提交；切换文件夹会分别保留选择。</p>
+      <div id="agentFiles" class="file-list"><p class="muted">打开文件夹后显示可读资料。</p></div>
+      <div class="section-title"><h2>工程计算来源</h2><button id="agentRefreshEngineering" type="button" class="quiet" disabled>刷新</button></div>
+      <p class="muted small">最多选 4 个已保存项目。读取当前快照后加入；模型不能修改几何或原始参数。</p>
+      <p id="agentEngineeringStatus" class="muted small" role="status">打开工程文件夹后可选择。</p>
+      <div id="agentEngineering" class="engineering-list"></div>
+      <div class="section-title"><h2>会话</h2><button id="agentNewSession" type="button" class="quiet" disabled>新会话</button></div>
+      <label class="sr-only" for="agentSession">当前会话</label>
+      <select id="agentSession" disabled></select>
+      <div class="section-title"><h2>执行记录</h2><button id="agentRefreshTurns" type="button" class="quiet" disabled>刷新</button></div>
+      <div id="agentTurns" class="turn-list"><p class="muted">本会话暂无执行记录。</p></div>
+    </aside>
+    <section class="main-panel" aria-label="任务执行">
+      <div id="agentCapability" class="notice" role="status">正在检测 Agent 能力…</div>
+      <p id="agentIdentity" class="muted small" role="status">正在读取实例身份…</p>
+      <details id="agentModelSettings" class="panel model-settings">
+        <summary>模型设置 <span id="agentModelLabel" class="muted">正在读取…</span></summary>
+        <form id="agentModelForm" class="model-grid">
+          <label>接口地址<input id="agentModelBase" type="url" required placeholder="兼容 OpenAI API 的 HTTPS 地址" spellcheck="false" /></label>
+          <label>模型名称<input id="agentModelName" required placeholder="接口提供的模型名称" spellcheck="false" /></label>
+          <label>API Key<input id="agentModelKey" type="password" autocomplete="new-password" placeholder="留空保留当前 Key" /></label>
+          <button id="agentModelSave" type="submit">保存并生效</button>
+        </form>
+        <p id="agentModelStatus" class="muted wrap" role="status">Key 不保存在浏览器存储中。</p>
+      </details>
+      <form id="agentTaskForm" class="panel composer">
+        <label for="agentMessage">要完成什么？</label>
+        <textarea id="agentMessage" rows="4" required placeholder="例如：读取选中的方案和检查表，找出缺项并引用原文；先给我修改建议。"></textarea>
+        <div class="voice-row"><button id="btnVoice" type="button" data-input-id="agentMessage" aria-label="语音输入" aria-pressed="false" title="转写只进入草稿，不自动发送"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg><span>语音草稿</span><span id="voiceLabel"></span></button><span class="muted small">说完请核对文字，再开始任务。切换工程或会话会取消旧草稿。</span></div>
+        <p id="voiceStatus" class="cb-voice-status" role="status" aria-live="polite"></p>
+        <p id="voiceInterim" class="cb-voice-interim" aria-hidden="true"></p>
+        <div class="composer-controls">
+          <label>岗位<select id="agentExpert"><option value="">自动选择</option></select></label>
+          <label>执行方式<select id="agentMode"><option value="steps">检查资料（无需模型）</option><option value="model">模型规划与工具执行</option></select></label>
+          <label>文件权限<select id="agentSandbox"><option value="read-only">只读</option><option value="workspace-write">允许工作区写入</option></select></label>
+          <button id="agentSend" type="submit" disabled>开始任务</button>
+          <button id="agentCancel" type="button" class="danger" hidden>停止当前任务</button>
+        </div>
+        <p id="agentExpertNote" class="muted small">正在读取可用岗位。</p>
+        <label id="agentRiskWrap" class="risk-confirmation" hidden>高风险岗位写入前，请完整输入：我明白，将由持证人员签认
+          <input id="agentRiskConfirmation" autocomplete="off" placeholder="我明白，将由持证人员签认" />
+        </label>
+        <p id="agentSandboxNote" class="muted small">正在读取权限能力。</p>
+      </form>
+      <p id="agentNotice" class="notice" role="status" aria-live="polite">打开工程文件夹后可开始任务。</p>
+      <section class="panel context-panel" aria-labelledby="agentContextTitle">
+        <h2 id="agentContextTitle">上下文预算</h2>
+        <meter id="agentContextMeter" min="0" max="1" value="0" hidden aria-label="请求上下文预算占用"></meter>
+        <p id="agentContextText" class="muted">收到后端请求预算后显示；这不是任务完成进度。</p>
+      </section>
+      <section class="panel" aria-labelledby="agentResultTitle">
+        <div class="section-title"><h2 id="agentResultTitle">任务结果</h2><span id="agentTurnStatus" class="status-tag">尚未开始</span></div>
+        <p id="agentTurnActor" class="muted small">尚无任务发起者记录。</p>
+        <p id="agentPartial" class="notice warning" hidden>本轮只完成了部分工作，已保存的产物仍可下载。</p>
+        <div id="agentReply" class="reply">结果将显示在这里。</div>
+        <div id="agentArtifacts" class="artifact-list"></div>
+        <details id="agentUsage" hidden><summary>实际调用用量</summary><pre id="agentUsageText"></pre></details>
+      </section>
+      <section class="panel" aria-labelledby="agentEventsTitle">
+        <div class="section-title"><h2 id="agentEventsTitle">执行过程</h2><span class="muted small">按后端事件恢复</span></div>
+        <ol id="agentEvents" class="events"></ol>
+      </section>
+      <p class="muted small footer-note">文档产物为内部草稿。工程数字依据原始资料和计算工具，签认由相应专业人员完成。</p>
+    </section>
+  </main>
+  <script type="module" src="/static/agent.js"></script>
+  <script src="/static/voice.js?v=unified1"></script>
+</body>
+</html>

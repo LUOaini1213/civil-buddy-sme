@@ -81,6 +81,35 @@ class TrialPackTests(unittest.TestCase):
                      "scripts/prepare_logistics_ocr.py", "docs/civil-buddy/logistics-workbench.md"):
             self.assertIn(name, included)
 
+    def test_modules_service_worker_and_engineering_pages_ship_with_their_local_dependencies(self) -> None:
+        # Follow actual entry points and ESM imports: checking only index.html misses the
+        # extracted modules, and can ship a homepage that loads app.js but never starts.
+        import re
+
+        static = ROOT / "demo" / "static"
+        pending = ["index.html", "agent.html", "cad.html", "engineering.html", "engineering-schedule.html", "sw.js"]
+        loaded = set()
+        while pending:
+            name = pending.pop()
+            if name in loaded:
+                continue
+            loaded.add(name)
+            self.assertIn(name, release.STATIC, f"unshipped page dependency: {name}")
+            source = static / name
+            self.assertTrue(source.is_file(), name)
+            text = source.read_text(encoding="utf-8")
+            if source.suffix == ".html":
+                pending.extend(re.findall(r'(?:src|href)=[\"\']/static/([^\"\'?]+)', text))
+            elif source.suffix == ".js":
+                imports = re.findall(r'\b(?:from\s*|import\s*\(?\s*)[\"\'](\.[^\"\']+)[\"\']', text)
+                pending.extend((source.parent / value).resolve().relative_to(static.resolve()).as_posix() for value in imports)
+        self.assertIn("modules/session-nav.js", loaded)
+        self.assertIn("modules/turn-stream.js", loaded)
+        self.assertIn("cad-viewer.js", loaded)
+        self.assertIn("vendor/three/three.core.js", loaded)
+        self.assertIn("engineering-schedule-state.js", loaded)
+        self.assertIn("vendor/frappe-gantt-1.2.2/frappe-gantt.es.js", loaded)
+
     def test_actual_zip_contains_hidden_skills_and_verified_manifest(self) -> None:
         archive, stage = release.build_release(self.root, "1.2.3-test")
         self.assertTrue(stage.is_dir())

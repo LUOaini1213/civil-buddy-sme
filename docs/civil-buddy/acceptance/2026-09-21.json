@@ -1,0 +1,135 @@
+{
+  "date": "2026-09-21",
+  "release": "0.5.0-preview",
+  "platform": "Windows x64",
+  "model": "deepseek-v4-flash",
+  "jev_mode": "off",
+  "live_documents": {
+    "passed": true,
+    "turn_id": "47499b754e744a84a37f5a0b504cb1a5",
+    "model_calls": 7,
+    "tool_errors": 0,
+    "partial": false,
+    "validation": {
+      "passed": true,
+      "checks": {
+        "originals_unchanged": true,
+        "docx_artifact_exists": true,
+        "docx_changed_and_preserved": true,
+        "xlsx_artifact_exists": true,
+        "xlsx_changed_and_preserved": true
+      },
+      "details": {
+        "docx": [
+          {
+            "artifact": "report-draft-56adee693054.docx",
+            "required_value": 6,
+            "actual_value_matches": true,
+            "unmodified_parts_preserved": true,
+            "target_style_preserved": true,
+            "registered_hash_matches": true
+          }
+        ],
+        "xlsx": [
+          {
+            "artifact": "quantities-draft-c7a0279ab2f8.xlsx",
+            "required_value": 6,
+            "actual_value_matches": true,
+            "unmodified_parts_preserved": true,
+            "target_style_preserved": true,
+            "registered_hash_matches": true
+          }
+        ]
+      },
+      "rendering": "not_performed",
+      "formula_recalculation": "not_performed",
+      "engineering_approval": "not_evaluated"
+    }
+  },
+  "live_engineering": {
+    "passed": true,
+    "turn_id": "456a38e82a894974bf9a21416120f47d",
+    "model_calls": 2,
+    "validation": [
+      {
+        "kind": "section",
+        "checked": {
+          "area_mm2": 240000.00000000015,
+          "Ixx_mm4": 7200000000.000008,
+          "Iyy_mm4": 3200000000.0,
+          "Ixy_mm4": 0.0,
+          "centroid_source": [
+            200.00000000000003,
+            300.00000000000006
+          ],
+          "hole_ids": []
+        }
+      },
+      {
+        "kind": "frame",
+        "checked": {
+          "reaction_Y_N_each": [
+            2000.0,
+            2000.0
+          ],
+          "max_abs_moment_z_Nm": 2000.0,
+          "max_abs_dy_m": 0.0020833333333333333
+        }
+      }
+    ]
+  },
+  "regressions": {
+    "default_gate": {
+      "command": "npm run check",
+      "initial": "115/116; semantic-http deadline fixture failed under concurrent compilation",
+      "resolution": "semantic-http 8/8 passed in isolated rerun and extended gate; assertions and timeout unchanged"
+    },
+    "extended_gate": {
+      "command": "npm run check:full -- --only http-demo,runtime-api,office-job,pipeline,shadow-eval,rust,unified-launcher,unified-release,semantic-http,agent-ui",
+      "non_rust": "9/9 gates passed",
+      "http_demo": "87 passed, 9 optional-dependency skips",
+      "rust_initial": "mixed source/test snapshot during frame bridge fix; superseded by final cargo test"
+    },
+    "rust_final": {
+      "command": "cargo test --locked --offline --manifest-path workbench/Cargo.toml",
+      "passed": 190,
+      "failed": 0,
+      "ignored": 0
+    },
+    "agent_ui_final": {
+      "command": "node scripts/test_agent_ui.cjs",
+      "passed": 18
+    },
+    "post_scorecard": {
+      "pilots": 35,
+      "passed": 35,
+      "execution_fallback_counts_as_pass": false
+    },
+    "secrets": {
+      "files": 1786,
+      "passed": true
+    },
+    "optional_jvm": {
+      "passed": 4,
+      "http_status_without_jvm": 200,
+      "non_java_formats_preserved": true
+    }
+  },
+  "limits": [
+    "No PDF body rewrite/OCR",
+    "No Office layout rendering or spreadsheet formula recalculation",
+    "No live Jev or calibrated confidence validation",
+    "No microphone/ASR model acceptance; faster-whisper/model absent",
+    "Windows kernel read/network confinement not claimed",
+    "Saved domain project library shared within launched instance",
+    "Model engineering tools cover selected saved CAD sections and explicit frames; other domain pages remain available"
+  ],
+  "model_version_note": {
+    "product_model": "DeepSeek V4.1 Flash",
+    "canonical_api_id": "deepseek-flash",
+    "historical_request_id_preserved": true,
+    "legacy_alias_routes_to": "DeepSeek V4.1 Flash",
+    "mapping_source": "https://api-docs.deepseek.com/updates/",
+    "verified_date": "2026-09-21"
+  }
+}

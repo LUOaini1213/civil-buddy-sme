@@ -578,13 +578,23 @@ def _special_name(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Aliases are immutable vocabulary. Compile once rather than escape and look up
+# hundreds of expressions again for every sentence of a full tender document.
+_ALIAS_PATTERNS = tuple((alias, key, alias.isascii(),
+                         re.compile(r"(?<![A-Za-z])" + re.escape(alias) + r"(?![A-Za-z])", re.I)
+                         if alias.isascii() else re.compile(re.escape(alias)))
+                        for alias, key in _ALIAS_TABLE)
+
+
 def _topic_hits(clause: str) -> List[Tuple[int, int, str]]:
     taken = [False] * len(clause)
     hits: List[Tuple[int, int, str]] = []
-    for alias, key in _ALIAS_TABLE:
-        ascii_alias = alias.isascii()
-        pattern = (r"(?<![A-Za-z])" + re.escape(alias) + r"(?![A-Za-z])") if ascii_alias else re.escape(alias)
-        for match in re.finditer(pattern, clause, re.I if ascii_alias else 0):
+    for alias, key, ascii_alias, pattern in _ALIAS_PATTERNS:
+        if not ascii_alias and alias not in clause:
+            continue
+        # Keep re.I's Unicode case behavior for English aliases, and keep the
+        # original string for exact evidence offsets and longest-alias priority.
+        for match in pattern.finditer(clause):
             start, end = match.span()
             if any(taken[start:end]):
                 continue

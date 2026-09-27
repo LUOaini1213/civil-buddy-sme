@@ -66,7 +66,9 @@ def store():
 def schedule_store():
     from demo.config import REPO_ROOT
     from packing_assistant.engineering.schedule import ScheduleStore
-    return ScheduleStore(REPO_ROOT)
+    import os
+    from pathlib import Path
+    return ScheduleStore(Path(os.environ.get("CIVIL_DOMAIN_WORKSPACE", str(REPO_ROOT))))
 
 
 def storage_call(fn, *args, **kwargs):
@@ -198,8 +200,8 @@ async def open_project(identifier: str, version: int | None = None):
 async def export(request: Request):
     body = await cad.read_json(request, ExportIn)
     cad.require_export_permission()
-    if body.confirmation != cad.CONFIRMATION:
-        raise HTTPException(403, "导出计算记录前请完整键入：" + cad.CONFIRMATION)
+    if not cad.is_confirmation(body.confirmation, strip=False):
+        raise HTTPException(403, "导出计算记录前请完整键入：" + cad.CONFIRMATION + "（或 / or: " + cad.CONFIRM_EN + "）")
     snapshot = RUNS.get(body.run_id)
     # IFC original bytes and CAD source are retained in project storage. Export
     # here is the analysis record, not a rewritten model or signed deliverable.

@@ -17,6 +17,8 @@ import copy
 import io
 import json
 import os
+import re
+import shutil
 import sys
 import tempfile
 import unittest
@@ -338,6 +340,45 @@ class FolderLimitTests(JobFolderCase):
 
 
 class EndingTests(JobFolderCase):
+    def test_missing_link_queries_do_not_block_reading_a_subsequently_generated_record(self):
+        from packing_assistant.runtime.tool_engine import get_engine
+
+        # The generic model fixture has unrelated tender/response/table files;
+        # this recovery scenario starts with a new job and one explicit pair.
+        job = self.job / "link-only"
+        job.mkdir()
+        os.chdir(job)
+        workspace.activate(job)
+        engine = get_engine()
+        for _ in range(3):
+            missing = engine.execute("read_link_record", {"session_id": "missing-link"},
+                                     expert_id="bid-parse", intent="chat")
+            self.assertFalse(missing["ok"])
+            self.assertEqual(missing["error_code"], "no_link_record")
+            self.assertIn("No tender-packing link record", missing["data"]["reason"])
+        self.assertEqual(engine._fail_streak.get("read_link_record", 0), 0)
+        for name in ("facade_itt_doc.md", "facade_panels.xlsx"):
+            shutil.copyfile(ROOT / "examples" / "facade-demo" / name, job / name)
+        created = run_turn("Link the tender facade_itt_doc.md to the packing list facade_panels.xlsx "
+                           "and write the logistics response", session_id="missing-link", mode="steps")
+        self.assertTrue(created["ok"] and created["wrote"], created.get("reply"))
+        found = engine.execute("read_link_record", {"session_id": "missing-link"},
+                               expert_id="bid-parse", intent="chat")
+        self.assertTrue(found["ok"], found)
+        self.assertEqual(found["data"]["container_type"], "40HQ")
+        self.assertEqual(engine._fail_streak.get("read_link_record", 0), 0)
+
+    def test_only_expected_link_absence_is_exempt_from_the_fault_circuit(self):
+        from packing_assistant.runtime.tool_engine import ToolEngine
+
+        for tool_name, error_code in (("read_link_record", "unreadable"), ("other_read", "no_link_record")):
+            with self.subTest(tool=tool_name, error=error_code):
+                engine = ToolEngine()
+                engine.register(tool_name, lambda _args: {"ok": False, "error_code": error_code})
+                for _ in range(3):
+                    self.assertEqual(engine.execute(tool_name, intent="chat")["error_code"], error_code)
+                self.assertEqual(engine.execute(tool_name, intent="chat")["error_code"], "circuit_open")
+
     def test_a_repeated_call_is_refused_and_the_step_budget_is_a_hard_stop(self):
         loop = [("list_job_files", {})]
         script = Script(*[loop] * 6)
@@ -354,6 +395,27 @@ class EndingTests(JobFolderCase):
         out = model_loop.run_model_agent(TASK, session_id="civil-cli", complete=dead)
         self.assertEqual((out["ok"], out["error_code"], out["wrote"]), (False, "model_unavailable", False))
         self.assertIn("无法连接模型接口", out["reply"])
+
+    def test_an_english_request_gets_english_instructions_and_english_guard_notices(self):
+        script = Script("About 5 containers will be needed; the lot is ready to ship.",
+                        "Roughly 5 containers will be needed; the lot is ready to ship.")
+        out = model_loop.run_model_agent("How many containers does this shipment need?", session_id="civil-cli", complete=script)
+        system = script.seen[0]["messages"][0]["content"]
+        self.assertIn("answer in English", system)
+        self.assertNotIn("用中文回答", system)
+        asked = script.seen[1]["messages"][-1]["content"]
+        self.assertTrue(asked.startswith("[System check]") and "5 containers" in asked and "ready to ship" in asked, asked)
+        body, warnings = out["reply"].split("⚠", 1)
+        self.assertEqual((out["provenance"]["untraced"], out["provenance"]["verdicts"]), (["5 containers"], ["ready to ship"]))
+        self.assertIn("[verdict removed: not the system's to give]", body)
+        self.assertNotIn("ready to ship", body)
+        self.assertIn("These verdicts are not this system's to give", warnings)
+        self.assertIn("These numbers or clause references have no source", warnings)
+        self.assertIsNone(re.search(r"[一-鿿]", warnings), warnings)       # no Chinese notice on an English reply
+        chinese = Script("预计需要 5 个柜。", "大约需要 5 个柜。")
+        zh = model_loop.run_model_agent("这批货要几个柜", session_id="civil-cli", complete=chinese)
+        self.assertIn("用中文回答", chinese.seen[0]["messages"][0]["content"])      # a Chinese turn's prompt is unchanged
+        self.assertIn("找不到出处", zh["reply"])
 
     def test_forbidden_verdicts_are_scrubbed_from_the_reply(self):
         out = model_loop.run_model_agent("能投吗", session_id="civil-cli", complete=Script("资料齐全，可以投标。"))

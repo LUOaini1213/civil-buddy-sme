@@ -477,11 +477,11 @@ def api_understand(body: dict = None):
 
 
 def _typed(value: Any) -> bool:
-    from packing_assistant.runtime.civil_config import CONFIRM
+    from packing_assistant.runtime.civil_config import is_confirmation
 
     if type(value) is not str:
         raise HTTPException(422, "confirm_text 必须是文本")
-    return value.strip() == CONFIRM
+    return is_confirmation(value)
 
 
 def _json_confirmation(body: dict, *fields: str) -> bool:

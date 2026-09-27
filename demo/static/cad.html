@@ -2,17 +2,31 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
+  <meta name="theme-color" content="#17181a">
+  <script src="/static/theme.js?v=unified1"></script>
+  <link rel="stylesheet" href="/static/theme.css?v=unified1">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#111923">
   <title>CAD → 3D 建模助手 · Civil Buddy</title>
   <link rel="icon" href="/static/icons/cb-icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/cad.css">
+  <link rel="stylesheet" href="/static/cad.css?v=unified1">
   <script type="module" src="/static/cad.js"></script>
+
+  <link rel="stylesheet" href="/static/workbench-shell.css?v=unified1">
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="/" aria-label="返回 Civil Buddy 工作台"><span class="brand-mark">CB</span><span>Civil Buddy <small>工程工作台</small></span></a>
-    <nav aria-label="工作台导航"><a href="/engineering">工程计算</a><a href="/engineering/schedule">施工计划</a><a href="/">返回工作台</a><span class="top-tag">几何预览 · 内部讨论</span></nav>
+  <header class="cb-app-header">
+    <a class="cb-app-brand" href="/static/index.html" aria-label="返回 Civil Buddy 工作台"><span class="cb-app-mark" aria-hidden="true">CB</span><span>Civil Buddy<small>CAD 建模</small></span></a>
+    <div class="cb-app-actions"><button type="button" data-cb-theme-toggle>切换主题</button></div>
+    <nav class="cb-app-nav" aria-label="工作台导航">
+      <a href="/static/index.html">工作台</a>
+      <a href="/static/agent.html">Agent</a>
+      <a href="/packing">装箱拼柜</a>
+      <a href="/cad" aria-current="page">CAD</a>
+      <a href="/engineering">工程计算</a>
+      <a href="/engineering/planning">施工计划</a>
+      <a href="/engineering/schedule">日期计划</a>
+      <a href="/engineering/routes">现场路线</a>
+    </nav>
   </header>
   <main>
     <div class="page-heading"><div><p class="eyebrow">CAD → PARAMETRIC 3D</p><h1>从图纸，到可操作的模型</h1><p class="subtitle">确认二维实体轮廓，指定尺寸，再用一句话调整三维模型。</p></div><div class="service-controls"><span id="serviceStatus" class="service-status">正在连接建模工具</span><button id="retryService" type="button" hidden>重新检测</button></div></div>
@@ -99,7 +113,7 @@
           <section class="detail-panel"><div class="panel-heading"><h2>处理记录</h2><span id="reportSummary" class="muted">尚未建模</span></div><div id="reportList" class="report-list"><p class="hint">成功、忽略和失败的实体会分别列出，孔洞也会保留处理记录。</p></div></section>
         </div>
         <section class="dimension-panel" aria-label="尺寸来源与绑定"><div class="panel-heading"><h2>尺寸来源：标注、测量与已确认参数</h2><span id="dimensionCount" class="muted">尚未读取标注</span></div><div class="dimension-grid"><div><div id="dimensionList" class="dimension-list"></div><p class="hint">原图标注可能描述平面宽高，不会自动作为三维高度或拉伸长度。</p></div><div><p id="dimensionDetails" class="hint">选择一条原图标注，核对原文和几何测量，再明确指定用途。</p><div class="dimension-bind-controls"><label>使用数值<select id="dimensionValueSource"><option value="annotation">标注文字中的数值</option><option value="measurement">标注关联几何的测量值</option></select></label><label>应用对象<select id="dimensionTarget"></select></label><label>目标参数<select id="dimensionParameter"><option value="height_m">高度 / 厚度 / 拉伸长度</option><option value="base_m">底部标高</option></select></label><button id="bindDimension" type="button" disabled>确认用途并绑定</button></div><div id="dimensionBindings" class="dimension-bindings"></div><p class="hint">已确认的三维参数显示在左侧输入框。手工改值或单位会解除对应绑定；原始标注始终保留。</p></div></div></section>
-        <section class="export-panel"><div><h2>导出模型与参数记录</h2><p class="hint">GLB 可在其他三维工具重新打开。预览模型不包含完整 BIM 语义。</p></div><label for="exportConfirmation">导出前请完整输入：<strong>我明白，将由持证人员签认</strong></label><input id="exportConfirmation" placeholder="我明白，将由持证人员签认" autocomplete="off" disabled><div class="export-actions"><button type="button" data-export="glb" disabled>下载 GLB 模型</button><button type="button" data-export="json" disabled>下载参数 JSON</button><button type="button" data-export="step" disabled>下载 STEP 实体</button><button type="button" data-export="zip" disabled>打包下载 ↓</button><span id="exportHint" class="hint">生成模型后可导出</span></div><p id="stepHint" class="hint"></p></section>
+        <section class="export-panel"><div><h2>导出模型与参数记录</h2><p class="hint">GLB 可在其他三维工具重新打开。预览模型不包含完整 BIM 语义。</p></div><label for="exportConfirmation">导出前请完整输入：<strong>我明白，将由持证人员签认（或 / or: I understand; a licensed person will sign this off.）</strong></label><input id="exportConfirmation" placeholder="我明白，将由持证人员签认（或 / or: I understand; a licensed person will sign this off.）" autocomplete="off" disabled><div class="export-actions"><button type="button" data-export="glb" disabled>下载 GLB 模型</button><button type="button" data-export="json" disabled>下载参数 JSON</button><button type="button" data-export="step" disabled>下载 STEP 实体</button><button type="button" data-export="zip" disabled>打包下载 ↓</button><span id="exportHint" class="hint">生成模型后可导出</span></div><p id="stepHint" class="hint"></p></section>
       </div>
     </div>
     <footer>真实几何 · 可追溯来源 · 用户指定尺寸 <span>支持闭合 DXF 轮廓、曲线与受限平面块；未处理实体会明确列出。</span></footer>

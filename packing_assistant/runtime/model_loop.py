@@ -21,6 +21,11 @@ number the turn never saw gets one rewrite, and whatever survives is listed to t
 same pass runs ``tools/verdict_guard``: a verdict the system may not give (可以订舱, 符合招标文件
 的要求 — both seen from a live model) gets the same rewrite and, if it survives, is struck.
 
+A third check, ``tools/record_guard``, holds the reply to the record: a statement given another status, the plan
+another container type, the heaviest container another mass, or a draft called approved is struck. A question about
+the clauses or the plan reads the record first (``read_link_record``); a link request never reaches the loop at all:
+runtime/turn.py runs the deterministic link first and ``explain_link`` gives the model only the record, with no tools.
+
 ``agent_mode = "steps"`` (the default) never comes here; see runtime/turn.py.
 """
 
@@ -36,7 +41,7 @@ from uuid import uuid4
 
 from packing_assistant.runtime.bus import get_bus
 
-CONFIRM = "我明白，将由持证人员签认"
+from packing_assistant.runtime.civil_config import CONFIRM, CONFIRM_EN, scrub_confirmations  # noqa: E402,F401  (one definition)
 MAX_STEPS = 10
 _RESULT_CHARS = 6000
 
@@ -72,6 +77,11 @@ TOOLS: List[Dict[str, Any]] = [
     _tool("tender_compare", "只在用户要核对投标响应时用：对照文件夹里已有的招标文件与投标响应文件，逐条要求找候选响应，"
                        "并指出数值不一致处。两个文件名都必须是 list_job_files 列出过的。",
           {"tender_file": _TEXT, "response_file": _TEXT}, ["tender_file", "response_file"]),
+    _tool("read_link_record", "Read the latest tender <-> packing link record: statements S1..., their status (covered / partial / "
+                              "gap / human_required), the logistics clause texts, the container type and count, and the heaviest "
+                              "loaded container's cargo and gross mass. Call it BEFORE answering any question about the tender's "
+                              "clauses, the statements or the loading plan, and answer only from what it returns. No arguments. "
+                              "读取招标-装柜联动记录；回答条款、陈述或装柜方案的问题前先调它，只按它回答。", {}, []),
 ]
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 #: 解析用户文件或写盘的工具。系统级沙箱开着时，它们在被内核限制的工作进程里执行（runtime/os_sandbox）；
@@ -121,7 +131,12 @@ SYSTEM = """你是 Civil Buddy（土木版 Codex）：在用户的工地文件�
 - 不编条款号、规范条文、单价、坐标。规范只写标题与年份。
 - 不下「可以投标 / 可以开工 / 报审通过」这类结论，不代签。所有产出都是内部讨论草稿，不可递交。
 - 工具返回 approval_required 或 read_only 时停下来，把原因告诉用户，不要换个工具绕过去。
+- 问到招标条款、S1… 陈述或装柜方案（柜型、柜数、重量）时，先调 read_link_record（没有联动记录时用 read_job_file 读招标原文），只按读到的内容回答；读不到就说没有依据。Questions about the tender's clauses, the statements or the loading plan: read the link record first and answer only from it; the status of a statement, a figure and the container type are the record's, never yours.
 - 用中文回答：先说结论和文件位置，再说缺项和下一步。"""
+# An English request swaps only the last rule, so a Chinese turn's prompt is byte for byte what it was.
+_ANSWER_ZH = "- 用中文回答：先说结论和文件位置，再说缺项和下一步。"
+_ANSWER_EN = ("- The user wrote in English: answer in English. First the result and where the files are, then what is "
+              "missing and the next step. Keep file names, clause numbers and tool figures exactly as the tools give them.")
 
 
 @dataclass
@@ -150,6 +165,16 @@ class _Turn:
     skill: str = ""
     hitl_pending: bool = False
     wrote: bool = False
+    facts: Dict[str, Any] = field(default_factory=dict)   # record / plan figures from tool results (tools/record_guard)
+    record_question: bool = False                          # a question about the clauses, the statements or the plan
+    forced_read: bool = False
+
+    @property
+    def english(self) -> bool:
+        """This turn's own notes (approval, guard, empty reply) are in English when the request is."""
+        from packing_assistant.runtime.reply_language import english_request
+
+        return english_request(self.user_text)
 
     def emit(self, kind: str, payload: Dict[str, Any]) -> None:
         get_bus().emit(self.run_id, kind, payload)
@@ -219,21 +244,25 @@ def _gate(turn: _Turn, *, risk: str, who: str) -> Optional[Dict[str, Any]]:
     from packing_assistant.runtime.civil_config import decide_gate, load_config
 
     if turn.intent == "chat":
-        return {"ok": False, "error_code": "read_only_intent", "reason": "本轮仅问答，未授权生成文件。"}
+        return {"ok": False, "error_code": "read_only_intent",
+                "reason": "This turn is a question: no file may be written." if turn.english else "本轮仅问答，未授权生成文件。"}
     gate = decide_gate(intent="run", risk=risk, confirmed=turn.confirmed, cfg=load_config())
     if gate == "go":
         return None
     if gate == "read_only":
         return {"ok": False, "error_code": "read_only",
                 "reason": "sandbox=read-only：本轮只读，不写盘。要成稿请用户改用 /sandbox workspace-write。"}
-    request = {"name": who, "risk": risk, "confirm_sentence": CONFIRM}
+    request = {"name": who, "risk": risk, "confirm_sentence": CONFIRM, "confirm_sentence_en": CONFIRM_EN}
     turn.emit("hitl", {"required": True, **request})
     if turn.approve is not None and turn.approve(request):
         turn.confirmed = True
         return None
     turn.hitl_pending = True
     return {"ok": False, "error_code": "approval_required", "risk": risk,
-            "reason": f"{who} 写盘前需要用户打确认句「{CONFIRM}」。本次未写盘；把这一点告诉用户，不要改用别的工具绕过。"}
+            "reason": (f"{who} is a high-risk post: nothing was written. The person types the sign-off sentence "
+                       f"\"{CONFIRM_EN}\" (or 「{CONFIRM}」) themselves; tell the user this and do not try another tool."
+                       if turn.english else
+                       f"{who} 写盘前需要用户打确认句「{CONFIRM}」。本次未写盘；把这一点告诉用户，不要改用别的工具绕过。")}
 
 
 def _update_plan(turn: _Turn, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -338,6 +367,27 @@ _PLAN_KEYS = ("ok", "source", "error", "detail", "needs_human", "n_rows", "can_f
               "n0", "n_materials", "n_boxes")
 
 
+def plan_masses(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Per-container masses for the model, each under a name it cannot misread: the heaviest loaded container's cargo
+    and gross mass (tender_packing_link.heaviest_container, the same computation as the link's mass statement) and each
+    container's cargo. Measured 2026-09-26: qwen2.5:3b reported the 40HQ rated payload as the heaviest container's
+    mass; tools/record_guard now strikes a reply whose "heaviest container ... kg" is not max_gross_kg or max_cargo_kg.
+    A plan that does not fit (can_fit is not true) evidences no mass, so none is given."""
+    from packing_assistant.tender_packing_link import heaviest_container
+
+    per = result.get("per_container") or []
+    if not (result.get("ok") and result.get("can_fit") is True and per):
+        return {"heaviest_container": None, "max_gross_kg": None,
+                "mass_note": "no per-container mass: the plan did not run or does not fit (can_fit is not true)"}
+    mass = heaviest_container(per, str(result.get("container_type") or ""))
+    return {"heaviest_container": mass, "max_gross_kg": mass["max_gross_kg"],
+            "per_container_cargo_kg": [{"container_no": item.get("container_no"), "cargo_kg": item.get("cargo_kg")}
+                                       for item in per[:40]],
+            "mass_note": ("max_gross_kg = gross mass of the heaviest LOADED container (its cargo_kg + container tare, tare from "
+                          "the knowledge base, approximate; the CSC plate governs). It is not the container's rated payload "
+                          "or rated maximum gross.")}
+
+
 def pack_report_md(result: Dict[str, Any], file_name: str) -> str:
     from packing_assistant.tools.pack_ship_solve import plan_report_md
 
@@ -356,7 +406,8 @@ def _pack_plan(turn: _Turn, args: Dict[str, Any]) -> Dict[str, Any]:
     turn.skill = turn.skill or "pack-ship"
     result = run_plan(file_path=str(path), container_type=str(args.get("container_type") or "40HQ"))
     report = pack_report_md(result, path.name)
-    out = {"file": path.name, **{key: result[key] for key in _PLAN_KEYS if key in result}, "report": report}
+    # the masses go before the report: a result longer than _RESULT_CHARS is cut at the end
+    out = {"file": path.name, **{key: result[key] for key in _PLAN_KEYS if key in result}, **plan_masses(result), "report": report}
     blocked = _gate(turn, risk=exp.risk if exp else "low", who="装柜方案")
     if blocked:
         return {**out, "saved": "未写盘：" + blocked["reason"]}
@@ -416,10 +467,25 @@ def _tender_compare(turn: _Turn, args: Dict[str, Any]) -> Dict[str, Any]:
             "conflicts": [c.get("note") for c in review.get("conflicts") or []], "files": shown}
 
 
+def _read_link_record(turn: _Turn, args: Dict[str, Any]) -> Dict[str, Any]:
+    """The link record, read through the engine's registered read-only tool (contract, policy, audit). No argument
+    the model gives reaches it: the record is found by the session."""
+    from packing_assistant.runtime.tool_engine import get_engine
+
+    sid = turn.session_id if 0 < len(turn.session_id or "") <= 32 else ""
+    result = get_engine().execute("read_link_record", {"session_id": sid} if sid else {}, expert_id="bid-parse",
+                                  intent="chat", cancelled=False)
+    data = result.get("data") if isinstance(result.get("data"), dict) else None
+    if result.get("ok") and data is not None:
+        return data
+    return {"ok": False, "error_code": str((data or {}).get("error_code") or result.get("error_code") or "no_link_record"),
+            "reason": str((data or {}).get("reason") or result.get("reason") or "")[:300]}
+
+
 _DISPATCH: Dict[str, Callable[[_Turn, Dict[str, Any]], Dict[str, Any]]] = {
     "update_plan": _update_plan, "load_skill": _load_skill, "search_kb": _search_kb,
     "list_job_files": _list_job_files, "read_job_file": _read_job_file, "run_skill": _run_skill,
-    "pack_plan": _pack_plan, "tender_compare": _tender_compare,
+    "pack_plan": _pack_plan, "tender_compare": _tender_compare, "read_link_record": _read_link_record,
 }
 
 
@@ -455,7 +521,8 @@ def _dispatch(turn: _Turn, name: str, arguments: Dict[str, Any], worker: Any) ->
     reply = once()
     if reply["result"].get("error_code") == "approval_required" and turn.approve is not None:
         exp = _expert(arguments.get("skill_id")) if arguments.get("skill_id") else None
-        request = {"name": exp.name if exp else name, "risk": reply["result"].get("risk") or "high", "confirm_sentence": CONFIRM}
+        request = {"name": exp.name if exp else name, "risk": reply["result"].get("risk") or "high",
+                   "confirm_sentence": CONFIRM, "confirm_sentence_en": CONFIRM_EN}
         if turn.approve(request):       # the question is asked here, in the host; the worker has no terminal
             turn.confirmed = True
             reply = once()
@@ -548,34 +615,69 @@ def collapse_repeats(text: str) -> Tuple[str, int]:
     return "".join(kept).rstrip() if dropped else text, dropped
 
 
-def _guarded(reply: str, turn: _Turn, messages: List[Dict[str, Any]], complete: Complete) -> Tuple[str, Dict[str, Any]]:
+def _guarded(reply: str, turn: _Turn, messages: List[Dict[str, Any]], complete: Complete, *,
+             link_record: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
     """The reply, checked twice: every number traced, no verdict stated. One rewrite, then the rest is dealt with.
 
     An untraced number that survives the rewrite is listed to the user. A verdict that survives
     (可以订舱, 符合招标文件的要求 ...) is struck from the text and listed: a wrong number can be
     checked by the reader, a verdict from the system is the thing the product may not produce.
+
+    When the turn wrote a link record (tender-packing-link.json), a coverage claim the record does not support
+    ("all seven clauses are covered" with one covered row) is replaced by what the record says before anything
+    else, and again after a rewrite (tools/claim_check). The record is the truth; the model is not asked.
     """
-    from packing_assistant.tools import number_provenance, verdict_guard
+    from packing_assistant.tools import claim_check, number_provenance, record_guard, verdict_guard
     from packing_assistant.runtime.model_client import ModelCancelled
 
     reply, repeats = collapse_repeats(reply)
+    # A deterministic-first explanation already has the trusted record, including
+    # when the host returned it in memory or renamed an exported file. Never take
+    # this override from the model's arguments or its reply.
+    record = link_record if link_record is not None else claim_check.load_record(turn.files)
+    coverage_corrections: List[Dict[str, Any]] = []
+
+    def _claims(text: str) -> str:
+        found = claim_check.overclaims(text, record)
+        if not found:
+            return text
+        coverage_corrections.extend(found)
+        turn.evidence.append(claim_check.record_sentence(record, "en") + " " + claim_check.record_sentence(record, "zh"))
+        return claim_check.correct(text, found, record)
+
+    reply = _claims(reply)
     numbers = number_provenance.untraced(reply, turn.evidence)
     verdicts = verdict_guard.stated_verdicts(reply)
+    claims = record_guard.mismatches(reply, turn.facts)
     report: Dict[str, Any] = {"checked": True, "rewrites": 0, "untraced": [], "verdicts": []}
-    if numbers or verdicts:
+    if numbers or verdicts or claims:
         turn.emit("guard", {"untraced": [item["text"] for item in numbers], "verdicts": [item["text"] for item in verdicts],
-                            "action": "rewrite"})
+                            "record": [item["text"] for item in claims], "action": "rewrite"})
         asks = []
-        if numbers:
+        if turn.english:
+            if numbers:
+                asks.append("These numbers or clause references have no source in this turn's tool results, the user's words "
+                            "or the files read: " + ", ".join(dict.fromkeys(item["text"] for item in numbers))
+                            + ". Delete them or write UNSPECIFIED / [A001] to fill; do not bring in any new number.")
+            if verdicts:
+                asks.append("These sentences state a verdict, and the verdict is not yours to give: "
+                            + ", ".join(dict.fromkeys(item["text"] for item in verdicts))
+                            + ". State the facts the tools gave instead, and say who decides.")
+        elif numbers:
             asks.append("这些数字或条款号在本轮的工具结果、用户原文和已读资料里都没有出处："
                         + "、".join(dict.fromkeys(item["text"] for item in numbers))
                         + "。删掉它们，或写成 UNSPECIFIED / [A001] 待填；不要引入任何新数字。")
-        if verdicts:
+        if verdicts and not turn.english:
             asks.append("这些话是在下结论，而结论不由你下："
                         + "、".join(dict.fromkeys(item["text"] for item in verdicts))
                         + "。改成陈述工具给出的事实，并说明由谁来判断。")
+        if claims:
+            asks.append("These sentences do not match the link record / plan: "
+                        + " | ".join(dict.fromkeys(f"{item['text'][:160]} ({item['why']})" for item in claims))
+                        + ". Say what the record says, or leave them out; never change a status, a figure or the container type.")
         retry = messages + [{"role": "assistant", "content": reply},
-                            {"role": "user", "content": "【系统核对】" + " ".join(asks) + " 只输出改写后的回复。"}]
+                            {"role": "user", "content": ("[System check] " + " ".join(asks) + " Output only the rewritten reply, in English.")
+                             if turn.english else "【系统核对】" + " ".join(asks) + " 只输出改写后的回复。"}]
         report["model_calls"] = 1
         try:
             if turn.cancel_event is not None and turn.cancel_event.is_set():
@@ -590,23 +692,159 @@ def _guarded(reply: str, turn: _Turn, messages: List[Dict[str, Any]], complete: 
         if rewritten:
             reply, again = collapse_repeats(rewritten)
             repeats += again
+            reply = _claims(reply)
             report["rewrites"] = 1
             numbers = number_provenance.untraced(reply, turn.evidence)
             verdicts = verdict_guard.stated_verdicts(reply)
+            claims = record_guard.mismatches(reply, turn.facts)
     tail = []
+    if coverage_corrections:
+        report["claims_corrected"] = list(dict.fromkeys(item["text"] for item in coverage_corrections))
+        tail.append(claim_check.notice(coverage_corrections, record))
+    # a question about the clauses or the plan is answered from the record: an unsourced figure or clause number in
+    # that answer is struck with its sentence, not only listed
+    struck = claims + (record_guard.sentences_with(reply, numbers, "no source in the record or the files read")
+                       if turn.record_question and turn.facts.get("statuses") and numbers else [])
+    if struck:
+        seen, items = set(), []
+        for item in sorted(struck, key=lambda entry: entry["start"]):
+            if (item["start"], item["end"]) not in seen:
+                seen.add((item["start"], item["end"]))
+                items.append(item)
+        report["record"] = [f"{item['text'][:160]} ({item['why']})" for item in items]
+        reply = record_guard.strike(reply, items)
+        tail.append(record_guard.notice(items))
+        if turn.record_question and turn.facts.get("statuses"):
+            numbers = []
+        verdicts = verdict_guard.stated_verdicts(reply)
     if verdicts:
         report["verdicts"] = list(dict.fromkeys(item["text"] for item in verdicts))
-        reply = verdict_guard.strike(reply, verdicts)
-        tail.append(verdict_guard.notice(verdicts))
+        reply = verdict_guard.strike(reply, verdicts, english=turn.english)
+        tail.append(verdict_guard.notice(verdicts, english=turn.english))
     if numbers:
         report["untraced"] = list(dict.fromkeys(item["text"] for item in numbers))
-        tail.append(number_provenance.notice(numbers))
+        tail.append(number_provenance.notice(numbers, english=turn.english))
     if tail:
-        turn.emit("guard", {"untraced": report["untraced"], "verdicts": report["verdicts"], "action": "notice"})
+        turn.emit("guard", {"untraced": report["untraced"], "verdicts": report["verdicts"],
+                            "claims_corrected": report.get("claims_corrected", []),
+                            "record": report.get("record", []), "action": "notice"})
         reply = reply.rstrip() + "\n\n" + "\n".join(tail)
     if repeats:
         report["repeats_dropped"] = repeats
     return reply, report
+
+
+_RECORD_TOPIC = re.compile(r"(?i)\bclauses?\b|条款|第\s*\d+(?:\.\d+)*\s*条|\bS[1-9]\d?\b|\bstatements?\b|\bcontainers?\b|柜|"
+                           r"\bplan(?:ned)?\b|方案|\bgross\b|\bmass\b|\bweight\b|\bheaviest\b|毛重|重量|最重")
+_READS = frozenset({"read_link_record", "read_job_file", "pack_plan", "run_skill", "tender_compare"})
+
+
+def record_question(text: str) -> bool:
+    """A question (not a request to draft or plan) about the tender's clauses, the statements or the loading plan."""
+    from packing_assistant.runtime.task_router import _QUESTION, _READ_REQUEST, _link_requests_execution, wants_link
+
+    body = text or ""
+    # Naming the tender and packing files identifies a link topic, not permission
+    # to regenerate it. Read-only questions still need the existing record, even
+    # when the same words would also identify the deterministic link workflow.
+    link_topic = wants_link(body)
+    if (not _RECORD_TOPIC.search(body) and not link_topic) or (link_topic and _link_requests_execution(body)):
+        return False
+    return bool(_QUESTION.search(body) or _READ_REQUEST.search(body) or body.rstrip().endswith(("?", "？")))
+
+
+def _must_read(turn: _Turn) -> bool:
+    return turn.record_question and not turn.forced_read and not (set(turn.tools_run) & _READS)
+
+
+def _absorb(turn: _Turn, name: str, result: Dict[str, Any], messages: List[Dict[str, Any]], call_id: str) -> None:
+    """One tool result into the turn: tools run, evidence, the record / plan facts the reply is checked against, the event
+    and the message the model reads next."""
+    from packing_assistant.tools import record_guard
+
+    turn.tools_run.append(name)
+    content = json.dumps(result, ensure_ascii=False, default=str)[:_RESULT_CHARS]
+    turn.evidence.append(content)
+    record_guard.facts_from(name, result, turn.facts)
+    turn.emit("tool_result", {"name": name, "ok": bool(result.get("ok", True)),
+                              "error_code": result.get("error_code") or "ok", "files": result.get("files") or []})
+    messages.append({"role": "tool", "tool_call_id": call_id, "content": content})
+
+
+EXPLAIN_SYSTEM = """You explain a tender <-> packing link record that code has already produced and written. You have no tools.
+You cannot change anything: every statement's status, every figure and the container type are the record's.
+In 3 to 6 short sentences, in the user's language: the plan (container type and count), which statements are covered,
+partial, gap or for a person, and what a person must do next. Use only figures that are in the record. Do not say that
+the bid is ready, compliant, approved or can be submitted, and do not write any sign-off sentence: a person confirms."""
+EXPLANATION_HEAD = "Model explanation (the link record above governs; nothing here changes a status, a figure or the container type):"
+
+
+def _link_record_of(out: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    for row in out.get("files") or []:
+        path = Path(str(row.get("path") or "")) if isinstance(row, dict) else None
+        if path is not None and path.name == "tender-packing-link.json" and path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                break
+            if isinstance(data, dict):
+                return data
+    link = out.get("tender_packing_link")
+    return dict(link) if isinstance(link, dict) else None
+
+
+def explain_link(text: str, steps_out: Dict[str, Any], *, session_id: str = "", complete: Optional[Complete] = None,
+                 cancel_event: Any = None) -> Dict[str, Any]:
+    """Model mode, link request: the deterministic link has run (same tool, same statuses as steps mode); the model
+    gets only the record to explain, with no tools, and its text passes the number, verdict and record guards before
+    it is appended under a heading. It never reaches a file, and it cannot change a status, a figure or a type."""
+    from packing_assistant.runtime.agent_loop import _scrub
+    from packing_assistant.runtime.model_client import ModelCancelled, ModelError, complete as default_complete
+    from packing_assistant.tender_packing_link import link_record_view
+    from packing_assistant.tools import record_guard
+
+    out = dict(steps_out)
+    out.update(agent_mode="model", deterministic_first="link")
+    record = _link_record_of(steps_out)
+    if not steps_out.get("ok") or not record:
+        out["usage"] = {"model_calls": 0, "tool_calls": len(out.get("tools_run") or [])}
+        return out                  # a stop (link_inputs, ambiguous_container_type) or a failure: nothing to explain
+    complete = complete or partial(default_complete, cancel_event=cancel_event)
+    view = link_record_view(record)
+    view_json = json.dumps(view, ensure_ascii=False, default=str)
+    facts = record_guard.facts_from("read_link_record", view)
+    turn = _Turn(session_id=session_id, run_id=str(steps_out.get("run_id") or "run-" + uuid4().hex[:8]), user_text=text,
+                 confirmed=False, approve=None, cancel_event=cancel_event, facts=facts)
+    deterministic = str(steps_out.get("reply") or "")
+    turn.evidence += [EXPLAIN_SYSTEM, text, view_json, deterministic]
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": EXPLAIN_SYSTEM},
+        {"role": "user", "content": text + "\n\n---\nThe link record (read-only):\n" + view_json
+                                    + "\n\nWhat the tool reported:\n" + deterministic},
+    ]
+    provenance: Dict[str, Any] = {"checked": False, "rewrites": 0, "untraced": [], "verdicts": []}
+    calls, explanation = 0, ""
+    try:
+        explanation = str(complete(messages, None).get("content") or "").strip()
+        calls = 1
+        if explanation:
+            explanation, provenance = _guarded(explanation, turn, messages, complete, link_record=record)
+            calls += provenance.pop("model_calls", 0)
+    except ModelCancelled:
+        out.update(ok=False, cancelled=True, error_code="cancelled", reply=deterministic + "\n\n本轮已取消。")
+        return out
+    except ModelError as exc:
+        out["mode_notice"] = ("The model could not be reached (" + str(exc)[:80] + "); the link above ran without it. "
+                              "模型不可用，联动结果照常。")
+        explanation = ""
+    explanation = scrub_confirmations(_scrub(explanation),
+        "(the sign-off sentence must be typed by the person)" if turn.english else "（确认句须由用户本人输入）")
+    if explanation:
+        out["reply"] = deterministic + "\n\n" + EXPLANATION_HEAD + "\n" + explanation
+    out.update(model_explanation=explanation, provenance=provenance,
+               usage={"model_calls": calls, "tool_calls": len(out.get("tools_run") or [])})
+    turn.emit("message", {"text": explanation, "explains": "tender-packing-link.json"})
+    return out
 
 
 def run_model_agent(text: str, *, session_id: str = "", expert_id: str = "", p0_confirmed: bool = False,
@@ -632,7 +870,10 @@ def run_model_agent(text: str, *, session_id: str = "", expert_id: str = "", p0_
                  cancel_event=cancel_event, confirmed=ctx.get("p0_confirmed") is True, material=material, intent=intent,
                  cad_context=cad_context, cad_confirmed=p0_confirmed is True, planning_context=planning_context,
                  logistics_context=logistics_context)
+    turn.record_question = not (cad_context or planning_context or logistics_context) and record_question(text)
     system = system_prompt(prompt_prefix(ctx))
+    if turn.english:
+        system = system.replace(_ANSWER_ZH, _ANSWER_EN)
     past = [{"role": m["role"], "content": str(m.get("content") or "")} for m in history or []
             if m.get("role") in {"user", "assistant"} and str(m.get("content") or "").strip()]
     turn.evidence += [system, text] + [m["content"] for m in past]
@@ -698,6 +939,19 @@ def run_model_agent(text: str, *, session_id: str = "", expert_id: str = "", p0_
             if cancel_event is not None and cancel_event.is_set():
                 raise ModelCancelled("本轮已取消；已完成的文件保留。")
             calls = message.get("tool_calls") or []
+            if not calls and _must_read(turn) and not (cancel_event is not None and cancel_event.is_set()):
+                # a question about the clauses or the plan answered without reading anything: the record is read for
+                # the model and it answers again from it (measured 2026-09-26: qwen2.5:3b answered "1 container,
+                # Clause 4.3" from nowhere; the record says 6 x 40HQ and Clause 4.9)
+                turn.forced_read = True
+                result = _dispatch(turn, "read_link_record", {}, worker)
+                if result.get("ok"):
+                    call_id = "call_read_" + uuid4().hex[:8]
+                    turn.emit("tool_call", {"name": "read_link_record", "arguments": {}, "forced": True})
+                    messages.append({"role": "assistant", "content": "", "tool_calls": [
+                        {"id": call_id, "type": "function", "function": {"name": "read_link_record", "arguments": "{}"}}]})
+                    _absorb(turn, "read_link_record", result, messages, call_id)
+                    continue
             if not calls:
                 reply = str(message.get("content") or "").strip()
                 break
@@ -738,12 +992,7 @@ def run_model_agent(text: str, *, session_id: str = "", expert_id: str = "", p0_
                     turn.planning_results.append(result)
                 if logistics_context and (not turn.logistics_results or turn.logistics_results[-1] is not result):
                     turn.logistics_results.append(result)
-                turn.tools_run.append(name)
-                content = json.dumps(result, ensure_ascii=False, default=str)[:_RESULT_CHARS]
-                turn.evidence.append(content)
-                turn.emit("tool_result", {"name": name, "ok": bool(result.get("ok", True)),
-                                          "error_code": result.get("error_code") or "ok", "files": result.get("files") or []})
-                messages.append({"role": "tool", "tool_call_id": call.get("id") or "", "content": content})
+                _absorb(turn, name, result, messages, call.get("id") or "")
         else:
             reply = "达到本轮步数上限。已完成的部分见文件清单；请把任务拆小，或接着说「继续」。"
             out.update(ok=False, error_code="max_steps")
@@ -782,7 +1031,10 @@ def run_model_agent(text: str, *, session_id: str = "", expert_id: str = "", p0_
             out.update(ok=False, cancelled=True, error_code="cancelled")
             reply = "本轮已取消；已完成的文件保留。"
     # 确认句只有用户亲手输入才算数；模型把它抄进回复（实测 qwen2.5:3b 会）既无效又误导。
-    reply = _scrub(reply or "模型没有返回正文；请再说一次，或把任务拆小。").replace(CONFIRM, "（确认句须由用户本人输入）")
+    reply = scrub_confirmations(_scrub(reply or ("The model returned no text; ask again, or split the task." if turn.english else
+                                                 "模型没有返回正文；请再说一次，或把任务拆小。")),
+                                "(the sign-off sentence is typed by the person, not written by the model)" if turn.english
+                                else "（确认句须由用户本人输入）")
     turn.emit("message", {"text": reply})
     exp = _expert(turn.skill) if turn.skill else None
     out.update(reply=reply, intent="run" if turn.wrote else "chat", wrote=turn.wrote, files=turn.files,

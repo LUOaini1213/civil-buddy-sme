@@ -1,103 +1,4 @@
-/* === Civil Buddy UX tokens · ux(round1) · docs/ux/ux-design-spec.md ===
-   规范 token（--cb-* 命名空间）：与下方现有 :root 变量并存、不覆盖任何现有样式。
-   R11 主题轮起逐步切换引用：工程蓝/安全橙/合规红/中性灰阶。 */
-:root {
-  --cb-blue: #2563eb; --cb-blue-strong: #1d4ed8; --cb-blue-soft: #eff6ff;
-  --cb-orange: #ea580c; --cb-orange-soft: #fff7ed;
-  --cb-red: #dc2626; --cb-red-soft: #fef2f2;
-  --cb-green: #059669; --cb-green-soft: #ecfdf5;
-  --cb-gray-50: #f8fafc; --cb-gray-100: #f1f5f9; --cb-gray-200: #e2e8f0;
-  --cb-gray-400: #94a3b8; --cb-gray-500: #64748b; --cb-gray-900: #0f172a;
-  --cb-text: var(--cb-gray-900); --cb-text-muted: var(--cb-gray-500);
-  --cb-line: var(--cb-gray-200);
-  --cb-font: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  --cb-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
-  --cb-fs-xs: 12px; --cb-fs-sm: 13px; --cb-fs-md: 14px; --cb-fs-lg: 16px;
-  --cb-fs-xl: 18px; --cb-fs-2xl: 22px; --cb-fs-3xl: 28px;
-  --cb-space-1: 4px; --cb-space-2: 8px; --cb-space-3: 12px; --cb-space-4: 16px;
-  --cb-space-5: 24px; --cb-space-6: 32px; --cb-space-7: 48px;
-  --cb-radius-sm: 6px; --cb-radius-md: 10px; --cb-radius-lg: 14px; --cb-radius-full: 999px;
-  --cb-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --cb-shadow-md: 0 4px 18px rgba(15, 23, 42, 0.10);
-  --cb-shadow-lg: 0 10px 32px rgba(15, 23, 42, 0.16);
-  /* === ux(round8) 窄屏断点/触控 token · 见 docs/ux/ux-design-spec.md 附录 G ===
-     三档：≤--cb-bp-mobile 手机竖屏 / ≤--cb-bp-tablet 平板 / ≥--cb-bp-desktop 桌面。
-     媒体查询条件不支持 var()，规则内用字面量并注释 token 名。 */
-  --cb-bp-mobile: 430px; --cb-bp-tablet: 768px; --cb-bp-desktop: 769px;
-  --cb-touch-min: 44px; /* 可点目标最小高度（Primer AAA pattern） */
-  --cb-touch-lg: 48px;  /* 审批卡主决策按钮高度 */
-  /* === ux(round11) 双主题语义 token（water.css pattern：同名变量明暗两套，见附录 J）=== */
-  --cb-bg: #f8fafc; --cb-panel: #ffffff; --cb-panel-soft: #f1f5f9;
-  --cb-line-soft: var(--cb-gray-100);
-  --cb-text-faint: #94a3b8; /* 仅装饰性弱文本（非正文，AA 豁免） */
-  --cb-blue-ink: #1d4ed8;   /* 14px 蓝色正文档（#2563eb 仅 5.17:1，ink 6.70:1） */
-  --cb-orange-ink: #c2410c; /* 14px 橙色正文档（#ea580c 仅 3.56:1，ink 5.18:1） */
-  --cb-green-ink: #047857;  /* 14px 绿色正文档（#059669 仅 3.77:1，ink 5.48:1） */
-  --cb-on-accent: #ffffff;  /* 彩色实底上的文字（暗色主题翻转为深底色） */
-  --cb-focus: #2563eb;      /* 键盘焦点环（:focus-visible） */
-  color-scheme: light;
-}
-
-/* === ux(round11) 暗色主题：灰阶 50/100/200 反转；工程蓝/安全橙/合规红/通过绿暗底提亮一档（附录 J）===
-   取值 = workbench 现行暗盘（零回归）；两处同构（显式选择 + 系统偏好回退），改动须同步。 */
-:root[data-theme="dark"] {
-  --cb-blue: #5b8def; --cb-blue-strong: #8db4ff; --cb-blue-soft: rgba(91, 141, 239, 0.16);
-  --cb-orange: #e6b84d; --cb-orange-soft: rgba(230, 184, 77, 0.14);
-  --cb-red: #f07178; --cb-red-soft: rgba(240, 113, 120, 0.14);
-  --cb-green: #3ecf8e; --cb-green-soft: rgba(62, 207, 142, 0.14);
-  /* ux(round14)：参考图对齐——中性炭黑三级灰阶（替代旧蓝灰盘），两级面板+一条淡边 */
-  --cb-gray-50: #17181a; --cb-gray-100: #1e2023; --cb-gray-200: #2a2d31;
-  --cb-gray-400: #858b95; --cb-gray-500: #a4aab4; --cb-gray-900: #e9eaec;
-  --cb-text: var(--cb-gray-900); --cb-text-muted: var(--cb-gray-500);
-  --cb-bg: #17181a; --cb-panel: #1e2023; --cb-panel-soft: #24262a;
-  --cb-line: #303338; --cb-line-soft: #26282c;
-  --cb-text-faint: #7d838d;
-  --cb-blue-ink: #8db4ff; --cb-orange-ink: #f0d48a; --cb-green-ink: #7ee7b0;
-  --cb-on-accent: #0c121a;
-  --cb-focus: #8db4ff;
-  --cb-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
-  --cb-shadow-md: 0 4px 18px rgba(0, 0, 0, 0.45);
-  --cb-shadow-lg: 0 10px 32px rgba(0, 0, 0, 0.5);
-  color-scheme: dark;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --cb-blue: #5b8def; --cb-blue-strong: #8db4ff; --cb-blue-soft: rgba(91, 141, 239, 0.16);
-    --cb-orange: #e6b84d; --cb-orange-soft: rgba(230, 184, 77, 0.14);
-    --cb-red: #f07178; --cb-red-soft: rgba(240, 113, 120, 0.14);
-    --cb-green: #3ecf8e; --cb-green-soft: rgba(62, 207, 142, 0.14);
-    --cb-gray-50: #17181a; --cb-gray-100: #1e2023; --cb-gray-200: #2a2d31;
-    --cb-gray-400: #858b95; --cb-gray-500: #a4aab4; --cb-gray-900: #e9eaec;
-    --cb-text: var(--cb-gray-900); --cb-text-muted: var(--cb-gray-500);
-    --cb-bg: #17181a; --cb-panel: #1e2023; --cb-panel-soft: #24262a;
-    --cb-line: #303338; --cb-line-soft: #26282c;
-    --cb-text-faint: #7d838d;
-    --cb-blue-ink: #8db4ff; --cb-orange-ink: #f0d48a; --cb-green-ink: #7ee7b0;
-    --cb-on-accent: #0c121a;
-    --cb-focus: #8db4ff;
-    --cb-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
-    --cb-shadow-md: 0 4px 18px rgba(0, 0, 0, 0.45);
-    --cb-shadow-lg: 0 10px 32px rgba(0, 0, 0, 0.5);
-    color-scheme: dark;
-  }
-}
-/* ux(round11)：页面变量全部挂到 --cb-* 语义 token，随主题翻转；
-   ux(round14)：品牌色收敛为工程蓝（参考图"两级灰阶+一个品牌蓝"）；
-   --rail/--rail-ink（更深左侧栏，双主题恒定 chrome）。 */
-:root {
-  --ink: var(--cb-text);
-  --muted: var(--cb-text-muted);
-  --paper: var(--cb-bg);
-  --panel: var(--cb-panel);
-  --line: var(--cb-line);
-  --rail: #121316;
-  --rail-ink: #d6d8dc;
-  --accent: var(--cb-blue);
-  --accent-2: var(--cb-blue-strong);
-  --warn: var(--cb-orange-ink);
-  --ok: var(--cb-green-ink);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-}
+/* Appearance tokens are loaded from theme.css. */
 * { box-sizing: border-box; }
 html, body {
   margin: 0;
@@ -285,20 +186,20 @@ body[data-dock="open"] .layout { grid-template-columns: var(--cb-rail-w) minmax(
 .status-line { font-size: 12px; color: var(--accent-2); margin: 0 0 8px; }
 .composer {
   flex: 0 0 auto;
-  border-top: 1px solid var(--line); padding: 12px 20px 16px; background: var(--panel);
+  border-top: 1px solid var(--line); padding: 14px 20px 16px; background: var(--panel);
   /* viewport-fit=cover 后 iPhone 底部 Home 条会盖住输入区：留出安全区 */
   padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
 }
 .composer.drop { outline: 2px dashed var(--accent); outline-offset: -4px; }
 /* === ux(round14) 输入条重做（参考图）：大圆角容器 · 左"+"开指令面板 · 中间 textarea · 右下圆形发送键 === */
 .composer-shell {
-  display: flex; align-items: flex-end; gap: 6px;
-  background: var(--cb-panel-soft); border: 1px solid var(--cb-line-soft);
-  border-radius: 16px; padding: 8px 10px;
+  display: flex; align-items: flex-end; gap: 8px;
+  background: var(--cb-panel-soft); border: 1px solid var(--cb-line);
+  border-radius: var(--cb-radius-lg); padding: 10px;
 }
 .composer-shell:focus-within { border-color: var(--cb-blue); }
 .composer-plus {
-  flex: none; width: 30px; height: 30px; margin: 0 0 4px; display: grid; place-items: center;
+  flex: none; width: 36px; height: 36px; margin: 0; display: grid; place-items: center;
   background: transparent; border: none; border-radius: 50%;
   color: var(--cb-text-muted); font-size: 18px; line-height: 1; cursor: pointer;
 }
@@ -328,12 +229,12 @@ body[data-dock="open"] .layout { grid-template-columns: var(--cb-rail-w) minmax(
 .chip button { border: 0; background: none; cursor: pointer; color: var(--muted); }
 .composer .input-wrap { flex: 1; min-width: 0; position: relative; }
 .composer textarea {
-  width: 100%; resize: none; border: none; padding: 6px 4px;
-  font: inherit; background: transparent; color: var(--ink); border-radius: 10px; min-height: 32px;
+  width: 100%; resize: none; border: none; padding: 7px 2px;
+  font: 14px/1.6 var(--cb-font); background: transparent; color: var(--ink); border-radius: 10px; min-height: 36px;
 }
 .composer textarea:focus { outline: none; box-shadow: none; }
 #send {
-  flex: none; width: 34px; height: 34px; margin: 0 0 2px; padding: 0;
+  flex: none; width: 36px; height: 36px; margin: 0; padding: 0;
   display: grid; place-items: center; border-radius: 50%;
   background: var(--cb-blue); color: var(--cb-on-accent); border: none;
   font-size: 16px; font-weight: 700; line-height: 1;
@@ -382,7 +283,17 @@ body[data-dock="open"] .layout { grid-template-columns: var(--cb-rail-w) minmax(
   .cb-cmd-desc { display: none; }  /* 手机竖屏：只留图标+名称，说明换 title 提示 */
   .cb-cmd-item { min-height: 44px; }  /* --cb-touch-min 触控目标 */
 }
-.composer-note { font-size: var(--cb-fs-xs); color: var(--cb-text-muted); margin: 0 0 6px; }
+.composer-note { font-size: var(--cb-fs-xs); color: var(--cb-text-muted); margin: 0; }
+.composer-heading { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+.composer-shortcut { color: var(--cb-text-muted); font-size: 11px; }
+.composer-risk { margin: 0 0 10px; color: var(--cb-text-muted); font-size: 12px; }
+.composer-risk summary { width: fit-content; cursor: pointer; padding: 4px 0; line-height: 1.6; }
+.composer-risk summary > span { margin-left: 8px; color: var(--cb-text-muted); font-size: 11px; }
+.composer-risk[open] { padding: 10px 12px; border: 1px solid var(--cb-line); border-radius: var(--cb-radius-md); background: var(--cb-panel-soft); }
+.composer-risk[open] summary { padding-top: 0; color: var(--cb-text); }
+.composer-risk .confirm { display: grid; gap: 8px; margin: 8px 0 0; }
+.composer-risk .confirm strong { font-weight: 500; color: var(--cb-text); }
+.composer-risk .confirm input { width: 100%; min-height: 38px; padding: 8px 10px; }
 #send:disabled { background: var(--cb-gray-200); color: var(--cb-gray-500); cursor: not-allowed; }
 .confirm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
 .confirm input, .cb-apr-ack-input { min-width: 0; max-width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--cb-line); border-radius: var(--cb-radius-sm); background: var(--cb-panel); color: var(--cb-text); font: inherit; }
@@ -1151,7 +1062,7 @@ html.cb-large {
    符号纪律禁 emoji 与 dingbats，回形针图标会撞 test_ux_no_emoji。 */
 .composer-attach {
   flex: none; align-self: flex-end;
-  padding: 6px 10px; min-height: 32px;
+  padding: 6px 10px; min-height: 36px;
   background: transparent; border: 1px solid var(--cb-line);
   border-radius: 999px; cursor: pointer;
   color: var(--cb-text-muted); font: inherit; font-size: var(--cb-fs-xs);
@@ -1251,3 +1162,25 @@ html.cb-large {
 .body.md th { background: var(--cb-bg-soft, rgba(0,0,0,.04)); }
 .body.md blockquote { border-left: 3px solid var(--cb-line); padding-left: .8em; color: var(--cb-text-muted); }
 .body.md a { color: var(--cb-blue); word-break: break-all; }
+
+/* Compact input stays readable when the workbench sits in a narrow app panel. */
+.composer .ctx-bar { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--cb-line-soft); }
+.composer .ctx-text { font-size: 11px; line-height: 1.6; }
+.composer #ctxOpen { padding: 4px 0; min-height: 30px; background: transparent; border-color: transparent; color: var(--cb-blue-ink); }
+.composer .ctx-meter { background: var(--cb-line-soft); }
+.composer textarea::placeholder { color: var(--cb-text-muted); }
+@media (max-width: 600px) {
+  .composer { padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .composer-shortcut { display: none; }
+  .composer-shell { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto auto; gap: 8px; }
+  .composer .input-wrap { grid-column: 1 / -1; grid-row: 1; }
+  .composer textarea { min-height: 52px; padding: 4px; }
+  .composer-plus { grid-column: 1; grid-row: 2; }
+  .composer-voice { grid-column: 2; grid-row: 2; justify-self: end; }
+  #btnAttach { grid-column: 3; grid-row: 2; }
+  #send { grid-column: 4; grid-row: 2; }
+  #stop { grid-column: 1 / -1; grid-row: 3; }
+  .composer-shell #send, .composer-shell .composer-plus, .composer-shell .composer-attach { min-height: 40px; height: 40px; }
+  .composer-shell #send, .composer-shell .composer-plus { width: 40px; }
+  .composer-risk summary > span { display: block; margin: 0 0 0 15px; }
+}

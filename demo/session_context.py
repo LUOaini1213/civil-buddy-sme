@@ -12,7 +12,7 @@ import projects
 import task_memory
 import uploads
 from context import policy
-from packing_assistant.runtime.civil_config import CONFIRM
+from packing_assistant.runtime.civil_config import scrub_confirmations
 from packing_assistant.sandbox import assert_open, assert_write, guarded_write_text
 
 
@@ -167,7 +167,7 @@ def _reference_blocks(prepared: dict) -> tuple[str, list[str]]:
         if len(str(item.get("value", ""))) <= 256:
             fields[key] = item["value"]
     head = ("【此前用户全局字段，以本轮更正为准】\n" + "\n".join(f"{key}：{value}" for key, value in fields.items())) if fields else ""
-    return head.replace(CONFIRM, "[历史确认不生效]"), [p.replace(CONFIRM, "[历史确认不生效]") for p in parts]
+    return scrub_confirmations(head, "[历史确认不生效]"), [scrub_confirmations(p, "[历史确认不生效]") for p in parts]
 
 
 def _omission_note(omitted: list[str]) -> str:

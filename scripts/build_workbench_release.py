@@ -18,6 +18,9 @@ VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+
 STATIC = (
     "app.js", "chat-stream.js", "docpreview.js", "fixcard.js", "index.html",
     "manifest.webmanifest", "posts.js", "studio.js", "styles.css", "tickets.js", "voice.js",
+    "sw.js", "modules/auth.js", "modules/toast.js", "modules/drafts.js", "modules/uploads.js",
+    "modules/turn-stream.js", "modules/deliverables.js", "modules/session-watch.js", "modules/session-nav.js",
+    "agent.html", "agent.css", "agent.js", "theme.css", "theme.js", "workbench-shell.css",
     "icons/cb-icon-192.png", "icons/cb-icon-512.png", "icons/cb-icon.svg",
     "vendor/marked.LICENSE.md", "vendor/marked.min.js",
     "cad.html", "cad.css", "cad.js", "cad-viewer.js",
@@ -33,6 +36,10 @@ STATIC = (
     "vendor/three/OrbitControls.js", "vendor/three/LICENSE.txt", "vendor/three/manifest.json",
 )
 EXPLICIT = (
+    "gateway/__init__.py", "gateway/app.py", "frontend/workbench.html",
+    "frontend/vendor/vue.min.js", "frontend/vendor/vue.LICENSE",
+    "frontend/vendor/marked.min.js", "frontend/vendor/marked.LICENSE.md",
+    "frontend/vendor/cb-doc.js", "frontend/vendor/cb-fix.js",
     "LICENSE", "requirements.txt", ".env.example", "demo/.env.example",
     "TRY.md", "docs/depth-ladder.md", "docs/civil-buddy/GETTING-STARTED.md",
     "docs/civil-buddy/PROTOCOL.md", "docs/civil-buddy/MCP.md", "docs/civil-buddy/SKILLS.md",
@@ -41,6 +48,9 @@ EXPLICIT = (
     "contract/intents.v1.json", "contract/projects.v1.json", "contract/kb_boosts.v1.json",
     "workbench/seed.json", "workbench/yibiao-map.json",
     "scripts/start_workbench.py",
+    "scripts/start_unified_workbench.py", "requirements-documents.txt", "docs/civil-buddy/unified-workbench.md",
+    "skills/document/manifest.json", "skills/document/doc-word/SKILL.md", "skills/document/doc-spreadsheet/SKILL.md",
+    "skills/document/doc-pdf/SKILL.md", "skills/document/doc-review/SKILL.md",
     # 语音输入：页面加载 voice.js；本机识别需要术语表，装依赖的说明在 requirements-asr.txt 里
     "demo/asr_lexicon.txt", "requirements-asr.txt", "docs/voice-input.md",
     "requirements-cad.txt", "docs/civil-buddy/cad-to-3d.md",

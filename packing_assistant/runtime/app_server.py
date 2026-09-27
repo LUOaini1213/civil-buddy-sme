@@ -11,7 +11,7 @@ import sys
 from typing import Any, Dict, Optional
 
 PROTOCOL = "civil-app-server/v1"
-CONFIRM = "我明白，将由持证人员签认"
+from packing_assistant.runtime.civil_config import CONFIRM, CONFIRM_EN, is_confirmation  # noqa: E402  (one definition)
 
 
 def initialize() -> Dict[str, Any]:
@@ -30,6 +30,7 @@ def initialize() -> Dict[str, Any]:
         "host": "civil-buddy",
         "submit_blocked": True,
         "confirm_sentence": CONFIRM,
+        "confirm_sentence_en": CONFIRM_EN,
         "sandbox": cfg.sandbox,
         "approval": cfg.approval,
         "job_root": root,
@@ -59,7 +60,6 @@ def dispatch(method: str, params: Dict[str, Any]) -> Any:
     from packing_assistant.runtime.expert_skills import catalog, format_catalog_listing
     from packing_assistant.runtime.threads import (
         list_threads,
-        load_thread,
         new_thread,
         run_on_thread,
         thread_status,
@@ -91,14 +91,11 @@ def dispatch(method: str, params: Dict[str, Any]) -> Any:
         tid = str(params.get("thread_id") or "")
         if not tid:
             tid = new_thread(text[:40], confirm=False).thread_id
-        elif getattr(load_thread(tid), "confirm", False) is True:
-            # 终端/桌面端签认过的线程会把确认带进每一轮；程序驱动的 serve 不能借用这份签认。
-            raise ValueError("该线程带着终端或桌面端的签认，civil serve 不能沿用：请 thread/start 新开线程，并在 confirm_text 原样键入确认句")
         return run_on_thread(
             tid,
             text,
             skill=str(params.get("skill") or ""),
-            confirm=str(params.get("confirm_text") or "").strip() == CONFIRM,
+            confirm=is_confirmation(str(params.get("confirm_text") or "")),
             background=bool(params.get("background")),
         )
     raise ValueError(f"unknown method {method}")

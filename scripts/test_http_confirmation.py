@@ -16,15 +16,18 @@ os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from packing_assistant.runtime.civil_config import CONFIRM
+from packing_assistant.runtime.civil_config import CONFIRM, CONFIRM_EN
 from scripts import test_workbench_flow as flow
 
 # A client-set flag, in any shape, is never a person's confirmation.
 FLAGS = (True, "true", "yes", 1, 0, None, [], {})
 COERCIONS = FLAGS[1:]
 # Only the exact sentence: text that merely quotes it (a refusal, a question) approves nothing.
-QUOTED = ("不同意：" + CONFIRM, CONFIRM + "吗？")
-NOT_THE_SENTENCE = ("", "我明白", "我已核对 P0", CONFIRM[:-1], *QUOTED)
+QUOTED = ("不同意：" + CONFIRM, CONFIRM + "吗？", "No: " + CONFIRM_EN, "Did you mean " + CONFIRM_EN)
+# The English sentence is exact too: not lower-cased, not without its full stop, not with a comma for the semicolon.
+NOT_THE_SENTENCE = ("", "我明白", "我已核对 P0", CONFIRM[:-1], "I understand", CONFIRM_EN.lower(), CONFIRM_EN[:-1],
+                    CONFIRM_EN.replace(";", ","), *QUOTED)
+SENTENCES = (CONFIRM, CONFIRM_EN)
 
 
 class WorkbenchConfirmationTests(unittest.TestCase):
@@ -55,11 +58,12 @@ class WorkbenchConfirmationTests(unittest.TestCase):
             self.assertTrue(waiting["hitl_pending"], (typed, waiting))
             self.assertFalse(waiting["wrote"])
         self.assertFalse(list(self.flow.root.rglob("*.md")))
-        completed, _ = self.flow.post("写一份消防专篇，缺失内容待填", expert_ids=["fire-protect"], confirm_text=CONFIRM)
-        self.assertFalse(completed["hitl_pending"], completed)
-        self.assertTrue(completed["ok"] and completed["wrote"], completed)
-        self.assertTrue(any(item["name"].endswith(".md") and Path(item["path"]).is_file()
-                            for item in completed["deliverables"]))
+        for sentence in SENTENCES:           # either sentence, typed by the person in this request
+            completed, _ = self.flow.post("写一份消防专篇，缺失内容待填", expert_ids=["fire-protect"], confirm_text=sentence)
+            self.assertFalse(completed["hitl_pending"], (sentence, completed))
+            self.assertTrue(completed["ok"] and completed["wrote"], completed)
+            self.assertTrue(any(item["name"].endswith(".md") and Path(item["path"]).is_file()
+                                for item in completed["deliverables"]))
 
     def test_background_entry_refuses_flags_and_forwards_only_the_sentence(self) -> None:
         seen = []
@@ -75,7 +79,7 @@ class WorkbenchConfirmationTests(unittest.TestCase):
                 with self.subTest(value=value):
                     self.assertEqual(422, self.client.post("/api/chat", json={**body, "confirm_ok": value}).status_code)
             runner.assert_not_called()
-            for typed, expected in (*((t, False) for t in NOT_THE_SENTENCE), (CONFIRM, True)):
+            for typed, expected in (*((t, False) for t in NOT_THE_SENTENCE), (CONFIRM, True), (CONFIRM_EN, True)):
                 response = self.client.post("/api/chat", json={**body, "confirm_text": typed, "confirm_ok": True})
                 self.assertEqual(202, response.status_code, response.text)
                 self.assertIs(expected, seen[-1])
@@ -101,13 +105,17 @@ class GatewayConfirmationTests(unittest.TestCase):
             with self.subTest(route=route), patch(target, return_value={"ok": True}) as runner:
                 for field in fields:
                     for value in FLAGS:
-                        response = self.client.post(route, json={"text": "写一份消防专篇", field: value, "confirm_text": CONFIRM})
-                        self.assertEqual(422, response.status_code, (route, field, value, response.text))
+                        for sentence in SENTENCES:     # a flag next to either sentence is refused before anything runs
+                            response = self.client.post(route, json={"text": "写一份消防专篇", field: value, "confirm_text": sentence})
+                            self.assertEqual(422, response.status_code, (route, field, value, response.text))
                 for value in (1, [], {}, None):
                     self.assertEqual(422, self.client.post(route, json={"text": "x", "confirm_text": value}).status_code)
                 runner.assert_not_called()
                 for body, expected in (({}, False), ({fields[0]: False}, False), ({"confirm_text": "我明白"}, False),
                                        ({"text": "写一份消防专篇。" + CONFIRM}, False),    # the sentence counts only in confirm_text
+                                       ({"text": "Write the fire protection report. " + CONFIRM_EN}, False),
+                                       *(({"confirm_text": t}, False) for t in NOT_THE_SENTENCE),
+                                       ({"confirm_text": CONFIRM_EN}, True), ({"confirm_text": "\n" + CONFIRM_EN + " "}, True),
                                        *(({"confirm_text": t}, False) for t in QUOTED),
                                        ({"confirm_text": " " + CONFIRM + " "}, True), ({fields[0]: False, "confirm_text": CONFIRM}, True)):
                     response = self.client.post(route, json={"text": "写一份消防专篇", **body})
@@ -126,7 +134,8 @@ class GatewayConfirmationTests(unittest.TestCase):
                 runner.assert_not_called()
                 ingest.assert_not_called()
                 for data, expected in (({}, False), ({"p0_confirmed": "false"}, False), ({"confirm_text": "我明白"}, False),
-                                       *(({"confirm_text": t}, False) for t in QUOTED), ({"confirm_text": CONFIRM}, True)):
+                                       *(({"confirm_text": t}, False) for t in QUOTED), ({"confirm_text": CONFIRM}, True),
+                                       ({"confirm_text": CONFIRM_EN}, True), ({"confirm_text": CONFIRM_EN.lower()}, False)):
                     response = self.client.post(route, data=data, files={field: ("input.txt", b"fixture excerpt")})
                     self.assertEqual(200, response.status_code, response.text)
                     self.assertIs(expected, runner.call_args.kwargs["p0_confirmed"], data)

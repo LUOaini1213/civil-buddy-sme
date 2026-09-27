@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 _ROOT = Path(__file__).resolve().parents[2]
-_DIR = _ROOT / "demo" / "out"
+from packing_assistant.runtime.paths import default_out_root
+_DIR = default_out_root(_ROOT)
 
 
 def _safe(session_id: str) -> str:

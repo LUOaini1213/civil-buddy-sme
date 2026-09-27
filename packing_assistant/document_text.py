@@ -90,25 +90,56 @@ def docx_numbering(numbering: ElementTree.Element | None) -> dict:
     has lost the very thing a person needs to find it again."""
     if numbering is None:
         return {}
+
+    def level_of(level: ElementTree.Element) -> tuple:
+        fmt = level.find(_W + "numFmt")
+        text = level.find(_W + "lvlText")
+        start = level.find(_W + "start")
+        try:
+            first = int(start.get(_W + "val")) if start is not None else 1
+        except (TypeError, ValueError):
+            first = 1
+        return ((fmt.get(_W + "val") if fmt is not None else "decimal") or "decimal",
+                (text.get(_W + "val") if text is not None else "") or "", first)
+
+    def depth_of(element: ElementTree.Element) -> int | None:
+        try:
+            return int(element.get(_W + "ilvl") or 0)
+        except (TypeError, ValueError):
+            return None
+
     abstract: dict = {}
     for item in numbering.findall(_W + "abstractNum"):
         levels = {}
         for level in item.findall(_W + "lvl"):
-            fmt = level.find(_W + "numFmt")
-            text = level.find(_W + "lvlText")
-            start = level.find(_W + "start")
-            try:
-                first = int(start.get(_W + "val")) if start is not None else 1
-            except (TypeError, ValueError):
-                first = 1
-            levels[int(level.get(_W + "ilvl") or 0)] = ((fmt.get(_W + "val") if fmt is not None else "decimal") or "decimal",
-                                                       (text.get(_W + "val") if text is not None else "") or "", first)
+            depth = depth_of(level)
+            if depth is not None:
+                levels[depth] = level_of(level)
         abstract[item.get(_W + "abstractNumId")] = levels
     result: dict = {}
     for item in numbering.findall(_W + "num"):
         ref = item.find(_W + "abstractNumId")
-        if ref is not None and ref.get(_W + "val") in abstract:
-            result[item.get(_W + "numId")] = abstract[ref.get(_W + "val")]
+        if ref is None or ref.get(_W + "val") not in abstract:
+            continue
+        levels = dict(abstract[ref.get(_W + "val")])
+        # what Word writes for "Set numbering value" / "Restart at": this list instance overrides a level of the
+        # abstract definition - a whole <w:lvl>, or only its start (<w:startOverride w:val="4"/> makes 1.7 read 4.7)
+        for override in item.findall(_W + "lvlOverride"):
+            depth = depth_of(override)
+            if depth is None:
+                continue
+            replaced = override.find(_W + "lvl")
+            if replaced is not None:
+                levels[depth] = level_of(replaced)
+            start = override.find(_W + "startOverride")
+            if start is not None:
+                try:
+                    value = int(start.get(_W + "val"))
+                except (TypeError, ValueError):
+                    continue
+                fmt, pattern, _first = levels.get(depth, ("decimal", "", 1))
+                levels[depth] = (fmt, pattern, value)
+        result[item.get(_W + "numId")] = levels
     return result
 
 

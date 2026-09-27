@@ -1,0 +1,161 @@
+# Civil Buddy：文档技能与 LLM/Jev 工程工作流
+
+> 后续实现记录：本文保留设计时的源码盘点与历史验证。2026-09-21 的实际实现、测试证据及未覆盖能力见 [implementation.md](implementation.md)；文末“尚未实现”描述的是设计快照。
+
+2026-09-21，总架构 v0.5。能力审计固定到 PR58 `3e93025ee3794f96028ea8ce2067184a6af28a25`。本文是项目架构与技能规格，尚未向 Civil Buddy 注册新技能或修改运行时代码。
+
+## 1. 结论与需要改变的设计
+
+现在有 PDF/Office 读取、Word/Excel 新建和部分模板更新，但缺少共享的 PDF、Excel、Word 结构化读改技能。更关键的是，当前 `run_skill` 只接收岗位与文件选择，成稿内容来自用户原话及确定性流程，模型拟写内容不能进入文件。因此“配置 LLM 后工程参与面仍少”有代码原因，不只是少写了几个 Skill 名称。
+
+目标改为：**岗位 SOP + 通用文件技能 + 有来源的模型内容/修改方案 + 确定性执行与验收**。LLM 可承担跨文档抽取、条款对应、字段归一、起草、改写、表结构与公式建议；Jev 在特定语义决策点分类、选择或评分；宿主与工具承担权限、版本、计算和真实文件改动。
+
+新路径明确允许保存 `model_proposed` 的候选正文与修改稿，用户能预览和继续编辑；它们不自动成为已验证工程事实或签认成果。当前“模型文本不进成稿”的代码策略需要单独演进，不能声称只加 SKILL.md 就已经支持智能改稿。
+
+## 2. 三类文件的实际能力
+
+| 格式 | 当前可复用 | 当前缺口 |
+|---|---|---|
+| PDF | Python pypdf 文字层抽取；特定装箱单解析；Rust 外部 MinerU/Docling/Marker 解析桥 | 原文页/坐标与表格映射未统一；OCR 依赖与质量未验收；无通用批注、表单、页操作或正文编辑 Agent 工具 |
+| Excel | 读取 sheet 值表；物料/招标专项解析；新建 xlsx；替换点名工作簿中的 `CB草稿-*` sheets | 通用单元格/范围编辑、公式读取与重算、表结构/样式/高级对象保真验证尚未接通 |
+| Word | 按正文顺序读取段落/表格；从 Markdown 生成真实可编辑 DOCX；指定施工模板填充 | 通用原文节点定位、局部改写、保样式修改、修订/批注、渲染验收尚未成为统一工具 |
+
+关键源码证据：
+
+- [model_loop.py:53](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/runtime/model_loop.py#L53)：`read_job_file / run_skill` 等模型工具；`run_skill` 没有正文或编辑 patch 参数。
+- [office_job.py:441](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/office_job.py#L441)：PDF/DOCX/Excel 阅读入口。通用 Excel 预览最多每 sheet 80 行 × 16 列，`data_only=True` 读已有缓存值，不计算公式；专项解析覆盖范围另计。
+- [office_job.py:132](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/office_job.py#L132)：现有工作簿修改仅为重建草稿 sheets。测试证明指定原 sheet 值保留，不代表复杂图表/外链/宏全面保真。
+- [document_text.py:51](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/document_text.py#L51)：DOCX 顺序与表格文字抽取，没有完整节点、合并格、样式和布局 IR。
+- [word_export.py:256](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/word_export.py#L256)：生成新 OOXML，不能当成修改原 DOCX 并保留原版式。
+- [paths.py:62](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/skills/civil-buddy/scripts/paths.py#L62)：施工模板工具依赖仓外 `GROK_HOME`/`.grok` 脚本，不能算仓内完整通用 Word 引擎。
+- [parse.rs:103](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/workbench/src/parse.rs#L103)：Rust 可选重型 PDF 解析。存在适配代码不证明本机依赖就绪、扫描件或表格准确。
+
+`admin-office` 是会务后勤岗位，并非 Office 编辑器。当前 Codex 的 PDF/Word/Excel 技能也不会自动安装进 Civil Buddy。项目内 Skill、工具注册、依赖检测、权限、UI 和验证链需要共同接通。
+
+## 3. 技能目录如何加
+
+保留 `workbench/seed.json` 作为 66 岗位唯一权威源，岗位 SOP 继续由现有生成器生成。新增独立能力目录：
+
+```text
+skills/document/
+  manifest.json
+  pdf/SKILL.md                 # id: doc-pdf
+  spreadsheet/SKILL.md         # id: doc-spreadsheet
+  word/SKILL.md                # id: doc-word
+  review/SKILL.md              # id: doc-review
+```
+
+以上是拟议目录，尚未创建于源码。`SkillRegistry` 汇总 `kind=post|capability`，同样先加载名称/说明，再按需要加载全文。manifest 记录 id、version、入口、工具需求、支持操作、验收配置；运行时根据依赖和工具就绪情况另算 available/degraded/unavailable，不能把 manifest 声明当实际能力。
+
+岗位数量保持 66；能力技能单独计数。普通文档阅读无需强制找一个不相干岗位。涉及工程专业任务时组合，例如 `bid-compliance + doc-pdf + doc-spreadsheet + doc-word + doc-review`，按阶段逐一加载，不一次塞进全部工具 schema。
+
+现有 `load_skill` 面向岗位，`run_skill` 面向确定性岗位出稿。目标增加有类型的 `load_capability` 或统一 SkillRef，文件操作使用明确的工具入口；不能将这些新 ID 加进岗位列表后继续交给现有岗位路由处理。声明式插件继续只提供 SOP/模板/数据，新工具代码必须经宿主注册，不能由插件携带任意脚本获得执行权。
+
+## 4. 四项能力技能的完整规格
+
+### doc-pdf：定位阅读、审阅与受控修改
+
+触发：阅读/比较 PDF，抽取要求或表格，定位问题，填写表单、批注或整理页面。先检查加密、文字层、扫描页、页数、引擎与当前支持的修改操作。
+
+阅读工具：`pdf_inspect` 返回页清单和解析能力；`pdf_read_pages` 返回页/文本块/表格与坐标；`pdf_ocr_pages` 仅在指定引擎就绪时处理所选扫描页，保留 OCR 来源与不确定处。按需检索后回读完整相关段落或表格，不能将截取片段说成已读全文。
+
+修改工具按操作分开注册：`pdf_annotate`、`pdf_fill_fields`、`pdf_reorder_pages`、`pdf_patch_region`。最后一种只有后端实际支持指定区域的文字/布局修改并通过兼容性检查时开放。批注、表单和页面整理可先交付；正文重排优先修改对应 Word/可编辑源再导出，新旧版本逐页比较。没有可编辑源、又超出直接 PDF 后端能力时，报告受影响页面与限制，不能输出伪称等价的重建文件。
+
+输出：原件引用、新版本、逐页差异、修改操作与证据、结构/文字回读/渲染验证。原背景、图表与未修改内容应保持；简单覆盖图块不等同真实正文修改。只有实际具备的操作可在 capabilities 中启用。
+
+### doc-spreadsheet：工作簿理解、范围修改和计算
+
+触发：整理工程量、材料、报价、台账、检查公式、跨表比较、更新指定范围或建立计算表。`xlsx_inspect` 返回 sheet、已用范围、表、合并格、命名范围、公式与高级对象能力；`xlsx_read_range` 同时区分原值、公式和缓存值，并带单元格定位。
+
+LLM 可以提出列对应、数据规范化、差异说明、表结构和公式；原数量/金额引用具体来源，换算或汇总调用确定性计算。`xlsx_preview_patch` 展示目标范围、旧值/公式、新值/公式与来源；`xlsx_apply_patch` 核对版本和预期旧值后改副本。操作至少覆盖明确的单元格/范围写入、表行追加、公式设置与有界格式调整，不局限于 `CB草稿-*` sheet。
+
+公式字符串与普通文字使用不同类型，默认文字不能因以 `=` 开头变公式；公式需解析引用、函数与外部依赖。`xlsx_recalculate` 绑定真实可用引擎；没有引擎时状态为 `not_recalculated`，不得拿旧缓存声称新公式结果正确。宏、数据连接、复杂图表、透视表等按后端能力单独声明；不支持的对象不能静默丢弃。
+
+输出：新工作簿、单元格级变更集、来源映射、公式/错误检查、重算引擎与结果、关键表格渲染预览。验收确认范围外值/公式/结构保持，修改范围与请求一致。
+
+### doc-word：读懂结构、起草与修改原文档
+
+触发：起草/修改方案、报告、技术响应、纪要、函件；填写表格和模板；比较版本。`docx_inspect` 返回 paragraph/run/table/cell 等稳定节点与结构、样式、节、页眉页脚、图片及保护特征，`docx_read_blocks` 返回原文和来源定位。
+
+LLM 可实际拟写正文、归并重复内容、按用户意见改章节、将证据转为清晰说明；也可填入用户已给事实和工具结果。修改方案使用段落/表格节点 ID，不以“把第 3 页改掉”作为未渲染前的稳定定位。`docx_preview_patch / docx_apply_patch` 支持替换指定文本、修改表格单元格、插入章节、绑定已有样式等有限操作。
+
+确定性 worker 修改原 OOXML 副本并保留未改部件；不默认把整份原 DOCX 扁平化成 Markdown 再重建。修订和批注分别声明能力，真正生成兼容的修订/批注部件后才称原生修订模式；普通差异报告不能冒充 Word 修订记录。模板填充绑定明确槽位与模板版本，未知模板不能假定与施工模板相同。
+
+输出：可编辑新 DOCX、节点级差异、模型建议与事实来源、结构回读及渲染检查。合并表格、编号、图片、页眉页脚、分页和目录字段需按编辑场景验证；未完成布局检查时报告准确状态。
+
+### doc-review：跨文件检查与交付验收
+
+触发：把 PDF 要求、Excel 数据、Word 说明放在一起检查，或验收某次文件修改。对照实际 source revision 建立条款/对象/字段的对应表；LLM 解释语义差异与提出修改，工具检查数量、单位、公式、文件结构及引用。
+
+`document_diff` 比较结构化内容与渲染结果；`document_validate` 返回逐项 pass/fail/not_checked；`artifact_publish` 仅发布当前已授权、状态准确的新版本。需要客户式样或工程签认的交付保留相应待办；文件可打开、模型认为合理与工程获批是不同事实。
+
+## 5. 通用文档模型与修改协议
+
+Rust `documents/` 是控制与契约层，Python 复用现有解析/生成库并增加固定编辑 worker。文档服务与 RAG 共用 SourceRegistry/ArtifactStore，不另建互不关联的文件目录。
+
+| 对象 | 必要内容 |
+|---|---|
+| DocumentRef | artifact_id、workspace_id、原件版本与 hash、格式、解析/编辑能力 |
+| DocumentIR | 段落/表格/单元格/页面节点、原文位置、样式与单位、解析器版本、未覆盖内容 |
+| DraftProposal | 模型拟写内容、用户目标、证据引用、明确假设、未解决问题、model_proposed 标记 |
+| DocumentPatch | 目标原件、expected_revision/hash、有序 operations、目标 locator、预期旧值/文本、证据与操作范围 |
+| PatchPreview | 内容与布局差异、受影响对象、公式/字段变化、需要复核的点 |
+| ValidationReport | 结构、数值、来源、权限、布局各项状态；未检查项和使用的引擎版本 |
+
+Patch 内容可以由 DeepSeek 产生，但文件路径、允许范围、审批与原始证据由宿主管理。对输入方案采用 schema/大小/操作白名单检查，版本冲突返回 conflict，先重新读取当前文件再生成新方案；不能把旧方案盲目应用到新版本。
+
+执行链：`inspect → read → propose → validate_plan → preview → apply_to_copy → reopen/recalculate/render → validate → register/publish`。preview 可以自动生成，不表示每个低风险步骤都要额外问用户；用户明确要求的普通修改按其范围执行，原件保留。高风险工程承诺或超出原请求的副作用沿用具体授权流程。
+
+每个操作带 call_id 与幂等记录；取消后不发布迟到修改；写到暂存目录，成功登记为新版本。对于新建文档同样先形成可检查的 IR/内容块，经过验证和渲染，不把模型输出的一个路径或一句“文件已改好”当执行证据。
+
+模型建议分为用户事实的重述、工具结果的表述、可追溯推论、拟议写作内容。不同 trust 标签贯穿保存、索引和后续任务；派生文件不能在下一轮被当作独立证据反复支持自己的结论。
+
+## 6. LLM 和 Jev 在哪里真正参与工程
+
+| 工程任务 | DeepSeek 主/子代理工作 | Jev 决策点 | 确定性工具输出 |
+|---|---|---|---|
+| 招标要求 → 响应矩阵 → 技术标 | 分解条款、匹配响应位置、拟写缺项说明和修订段落 | 指定要求与候选响应是否直接对应、部分对应或需复核 | PDF 定位；Excel 矩阵；Word patch；引用与数值检查 |
+| 设计变更 → 工程量/费用说明 | 关联变更描述、原清单与新清单，提出受影响行和文字说明 | 两种描述是否指向同一对象；范围表述是否冲突 | 明确输入的数量/价差计算，Excel 更新和 Word 说明 |
+| 施工方案审阅与改稿 | 对照用户给定要求找遗漏、调整章节、拟写补充段落 | 段落是否覆盖某个明确要求、是否引入未提供条件 | 文档定位与补丁、事实/条款/数字校验、差异预览 |
+| 材料报审与采购比选 | 对齐供应商表头、归一规格表述、解释差异 | 候选规格的文字描述能否按明确规则对应，或需补证据 | 单位换算、数量价格比较、来源矩阵 |
+| 会议记录 → RFI/日报/任务表 | 提取事项、责任描述和未决问题，拟写函件与台账 | 某句话是已决定事项还是待讨论建议 | Excel 任务记录、Word 函件，日期与对象校验 |
+| 计算结果 → 工程报告 | 读取 CAD/结构/IFC 工具结果，撰写方法、范围、结果与限制 | 报告某段是否夸大工具覆盖范围，哪类事项需要复核 | 工具原值、图表、可编辑报告、附录和验证记录 |
+| 交付文件一致性 | 比较 PDF、Excel、Word 的对象、字段和叙述，生成修订方案 | 指定两段文字是否实质冲突、候选差异如何分类 | 数字/单位/版本对账、跨文件来源及差异清单 |
+
+这不是让 Jev 无条件介入每个单元格或每次保存。清晰的缺字段、金额加总、版本 hash、字段类型等由代码决定；只有语义有歧义、候选需要比较或证据需要分类时触发 Jev。一个复杂问题拆成若干明确的原子问题，结果由宿主组合，而不是让一次评分替代完整工程审查。
+
+Jev 的官方模型输出 Choice/Score/Noul 等结构化判断，不生成自由正文；内容起草和编辑方案由 DeepSeek 承担。候选 ID、问题版本与 evidence 映射由宿主构造，Jev 返回后只能映射到已有候选。[官方模型能力说明](https://docs.typesafe.ai/introduction)
+
+拟议决策记录：`decision_id、phase、question_version、context_hash、evidence_refs、candidate_ids、provider/model、answer、confidence_if_present、validation、chosen_next_action`。`abstain` 是宿主处理结果；低置信或矛盾转为待复核，不解释成“高置信所以可以自动签发”。关闭 Jev 时由 DeepSeek 提供建议并沿原检查流程运行，材料缺项仍保留。
+
+## 7. 一条完整的首期文档闭环
+
+任务示例：“根据这份 PDF 要求，检查 Excel 对应表，修改 Word 方案并列出改动。”
+
+1. 宿主绑定三个原件、版本和用户允许修改范围，检测文字 PDF/扫描页、公式/合并格、DOCX 结构与依赖。
+2. 主代理加载适用岗位与文件能力；资料子代理提取 PDF 要求并回读出处，文件子代理读取 Excel 范围及 Word 章节。它们只拿到必要资料，共享总预算。
+3. 主代理形成 RequirementMatrix：每条要求关联 PDF locator、Excel cell/range、Word block、待核项。LLM 提议的条款对应必须能回到原文。
+4. 对歧义项调用 Jev 分类：直接对应/部分对应/证据不足/冲突。复杂数值条件由工具计算，不能交给语义判断替代。
+5. DeepSeek 实际起草修改内容并输出 Word/Excel patch；有待补数据的地方保留待填，不能编造数量、责任人或审批结论。
+6. Rust 核对 patch 与授权/版本，工具生成副本和预览；按用户授权应用合法修改，必要的工程签认单独处理。
+7. 重新打开文件，Excel 需要时调用真实重算，Word/PDF 做布局检查；复核子代理解释差异和未覆盖项，硬检查失败不得被文字意见覆盖。
+8. 交付新文件、修改清单、引用矩阵及未解决项；保留原件，记录模型/工具/Jev 决策与产物 hash。
+
+验证这一闭环时，必须看到模型输出的拟写内容/补丁进入真实新版本，不能继续仅用模板导出或预设工具轨迹证明“LLM 会改文档”。这与 CAD 截面闭环并列验收，不能用其中一条代替另一条。
+
+## 8. 实施顺序、就绪状态和测试
+
+| 切片 | 要实现的完整能力 | 验收依据 |
+|---|---|---|
+| A：共享能力注册与定位读取 | 四项技能目录、工具需求、原件版本、三类 DocumentIR | 模型实际加载正确技能，能定位页/块/单元格；缺依赖明确未就绪 |
+| B：Word/Excel 真修改 | 模型 DraftProposal/Patch、范围与版本校验、预览、新版本、差异 | 修改指定段落/单元格，范围外内容保留；模型拟写内容实际落入文件 |
+| C：PDF 修改与文件验收 | 批注、表单、页面操作；明确支持的正文区域编辑或源文件再导出；重算/渲染 | 操作能力逐项验证，文字回读及布局与请求一致；不支持部分明确拒绝 |
+| D：跨文件与 Jev | 要求矩阵、证据映射、受限判断、主/子代理协作 | 上述八步端到端通过；Jev 关闭仍完成，影子评测记录可比较 |
+
+当前基础设施设计中的预算、RAG、sandbox、取消和事件适用于以上所有阶段。文档操作只通过固定工具与后端，不需要开放通用 shell/任意代码执行来实现“LLM 会编辑”。
+
+验收样本至少包含：文字/扫描 PDF；跨页表格和错误 OCR；有合并表头的 Excel；公式与缓存值不同；范围外受保护内容；DOCX 图片/编号/页眉页脚/合并表格；原件版本冲突；模型错误引用；无来源数字；取消中途编辑；三种格式中的互相矛盾字段。结构检查和视觉检查分别报告，未执行重算或渲染不得记为通过。
+
+本轮验证在独立固定快照中完成：`scripts.test_document_text` 与 `scripts.test_word_export` 共 **27/27 通过**；`scripts/test_office_job.py` 输出 **PASS office_job**。这些验证现有文字/表格抽取、DOCX 结构生成和既有 Excel 草稿页行为；未证明通用读改技能、任意工作簿保真、PDF 编辑、布局渲染、公式重算或真实 LLM/Jev 调用已完成。测试禁用 dotenv/模型凭证并限制外部网络，未改活动源码。
+
+架构设计的完成状态：三类文件已有/缺失能力已核对；四项共享技能、编辑协议、LLM/Jev 分工、七类工程任务、端到端闭环与验收已定义。运行时实现状态：尚未新增上述技能或工具，真实模型验收待实现后执行。

@@ -306,7 +306,7 @@ test("stop requests backend cancellation and keeps the stream open for actual sa
   const h = ui(async (url, options) => {
     if (url.endsWith("/cancel")) {
       requested = url;
-      return { ok: true, json: async () => ({ cancel_requested: true, state: "cancelling" }) };
+      return { ok: true, json: async () => ({ cancel_requested: true, cancelled: false, state: "cancelling" }) };
     }
     signal = options.signal;
     return { ok: true, body: new ReadableStream({ start(controller) { stream = controller; } }) };
@@ -318,6 +318,11 @@ test("stop requests backend cancellation and keeps the stream open for actual sa
   assert.equal(requested, `/api/sessions/${session}/cancel`);
   assert.equal(signal.aborted, false);
   assert.equal(h.elements.stop.disabled, true);
+  stream.enqueue(encoder.encode(frame("status", { phase: "cancelling", text: "等待已开始的文件操作结束" })));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.elements.form["aria-busy"], "true");
+  assert.match(h.announcements.at(-1), /已请求停止/);
+  assert.equal(h.errors.length, 0);
   stream.enqueue(encoder.encode(frame("done", { text: "已停止，已有文书保留", cancelled: true, ok: false,
     deliverables: [{ name: "first.docx", path: "saved.docx" }] })));
   stream.close();

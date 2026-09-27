@@ -11,8 +11,10 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
+import time
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -144,7 +146,32 @@ class AppLauncherTests(unittest.TestCase):
         self.browser.assert_not_called()
 
     def test_http_failure_is_not_considered_ready(self) -> None:
-        with patch.object(launcher, "_server_command", side_effect=fixture_command("unhealthy")):
+        wait_for_health = launcher._wait_for_health
+
+        def wait_after_fixture_responds(server, *, timeout):
+            # This case checks rejection of an actual HTTP failure. Process cold
+            # startup has a separate budget so a busy machine does not turn it
+            # into the connection-timeout case tested above.
+            deadline = time.monotonic() + 10
+            opener = build_opener(ProxyHandler({}))
+            while True:
+                self.assertIsNone(server.process.poll(), "HTTP fixture exited before responding")
+                self.assertLess(time.monotonic(), deadline, "HTTP fixture never responded")
+                try:
+                    with opener.open(server.url + "/api/health", timeout=0.5):
+                        self.fail("Unhealthy fixture unexpectedly returned a successful status")
+                except HTTPError as response:
+                    with response:
+                        self.assertEqual(response.code, 503)
+                        self.assertEqual(response.headers[launcher.LAUNCH_HEADER], server.launch_id)
+                        self.assertTrue(json.load(response)["ok"])
+                    break
+                except (URLError, OSError):
+                    time.sleep(0.02)
+            return wait_for_health(server, timeout=timeout)
+
+        with patch.object(launcher, "_server_command", side_effect=fixture_command("unhealthy")), \
+             patch.object(launcher, "_wait_for_health", side_effect=wait_after_fixture_responds):
             with self.assertRaisesRegex(launcher.AppLaunchError, "HTTP 503"):
                 launcher.start_workbench(free_port(), startup_timeout=1.5)
         self.assert_children_stopped()

@@ -25,7 +25,7 @@ MAX_RUNS = 512
 MANIFEST_LIMIT = 8 * 1024 * 1024
 _FILE = re.compile(r"files/[0-9]{6}\.bin\Z")
 _EXTENSIONS = {".md", ".txt", ".json", ".csv", ".log", ".docx", ".xlsx", ".pdf"}
-_CONFIRM = "我明白，将由持证人员签认"
+from packing_assistant.runtime.civil_config import scrub_confirmations  # noqa: E402
 _HISTORICAL_NOTE = "从备份恢复的历史协作，结论未核验；仅供查看，不续跑，不代表当前授权。"
 
 
@@ -66,7 +66,7 @@ def _import_jurisdiction(transcript: list[dict]) -> str:
 def _text(value, limit=16000):
     if not isinstance(value, str) or len(value) > limit:
         raise BundleError("备份协作文字格式或长度无效")
-    return value.replace(_CONFIRM, "[历史确认不生效]")
+    return scrub_confirmations(value, "[历史确认不生效]")
 
 
 def _rows(value, limit=512):

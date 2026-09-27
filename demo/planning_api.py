@@ -53,7 +53,9 @@ class BundleExportIn(eng.RevisionIn):
 def store():
     from demo.config import REPO_ROOT
     from packing_assistant.engineering.planning_records import PlanningStore
-    return PlanningStore(REPO_ROOT)
+    import os
+    from pathlib import Path
+    return PlanningStore(Path(os.environ.get("CIVIL_DOMAIN_WORKSPACE", str(REPO_ROOT))))
 
 
 def example():
@@ -173,7 +175,7 @@ async def export_project(ident: str, request: Request):
     from packing_assistant.engineering.planning_bundle import export_bundle
     body = await cad.read_json(request, BundleExportIn)
     cad.require_export_permission()
-    if body.confirmation != cad.CONFIRMATION:
+    if not cad.is_confirmation(body.confirmation, strip=False):
         raise HTTPException(403, "导出项目前请完整输入现有签认确认句。")
     def work():
         payload = eng.storage_call(export_bundle, store(), ident, body.expected_revision)
@@ -265,7 +267,7 @@ async def export(request: Request):
     from packing_assistant.engineering.planning_exchange import export_plan
     body = await cad.read_json(request, ExportIn)
     cad.require_export_permission()
-    if body.confirmation != cad.CONFIRMATION:
+    if not cad.is_confirmation(body.confirmation, strip=False):
         raise HTTPException(403, "导出前请完整输入现有签认确认句。")
 
     def work():

@@ -411,7 +411,7 @@ def g3_deliverable(post: str, cfg: dict) -> dict:
     try:
         result = _run_exclusive(post, cfg, cfg["g3_args"])
     except Exception as e:  # 离线跑不起来：降级 schema-only，不许造假绿
-        return {"pass": True, "mode": "schema-only", **struct, "detail": f"exclusive 离线不可跑（{type(e).__name__}），降级结构断言"}
+        return {"pass": False, "mode": "execution-unavailable", **struct, "detail": f"exclusive 离线不可跑（{type(e).__name__}），未完成运行验证"}
     md_path = _md_path(result)
     if not result.get("wrote") or not md_path:
         return {"pass": False, **struct, "detail": f"wrote={result.get('wrote')} md 缺失 reply={result.get('reply')}"}
@@ -430,7 +430,7 @@ def g4_honesty(post: str, cfg: dict) -> dict:
     try:
         result = _run_exclusive(post, cfg, {"text": "", **{k: v for k, v in cfg["g3_args"].items() if k == "confirm_ok"}})
     except Exception as e:
-        return {"pass": True, "mode": "schema-only", "detail": f"exclusive 离线不可跑（{type(e).__name__}），降级结构断言"}
+        return {"pass": False, "mode": "execution-unavailable", "detail": f"exclusive 离线不可跑（{type(e).__name__}），未完成运行验证"}
     md_path = _md_path(result)
     if not md_path:
         return {"pass": False, "detail": f"空输入未产出 md reply={result.get('reply')}"}
@@ -476,7 +476,7 @@ def print_table(rows: list[dict]) -> None:
     print("-" * 64)
     for r in rows:
         g = r["gates"]
-        cells = "".join(("P" if g[k]["pass"] else "F") + "".join(" " for _ in range(3)) for k in ("G1_intent", "G2_kb", "G3_deliverable", "G4_honesty"))
+        cells = "".join(("P" if g.get(k, {}).get("pass", False) else "F") + "".join(" " for _ in range(3)) for k in ("G1_intent", "G2_kb", "G3_deliverable", "G4_honesty"))
         print(f"{r['post']:<16}{r['mode']:<12}{cells}{'PASS' if r['pass'] else 'FAIL':<6}{r['secs']}s")
     print("-" * 64)
 

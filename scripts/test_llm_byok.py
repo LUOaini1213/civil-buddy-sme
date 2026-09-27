@@ -57,7 +57,7 @@ def main() -> int:
     ds = _with_env({"DEEPSEEK_API_KEY": "sk-ds"})
     assert ds["api_key"] == "sk-ds"
     assert "deepseek" in ds["base_url"], ds
-    assert ds["model"] == "deepseek-v4-flash"
+    assert ds["model"] == "deepseek-flash"
 
     civil = _with_env(
         {

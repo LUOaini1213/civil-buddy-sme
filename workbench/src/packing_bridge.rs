@@ -188,6 +188,8 @@ pub fn pretty_path(p: &std::path::Path) -> String {
 }
 
 pub fn run_table(path: &std::path::Path, notes: &str) -> Result<PackingSummary, String> {
+    use std::io::Read;
+
     let base = url_configured().ok_or_else(|| "未配置装箱网关地址".to_string())?;
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(240))
@@ -195,17 +197,57 @@ pub fn run_table(path: &std::path::Path, notes: &str) -> Result<PackingSummary, 
         .build()
         .map_err(|e| e.to_string())?;
 
-    // 1) 路径 → materials
-    let parse_url = format!("{base}/api/table/parse/json");
+    // 1) The host has already authorized this user-selected path. Upload the
+    // bounded bytes so the domain worker does not need arbitrary file access.
+    const MAX_TABLE_BYTES: u64 = 20 * 1024 * 1024;
+    let extension = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !matches!(
+        extension.as_str(),
+        "csv" | "tsv" | "txt" | "xlsx" | "xlsm" | "json" | "pdf"
+    ) {
+        return Err("材料表格式不支持；请选择 CSV、TSV、TXT、XLSX、XLSM、JSON 或 PDF".into());
+    }
+    let file = std::fs::File::open(path).map_err(|e| format!("无法读取材料表：{e}"))?;
+    if file.metadata().map_err(|e| e.to_string())?.len() > MAX_TABLE_BYTES {
+        return Err("材料表超过20MiB，请拆分后上传".into());
+    }
+    let mut table = Vec::new();
+    file.take(MAX_TABLE_BYTES + 1)
+        .read_to_end(&mut table)
+        .map_err(|e| format!("材料表读取失败：{e}"))?;
+    if table.len() as u64 > MAX_TABLE_BYTES {
+        return Err("材料表超过20MiB，请拆分后上传".into());
+    }
+    let boundary = format!("civil-table-{}", uuid::Uuid::new_v4());
+    let mut upload = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload.{extension}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+    ).into_bytes();
+    upload.extend_from_slice(&table);
+    upload.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let parse_url = format!("{base}/api/table/parse");
     let resp = client
         .post(&parse_url)
-        .json(&json!({"path": path.to_string_lossy()}))
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(upload)
         .send()
         .map_err(|e| format!("表解析请求失败：{e}"))?;
     if !resp.status().is_success() {
         return Err(format!("表解析 HTTP {}", resp.status()));
     }
     let parsed: Value = resp.json().map_err(|e| e.to_string())?;
+    if parsed.get("ok").and_then(Value::as_bool) == Some(false) {
+        return Err(format!(
+            "材料表需要补全后才能装箱：{}",
+            parsed.get("errors").unwrap_or(&Value::Null)
+        ));
+    }
     let mats = parsed
         .get("materials")
         .and_then(|v| v.as_array())

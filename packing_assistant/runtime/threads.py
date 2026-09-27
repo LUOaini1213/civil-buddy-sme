@@ -23,7 +23,8 @@ from typing import Any, Dict, List, Optional, Set
 from uuid import uuid4
 
 _ROOT = Path(__file__).resolve().parents[2]
-_DIR = _ROOT / "demo" / "out" / "_threads"
+from packing_assistant.runtime.paths import default_out_root
+_DIR = default_out_root(_ROOT) / "_threads"
 _LOCK = Lock()
 _POOL: Optional[ThreadPoolExecutor] = None
 _ACTIVE: Set[str] = set()
@@ -183,7 +184,7 @@ def new_thread(title: str = "", *, confirm: bool = False, worktree: str = "") ->
         thread_id=tid,
         session_id=tid,
         title=(title or "新对话").strip()[:80],
-        confirm=confirm is True,
+        confirm=False,  # approvals belong to an operation, never to a persisted thread
         worktree=(worktree or "").strip(),
     )
     save_thread(th)
@@ -212,7 +213,7 @@ def _run_on_thread(th: CivilThread, text: str, *, skill: str, confirm: bool, app
                 text,
                 session_id=th.session_id,
                 skill=skill,
-                confirm=confirm is True or th.confirm is True,
+                confirm=confirm is True,
                 history=load_rollout(th.thread_id),
                 approve=approve,
             )
@@ -254,6 +255,7 @@ def run_on_thread(
         if thread_id in _ACTIVE:
             return {"ok": False, "error": "thread is busy", "error_code": "thread_busy", "thread_id": thread_id}
         _ACTIVE.add(thread_id)
+        th.confirm = False  # discard legacy thread-wide approval before any new operation
         th.state = "running"
         th.last_text = text
         th.last_reply = ""

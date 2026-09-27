@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#2563eb" />
   <link rel="manifest" href="/static/manifest.webmanifest" />
   <link rel="icon" href="/static/icons/cb-icon.svg" type="image/svg+xml" />
-  <title>装箱拼柜 · Team Mode</title>
+  <title>装箱拼柜 · Civil Buddy</title>
   <!-- ux(round4)：零 CDN——Vue/marked/文书预览组件全部同源 vendored（frontend/vendor/） -->
   <script src="/static/vendor/vue.min.js"></script>
   <style>
@@ -2149,6 +2149,34 @@ button.danger { background: var(--cb-red); box-shadow: none; }
 .composer-row button { flex: none; font-size: 12px; padding: 6px 12px; }
 
   </style>
+  <script>
+  if (/^\/packing(?:\/|$)/.test(window.location.pathname)) {
+    document.documentElement.classList.add('cb-unified-packing');
+    for (const href of ['/static/theme.css?v=unified1', '/static/workbench-shell.css?v=unified1']) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = href;
+      document.head.appendChild(link);
+    }
+    const sharedTheme = document.createElement('script');
+    sharedTheme.src = '/static/theme.js?v=unified1';
+    document.head.appendChild(sharedTheme);
+  }
+  </script>
+  <style>
+    .cb-unified-packing .topbar.cb-app-header { flex-direction: row; gap: 0; align-items: stretch; padding: 14px 24px 0; }
+    .cb-unified-packing .topbar-row { flex: 0 0 100%; width: 100%; padding: 0 0 12px; }
+    .cb-unified-packing .topbar-row.secondary { padding: 0 0 8px; }
+    .cb-unified-packing .cb-app-brand h1 { margin: 0; font: inherit; color: var(--cb-text); }
+    .cb-unified-packing .cb-app-brand small { font-size: 11px; }
+    .cb-unified-packing .top-actions { margin-left: auto; }
+    .cb-unified-packing .top-actions a.soft { border-radius: var(--cb-radius-sm); }
+    .cb-unified-packing .cb-app-actions .primary-lg { background: var(--cb-blue); color: var(--cb-on-accent); border-color: transparent; }
+    .cb-unified-packing .cb-app-nav { order: 2; }
+    @media (max-width: 768px) {
+      .cb-unified-packing .topbar.cb-app-header { padding: 12px 14px 0; }
+    }
+  </style>
   <!-- ux(round11) 主题/大字早应用：持久化值先于首帧落地，防 FOUC（VS Code settings pattern，附录 J）
        ux(round14)：暗色为默认主题（未选择时不再跟随系统；浅色仍可显式切换，参考图深炭色基线） -->
   <script>
@@ -2210,17 +2238,18 @@ button.danger { background: var(--cb-red); box-shadow: none; }
        :class="{ 'demo-simple': demoSimpleMode, 'no-result': !hasAnyResult, 'has-result': hasAnyResult }"
        data-demo-simple-mode="true">
     <!-- Top bar -->
-    <header class="topbar">
+    <header class="topbar" :class="{ 'cb-app-header': unifiedWorkbench }">
       <div class="topbar-row">
-        <div class="brand">
-          <div class="brand-mark">P</div>
+        <div class="brand" :class="{ 'cb-app-brand': unifiedWorkbench }">
+          <div class="brand-mark" :class="{ 'cb-app-mark': unifiedWorkbench }">{{ unifiedWorkbench ? 'CB' : 'P' }}</div>
           <div>
-            <h1>装箱拼柜 · Team Mode</h1>
-            <div class="tag tag-full">大 Team⊃A/B · {{ agentCount || 13 }} Agents · HITL · v{{ harnessVersion || '0.6.4' }}</div>
-            <div class="tag tag-simple">三步演示 · tools 定柜 · 人确认成箱</div>
+            <h1>{{ unifiedWorkbench ? 'Civil Buddy' : '装箱拼柜 · Team Mode' }}</h1>
+            <small v-if="unifiedWorkbench">装箱拼柜</small>
+            <div class="tag tag-full" v-if="!unifiedWorkbench">大 Team⊃A/B · {{ agentCount || 13 }} Agents · HITL · v{{ harnessVersion || '0.6.4' }}</div>
+            <div class="tag tag-simple" v-if="!unifiedWorkbench">三步演示 · tools 定柜 · 人确认成箱</div>
           </div>
         </div>
-        <div class="top-actions">
+        <div class="top-actions" :class="{ 'cb-app-actions': unifiedWorkbench }">
           <!-- ux(round8) 汉堡键：≤820 显示，展开左侧团队/岗位栏（.sidebar.mobile-open，附录 G） -->
           <button type="button" class="soft cb-nav-toggle" v-show="!demoSimpleMode" aria-label="展开或收起侧栏"
                   aria-expanded="false"
@@ -2230,9 +2259,9 @@ button.danger { background: var(--cb-red); box-shadow: none; }
           <!-- ux(round11) 主题/大字开关：cb_theme_v1 / cb_large_v1 持久化；图标=文字，与 demo 端同位（附录 J） -->
           <button type="button" id="cbThemeBtn" class="soft" title="切换深色/浅色主题（默认深色）" onclick="cbThemeToggle()">明</button>
           <button type="button" id="cbLargeBtn" class="soft" title="大字模式：全站字号放大一档" aria-pressed="false" onclick="cbLargeToggle()">大</button>
-          <a href="/" class="soft" style="text-decoration:none;display:inline-flex;align-items:center">投标应答</a>
+          <a v-if="!unifiedWorkbench" href="/" class="soft" style="text-decoration:none;display:inline-flex;align-items:center">投标应答</a>
           <!-- ux(round16) 回跳：装柜台此前是单向终点，只能按浏览器后退；回环地址属 R12 零外链白名单 -->
-          <a href="http://127.0.0.1:8765/" class="soft" title="回 Civil Buddy 66 岗工作台"
+          <a :href="unifiedWorkbench ? '/static/index.html' : 'http://127.0.0.1:8765/'" class="soft" title="回 Civil Buddy 66 岗工作台"
              style="text-decoration:none;display:inline-flex;align-items:center">回工作台</a>
           <span class="pill" v-if="loading || (streamProgress.done > 0 && streamProgress.total)">
             {{ streamProgress.done }}/{{ streamProgress.total || '—' }}
@@ -2300,7 +2329,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                 style="cursor:pointer" @click="mainTab='history'; loadPendingCheckpoints()">
             HITL {{ pendingCheckpoints.length }}
           </span>
-          <span class="pill" :class="wsStatus === 'live' ? 'ok' : (wsStatus === 'err' ? 'err' : '')">ws {{ wsStatus }}</span>
+          <span class="pill" :class="wsStatus === 'live' ? 'ok' : (wsStatus === 'err' ? 'err' : '')">{{ unifiedWorkbench ? '进度' : 'ws' }} {{ wsStatus }}</span>
           <span class="pill" v-if="result.container_plan && result.container_plan.can_fit != null"
                 :class="result.container_plan.can_fit ? 'ok' : 'err'">
             can_fit {{ result.container_plan.can_fit }}
@@ -2314,6 +2343,16 @@ button.danger { background: var(--cb-red); box-shadow: none; }
           </template>
         </div>
       </div>
+      <nav v-if="unifiedWorkbench" class="cb-app-nav" aria-label="工作台导航">
+        <a href="/static/index.html">工作台</a>
+        <a href="/static/agent.html">Agent</a>
+        <a href="/packing" aria-current="page">装箱拼柜</a>
+        <a href="/cad">CAD</a>
+        <a href="/engineering">工程计算</a>
+        <a href="/engineering/planning">施工计划</a>
+        <a href="/engineering/schedule">日期计划</a>
+        <a href="/engineering/routes">现场路线</a>
+      </nav>
       <div class="progress-track" v-if="loading || streamProgress.done">
         <div class="progress-fill" :style="{ width: streamProgress.pct + '%' }"></div>
       </div>
@@ -2678,7 +2717,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                     </div>
                     <div class="cb-apr-foot">
                       确认 / 驳回为显式决策，写入下方审计行 · <b>Esc、关闭 = 驳回，永不放行</b> ·
-                      <span class="cb-apr-confirm-phrase" v-if="cbAprRisk === 'high'">高风险岗须持证人员签认（确认句：「我明白，将由持证人员签认」，流程层已强制勾选门禁）</span>
+                      <span class="cb-apr-confirm-phrase" v-if="cbAprRisk === 'high'">高风险岗须持证人员签认（确认句：「我明白，将由持证人员签认」或 “I understand; a licensed person will sign this off.”，流程层已强制勾选门禁）</span>
                       <span v-else>状态已持久化，可安全关闭后 resume</span>
                     </div>
                   </div>
@@ -3902,7 +3941,8 @@ button.danger { background: var(--cb-red); box-shadow: none; }
   <script src="/static/vendor/cb-fix.js"></script>
   <script src="/static/vendor/cb-doc.js"></script>
   <script>
-    const API = '';
+    const CB_UNIFIED_PACKING = /^\/packing(?:\/|$)/.test(window.location.pathname);
+    const API = CB_UNIFIED_PACKING ? '/packing' : '';
 
     /* === ux(round3) 阶段时间线：事件→阶段映射（docs/ux/ux-design-spec.md 附录 B） ====
        8 阶段轨道（规范中文）：理解任务→召唤岗位→成箱→人工确认→拼柜→合规校核→落盘→收口。
@@ -4209,6 +4249,7 @@ window.CB_POSTS = [{"id":"bid-parse","name":"招标解析","aliases":["招标","
       },
       data() {
         return {
+          unifiedWorkbench: CB_UNIFIED_PACKING,
           userInput: '',
           /* ux(round2) 输入体验：@岗位补全浮层状态（数据源 /api/experts → 内嵌 CB_POSTS 兜底） */
           cbPostsList: [],
@@ -5682,7 +5723,7 @@ window.CB_POSTS = [{"id":"bid-parse","name":"招标解析","aliases":["招标","
           if (!d || !d.path) return;
           this.cbObStep(3); /* ux(round10)：文书预览打开 → 引导第 3 步打勾 */
           try {
-            const res = await fetch('/api/artifact?path=' + encodeURIComponent(d.path));
+            const res = await fetch(API + '/api/artifact?path=' + encodeURIComponent(d.path));
             const j = await res.json();
             if (!res.ok || !j.ok) throw new Error(j.detail || ('HTTP ' + res.status));
             window.cbDocOpen({
@@ -5870,7 +5911,7 @@ window.CB_POSTS = [{"id":"bid-parse","name":"招标解析","aliases":["招标","
         /* === ux(round2) 输入体验：@岗位补全 + Enter 语义（实现与 demo/static/app.js 同源镜像） === */
         async loadCbPosts() {
           try {
-            const res = await fetch('/api/experts');
+            const res = await fetch(API + '/api/experts');
             const dat = await res.json();
             this.cbPostsList = (dat.experts || []).map((e) => ({
               id: e.id, name: e.name, aliases: e.aliases || [], category_name: e.category_name || '',
@@ -6811,6 +6852,13 @@ window.CB_POSTS = [{"id":"bid-parse","name":"招标解析","aliases":["招标","
           this.wsStatus = 'off';
         },
         connectSessionWs(sessionId) {
+          // Unified host streams the active run via SSE and restores it over HTTP on reload.
+          // It deliberately does not open a second observer WebSocket.
+          if (CB_UNIFIED_PACKING) {
+            this.disconnectSessionWs();
+            this.wsStatus = 'SSE';
+            return;
+          }
           const sid = sessionId || this.sessionId;
           if (!sid || typeof WebSocket === 'undefined') return;
           this.disconnectSessionWs();

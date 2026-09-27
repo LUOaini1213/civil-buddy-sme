@@ -41,6 +41,27 @@ def _clean(result: dict) -> None:
     assert all(e == "input:input" for e in log["events"]), log["events"]
 
 
+def test_cancel_aborts_server_request_and_rejects_late_transcript(runs):
+    r = runs["cancelled_server_result_is_ignored"]
+    _clean(r)
+    assert r["requestId"]
+    assert f'/api/asr/{r["requestId"]}/cancel' in r["log"]["fetches"]
+    assert r["after"]["input"] == "" and r["after"]["btn"] == ""
+
+
+def test_cancel_while_mic_permission_pending_releases_late_stream(runs):
+    r = runs["cancelled_mic_start_releases_late_stream"]
+    _clean(r)
+    assert r["log"]["recorders"] == 0 and r["log"]["trackStops"] == 1
+    assert r["after"]["input"] == ""
+
+
+def test_cancelled_browser_callbacks_cannot_fill_draft(runs):
+    r = runs["cancelled_browser_result_is_ignored"]
+    _clean(r)
+    assert r["after"]["input"] == "" and r["after"]["btn"] == ""
+
+
 def test_server_path_fills_the_box_and_never_sends(runs):
     r = runs["server_fill_never_send"]
     _clean(r)

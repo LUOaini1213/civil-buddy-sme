@@ -159,7 +159,7 @@ def main() -> int:
         check(f"[{label}] bid-book §3 has no No Deviation row", not [d for d in dev if "No Deviation" in d],
               [d for d in dev if "No Deviation" in d])
         check(f"[{label}] packing row in bid-book reads Pending SME",
-              any("包装/装箱要求" in d and "Pending SME" in d for d in dev), dev[:3])
+              any("Packaging / crating requirements" in d and "Pending SME" in d for d in dev), dev[:3])   # the English label of 包装/装箱要求
         ho = pipe["handoff"]
         check(f"[{label}] handoff.workheads has CR16", "CR16" in (ho.get("workheads") or []), ho.get("workheads"))
         s9 = next((ln for ln in pipe["extract_table_markdown"].splitlines() if ln.startswith("- workhead:")), "")

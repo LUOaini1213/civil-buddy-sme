@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-CONFIRM = "我明白，将由持证人员签认"
+from packing_assistant.runtime.civil_config import CONFIRM, CONFIRM_EN  # noqa: E402,F401  (one definition)
 VERBS = ("tui", "exec", "app", "mcp", "serve", "skills", "resume", "help", "init", "status", "review", "sandbox", "plugin", "desktop")
 
 
@@ -122,7 +122,7 @@ def _print_out(out: dict, *, as_json: bool) -> int:
         file=sys.stderr,
     )
     if out.get("hitl_pending"):
-        print(f"approval 高风险写盘须确认句：{CONFIRM}", file=sys.stderr)
+        print(f"approval 高风险写盘须确认句：{CONFIRM}  |  sign-off sentence: {CONFIRM_EN}", file=sys.stderr)
     if out.get("thread_id"):
         print(f"thread {out.get('thread_id')}", file=sys.stderr)
     print(out.get("reply") or "")
@@ -146,7 +146,7 @@ def codex_event(event: Any) -> Optional[Dict[str, Any]]:
     if kind == "tool_result":
         return {"type": "item.completed", **base, "item": {"type": "tool_call", **payload}}
     if kind == "hitl":
-        return {"type": "approval.required", **base, "confirm_sentence": CONFIRM, **payload}
+        return {"type": "approval.required", **base, "confirm_sentence": CONFIRM, "confirm_sentence_en": CONFIRM_EN, **payload}
     if kind == "cancelled":
         return {"type": "turn.cancelled", **base, **payload}
     if kind == "plan":
@@ -178,7 +178,7 @@ def progress_line(event: Any) -> str:
     if kind == "tool_result" and not payload.get("ok", True):
         return f"  !! {payload.get('name')}: {payload.get('error_code')}"
     if kind == "hitl":
-        return f"  approval 高风险写盘须确认句：{CONFIRM}"
+        return f"  approval 高风险写盘须确认句：{CONFIRM}  |  sign-off sentence: {CONFIRM_EN}"
     if kind == "guard":
         parts = [label + "、".join(payload.get(key) or []) for key, label in (("untraced", "无出处的数字："), ("verdicts", "不该下的结论："))
                  if payload.get(key)]

@@ -16,7 +16,7 @@
   const REQUEST_TIMEOUT_MS = 90000;
   const CONSENT_KEY = "cb_voice_browser_consent_v1";
   const btn = document.getElementById("btnVoice");
-  const input = document.getElementById("input");
+  const input = document.getElementById((btn && btn.dataset.inputId) || "input");
   const statusEl = document.getElementById("voiceStatus");
   const interimEl = document.getElementById("voiceInterim");
   const labelEl = document.getElementById("voiceLabel"); // 麦克风图标旁的文字：空闲时为空，只显示图标
@@ -33,6 +33,25 @@
   let tick = null;
   let stopTimer = null;
   let recognition = null;
+  let generation = 0;
+  let activeRequest = null;
+  let supportsCancel = false;
+  const alive = (token) => token === generation;
+
+  function cancel(reason) {
+    const wasActive = phase !== "idle" || activeRequest || recorder || recognition;
+    generation += 1;
+    const pending = activeRequest; activeRequest = null;
+    if (recorder) { recorder.onstop = null; recorder.ondataavailable = null; if (recorder.state !== "inactive") recorder.stop(); recorder = null; }
+    if (recognition) { const old = recognition; recognition = null; old.onend = old.onresult = old.onerror = null; if (old.abort) old.abort(); else old.stop(); }
+    releaseMic(); chunks = []; interim(""); setPhase("idle");
+    if (pending) {
+      pending.abort.abort();
+      if (supportsCancel) fetch("/api/asr/" + encodeURIComponent(pending.id) + "/cancel", { method: "POST", keepalive: true }).catch(() => {});
+    }
+    say(wasActive ? reason || (pending && !supportsCancel ? "已取消回填；此服务未声明后台转写取消能力。" : "已取消语音草稿。") : "", "");
+  }
+  window.CivilBuddyVoice = { cancel };
 
   function say(text, kind) {
     if (!statusEl) return;
@@ -55,15 +74,15 @@
       text = "取消";
       btn.setAttribute("aria-label", "取消等待识别模型");
     } else {
-      text = phase === "transcribing" ? "识别中" : "";
-      btn.setAttribute("aria-label", "语音输入");
+      text = phase === "transcribing" ? "取消识别" : "";
+      btn.setAttribute("aria-label", phase === "transcribing" ? "取消语音识别" : "语音输入");
     }
     // 只改图标旁的文字，不碰按钮里的 SVG 图标
     if (labelEl) labelEl.textContent = text;
     btn.setAttribute("aria-pressed", phase === "recording" ? "true" : "false");
     btn.setAttribute("aria-busy", busy ? "true" : "false");
     // 忙的时候用 aria-disabled 而不是 disabled：按钮不失焦，点击由 phase 挡住
-    btn.setAttribute("aria-disabled", busy ? "true" : "false");
+    btn.setAttribute("aria-disabled", phase === "starting" ? "true" : "false");
     btn.classList.toggle("is-rec", phase === "recording");
     btn.disabled = mode === "none";
   }
@@ -102,7 +121,7 @@
   async function serverStatus() {
     try {
       const response = await fetch("/api/asr/status");
-      if (response.ok) return await response.json();
+      if (response.ok) { const info = await response.json(); supportsCancel = info.supports_cancel === true; return info; }
     } catch (_) {
       /* 服务没有这个接口（Rust 试用包）或断网 */
     }
@@ -117,8 +136,9 @@
   }
 
   /* 本机模型准备好了才开始录音：第一次要下载，下载时不录，免得说完了才发现识别不了 */
-  async function ensureReady() {
+  async function ensureReady(token) {
     let info = await serverStatus();
+    if (!alive(token)) return false;
     if (!info || !info.available) return false;
     if (info.state === "ready") return true;
     if (info.state === "failed") {
@@ -132,14 +152,16 @@
     } catch (_) {
       /* 下面的轮询会看到结果 */
     }
+    if (!alive(token)) return false;
     setPhase("preparing");
     say(info.state === "missing"
       ? "第一次使用要下载本机识别模型（约 460 MB），下载好之前先不录音。可以先打字；点「取消」不影响后台下载。"
       : "正在加载本机识别模型，几秒钟后开始录音。", "");
-    while (phase === "preparing") {
+    while (phase === "preparing" && alive(token)) {
       await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-      if (phase !== "preparing") return false; // 点了「取消」
+      if (phase !== "preparing" || !alive(token)) return false; // 点了「取消」
       info = await serverStatus();
+      if (!alive(token)) return false;
       if (info && info.state === "ready") {
         setPhase("starting");
         return true;
@@ -164,14 +186,17 @@
   }
 
   /* ---------- 本机识别：录音 → /api/asr ---------- */
-  async function startServer() {
+  async function startServer(token) {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
       say("浏览器不让本页录音：请用 http://127.0.0.1 或 https 打开工作台（局域网 http 地址拿不到麦克风）。", "warn");
       return;
     }
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const acquired = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!alive(token)) { acquired.getTracks().forEach((t) => t.stop()); return; }
+      stream = acquired;
     } catch (err) {
+      if (!alive(token)) return;
       say(micError(err), "warn");
       return;
     }
@@ -180,13 +205,13 @@
     chunks = [];
     recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
     recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-    recorder.onstop = sendServer; // 也覆盖麦克风被拔掉、权限被收回时录音自己停下的情况
+    recorder.onstop = () => { if (alive(token)) sendServer(token); }; // 麦克风自己停下也处理
     recorder.start();
     setPhase("recording");
     say("正在录音，说完再点一次「停止」。最长 " + MAX_SECONDS + " 秒。", "");
   }
 
-  async function sendServer() {
+  async function sendServer(token) {
     const blob = new Blob(chunks, { type: (recorder && recorder.mimeType) || "audio/webm" });
     releaseMic();
     chunks = [];
@@ -199,12 +224,15 @@
     setPhase("transcribing");
     say("本机识别中…", "");
     const abort = new AbortController();
+    const id = "voice-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+    activeRequest = { abort, id };
     const timer = setTimeout(() => abort.abort(), REQUEST_TIMEOUT_MS);
     try {
       const response = await fetch("/api/asr", {
-        method: "POST", headers: { "Content-Type": blob.type }, body: blob, signal: abort.signal,
+        method: "POST", headers: { "Content-Type": blob.type, "X-Civil-ASR-ID": id }, body: blob, signal: abort.signal,
       });
       const data = await response.json().catch(() => ({}));
+      if (!alive(token)) return;
       if (response.status >= 500) {
         // 本机识别运行出错：本页不再撞它，下一次改走浏览器识别
         serverBroken = true;
@@ -217,11 +245,12 @@
         say("已转成文字（本机识别，" + data.elapsed_seconds + " 秒）。请核对后再发送，不会自动发送。", "ok");
       }
     } catch (err) {
+      if (!alive(token)) return;
       const why = err && err.name === "AbortError" ? "识别超时" : (err && err.message) || "未知原因";
       say("识别失败：" + why, "warn");
     } finally {
       clearTimeout(timer);
-      setPhase("idle");
+      if (alive(token)) { activeRequest = null; setPhase("idle"); }
     }
   }
 
@@ -241,7 +270,7 @@
     return ok;
   }
 
-  function startBrowser() {
+  function startBrowser(token) {
     if (!browserConsent()) {
       say("已取消。本机识别需要在 Python 工作台安装 requirements-asr.txt。", "");
       return;
@@ -253,6 +282,7 @@
     let finalText = "";
     let failed = false;
     recognition.onresult = (event) => {
+      if (!alive(token)) return;
       let partial = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const piece = event.results[i][0].transcript;
@@ -263,6 +293,7 @@
       interim(finalText + partial);
     };
     recognition.onerror = (event) => {
+      if (!alive(token)) return;
       failed = true;
       const why = event.error === "not-allowed" ? "没有麦克风权限" :
         event.error === "network" ? "浏览器识别服务连不上（断网或所在网络无法访问）" :
@@ -270,6 +301,7 @@
       say("浏览器识别失败：" + why, "warn");
     };
     recognition.onend = () => {
+      if (!alive(token)) return;
       recognition = null;
       interim("");
       setPhase("idle");
@@ -307,23 +339,28 @@
       return;
     }
     if (phase === "preparing") {
-      setPhase("idle");
-      say("已取消等待，模型在后台继续准备。准备好后再点「语音」。", "");
+      cancel("已取消等待，模型在后台继续准备。准备好后再点「语音」。");
+      return;
+    }
+    if (phase === "transcribing") {
+      cancel();
       return;
     }
     if (phase !== "idle") return;
+    const token = ++generation;
     setPhase("starting"); // 同步占位：第一次 await 之前就挡住第二次点击，不会开出两个录音
     try {
       const current = await detectMode();
+      if (!alive(token)) return;
       if (current === "server") {
-        if (await ensureReady()) await startServer();
+        if (await ensureReady(token)) await startServer(token);
         return;
       }
-      if (current === "browser") return startBrowser();
+      if (current === "browser") return startBrowser(token);
       btn.title = "当前浏览器不支持语音识别，本机识别也未安装";
       say("语音输入不可用：本机未安装识别引擎，浏览器也不支持语音识别。", "warn");
     } finally {
-      if (phase === "starting") setPhase("idle");
+      if (alive(token) && phase === "starting") setPhase("idle");
     }
   });
 

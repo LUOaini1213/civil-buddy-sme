@@ -137,7 +137,7 @@ class Demo:
             return (f"heaviest container {f.get('max_gross_kg'):,} kg gross ({f.get('max_cargo_kg'):,} cargo + {f.get('container_tare_kg'):,} tare)"
                     f" vs limit {f.get('limit_kg'):,.0f} kg" + (f", margin {f.get('margin_kg'):,}" if f.get("margin_kg") is not None else ""))
         if kind == "crate_structure":
-            return f"{f.get('pending_design')} of {f.get('n_boxes')} crates pending detailed design (待详设)"
+            return f"{f.get('pending_design')} of {f.get('n_boxes')} crates pending detailed design"
         return f"not modelled -> {statement.get('owner')}"
 
     def link_turn(self, text: str, label: str) -> Dict[str, Any]:
@@ -154,7 +154,7 @@ class Demo:
         self.say("    inputs: " + " · ".join(f"{k} {(inputs.get(k) or {}).get('name')} sha256 {str((inputs.get(k) or {}).get('sha256'))[:12]}"
                                             for k in ("tender", "panel_list", "plan")))
         for s in link["statements"]:
-            self.say(f"    {s['id']} Clause {s.get('clause') or '-'} · {s['kind']} · {s['status']} · {self.figure(s)}")
+            self.say(f"    {s['id']} {s.get('cite') or 'Clause ' + (s.get('clause') or '-')} · {s['kind']} · {s['status']} · {self.figure(s)}")
         if record is not None:
             self.say(f"    link record: {self.rel(record)} (statement -> clause -> plan figures -> sha256 of tender, list, plan)")
         return {"out": out, "link": link, "record": record}
@@ -258,7 +258,7 @@ class Demo:
             self.say(f"    conservation (list -> crates): pieces {cons.get('pieces_in')} -> {cons.get('pieces_out')} · "
                      f"kg {cons.get('kg_in')} -> {cons.get('kg_out')} · {'ok' if cons.get('ok') else 'FAILED'}")
             self.say(f"    crate structure: pass {structure.get('pass')} · reinforce {structure.get('needs_reinforcement')} · fail "
-                     f"{structure.get('fail')} · 待详设 {structure.get('pending_design')} (the engine does not invent a pass)")
+                     f"{structure.get('fail')} · pending detailed design {structure.get('pending_design')} (the engine does not invent a pass)")
             plans[name] = plan
         control = self.without_notes(self.job / "inputs" / "facade_panels.xlsx")
         out = self.turn("packing", f"按 {control.name} 装柜，柜型 40HQ", "pack-ship", session=SESSION + "-control")
@@ -307,7 +307,7 @@ class Demo:
                                 "rows": {k: cells.get(k, [""])[0] for k in DAILY_ROWS}}
 
     def briefing(self) -> None:
-        from packing_assistant.civil import CONFIRM
+        from packing_assistant.civil import CONFIRM, CONFIRM_EN
 
         brief_text = (self.job / "inputs" / "wah_briefing_input.txt").read_text(encoding="utf-8").strip()
         out = self.turn("briefing", brief_text, "safety-brief", command="- < inputs/wah_briefing_input.txt")
@@ -315,7 +315,7 @@ class Demo:
         if not refused:
             self.errors.append("briefing: the high-risk post wrote without the sign-off sentence")
         self.say(f"  SIGN-OFF NEEDED HERE: 安全交底 is a high-risk post. It wrote nothing: a licensed person must type"
-                 f" 「{CONFIRM}」 (civil desktop / TUI dialog, or `civil exec --confirm` run by that person).")
+                 f" 「{CONFIRM}」 or \"{CONFIRM_EN}\" (civil desktop / TUI dialog, or `civil exec --confirm` run by that person).")
         brief = {"refused_without_sentence": refused, "written": False}
         if not self.sign:
             self.say("  This demo does not supply the sentence. To see the draft, the person reruns with --sign and types it.")
@@ -386,10 +386,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--sign", default="", help="the licensed person types the sign-off sentence here; never filled in for you")
     args = parser.parse_args(argv)
     sys.path.insert(0, str(ROOT))
-    from packing_assistant.civil import CONFIRM
+    from packing_assistant.civil import CONFIRM, CONFIRM_EN
+    from packing_assistant.runtime.civil_config import is_confirmation
 
-    if args.sign and args.sign.strip() != CONFIRM:
-        print(f"--sign must be the sentence exactly: {CONFIRM}", file=sys.stderr)
+    if args.sign and not is_confirmation(args.sign):
+        print(f"--sign must be one of the two sentences exactly: {CONFIRM} | {CONFIRM_EN}", file=sys.stderr)
         return 2
     try:
         result = run_demo(Path(args.job).expanduser().absolute() if args.job else None, sign=args.sign.strip())

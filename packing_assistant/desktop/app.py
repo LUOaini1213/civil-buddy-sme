@@ -21,7 +21,8 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from packing_assistant.desktop.controller import CONFIRM, DesktopController, DesktopError
+from packing_assistant.desktop.controller import CONFIRM, CONFIRM_EN, DesktopController, DesktopError
+from packing_assistant.runtime.civil_config import is_confirmation
 
 TITLE = "Civil Buddy · 土木版 Codex"
 _FONT = ("Microsoft YaHei UI", 10) if sys.platform == "win32" else ("PingFang SC", 12) if sys.platform == "darwin" else ("Noto Sans CJK SC", 10)
@@ -301,7 +302,7 @@ class CivilDesktop:
         dialog.resizable(False, False)
         ttk.Label(dialog, padding=(16, 14, 16, 4), font=_FONT, wraplength=440, justify="left",
                   text=f"「{request.get('name') or '本次任务'}」是高风险岗位（risk={request.get('risk')}），要写盘。\n"
-                       f"成稿只是内部讨论草稿，须由持证人员审核签认。\n\n同意，就原样输入确认句：\n{CONFIRM}").pack()
+                       f"成稿只是内部讨论草稿，须由持证人员审核签认。\n\n同意，就原样输入确认句：\n{CONFIRM}\n\nTo approve in English, type exactly:\n{CONFIRM_EN}").pack()
         typed = tk.StringVar()
         field = ttk.Entry(dialog, textvariable=typed, width=46, font=_FONT)
         field.pack(padx=16, pady=6)
@@ -309,7 +310,7 @@ class CivilDesktop:
         result = {"ok": False}
 
         def close(agree: bool) -> None:
-            result["ok"] = agree and CONFIRM in typed.get()
+            result["ok"] = agree and is_confirmation(typed.get())     # the field holds the sentence alone
             dialog.destroy()
 
         buttons = ttk.Frame(dialog, padding=(16, 6, 16, 14))

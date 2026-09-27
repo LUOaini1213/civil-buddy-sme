@@ -10,7 +10,7 @@ use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -130,7 +130,7 @@ async fn engine_fallback(State(st): State<Arc<AppState>>, req: axum::extract::Re
 }
 
 async fn index(State(st): State<Arc<AppState>>) -> Response {
-    let path = st.paths.static_dir.join("index.html");
+    let path = st.paths.static_dir.join(if std::env::var("CIVIL_UNIFIED_HOME").as_deref()==Ok("1"){ "agent.html" }else{ "index.html" });
     match tokio::fs::read(&path).await {
         Ok(bytes) => (
             [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
@@ -276,8 +276,13 @@ async fn projects_merge(
 
 async fn sessions_list(
     State(st): State<Arc<AppState>>,
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
     Query(q): Query<HashMap<String, String>>,
-) -> Json<Value> {
+) -> Response {
+    if let Some(engine) = &st.engine {
+        return engine.forward(reqwest::Method::GET,
+            uri.path_and_query().map(|v| v.as_str()).unwrap_or("/api/sessions"), None, Vec::new()).await;
+    }
     let pid = q.get("project_id").cloned().unwrap_or_default();
     let query = q.get("q").cloned().unwrap_or_default();
     let limit = q
@@ -285,11 +290,7 @@ async fn sessions_list(
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or_else(crate::projects::default_limit);
     let offset = q.get("offset").and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
-    Json(crate::projects::list_sessions(&st.paths, &pid, &query, limit, offset))
-}
-
-fn zip_bytes(name: &str, bytes: &[u8]) -> Vec<u8> {
-    zip_named(&[(name.to_string(), bytes.to_vec())])
+    Json(crate::projects::list_sessions(&st.paths, &pid, &query, limit, offset)).into_response()
 }
 
 fn zip_named(files: &[(String, Vec<u8>)]) -> Vec<u8> {
@@ -305,7 +306,9 @@ fn zip_named(files: &[(String, Vec<u8>)]) -> Vec<u8> {
 }
 
 fn require_sid(sid: &str) -> Result<String, ApiError> {
-    crate::projects::safe_session_id(sid).map_err(|e| err(StatusCode::BAD_REQUEST, e))
+    let clean = crate::projects::safe_session_id(sid).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    if clean != sid { return Err(err(StatusCode::BAD_REQUEST, "invalid session_id")); }
+    Ok(clean)
 }
 
 async fn session_cancel(State(st): State<Arc<AppState>>, AxPath(sid): AxPath<String>) -> Result<Response, ApiError> {
@@ -328,7 +331,7 @@ async fn session_cancel(State(st): State<Arc<AppState>>, AxPath(sid): AxPath<Str
         "ok": true,
         "session_id": sid,
         "cancel_requested": requested,
-        "cancelled": requested,
+        "cancelled": false,
         "active": requested,
         "state": if requested { "cancelling" } else { "idle" },
         "detail": if requested { "已请求停止本轮" } else { "当前没有进行中的回合" },
@@ -341,21 +344,21 @@ async fn session_export(
     AxPath(sid): AxPath<String>,
 ) -> Result<Response, ApiError> {
     let sid = require_sid(&sid)?;
-    let detail = crate::projects::session_detail(&st.paths, &sid)
-        .unwrap_or_else(|e| json!({"session_id": sid, "detail": e, "transcript": []}));
-    let body = serde_json::to_vec(&detail).unwrap_or_default();
-    let bytes = zip_bytes("session.json", &body);
-    Ok((
-        [
-            (axum::http::header::CONTENT_TYPE, "application/zip"),
-            (
-                axum::http::header::CONTENT_DISPOSITION,
-                "attachment; filename=\"civil-task.zip\"",
-            ),
-        ],
-        bytes,
-    )
-        .into_response())
+    let (flag, _) = crate::turns::try_begin(&sid).map_err(|_| err(StatusCode::CONFLICT,
+        "当前任务正在运行或取消中，请等待结束后备份"))?;
+    let _guard = crate::turns::Guard { sid: sid.clone(), flag: flag.clone() };
+    let engine = st.engine.as_ref().ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE,
+        "完整任务包需要 Python 工具引擎；未导出仅含聊天记录的不完整备份"))?;
+    let mut response = engine.forward(reqwest::Method::GET,
+        &format!("/api/sessions/{sid}/export"), None, Vec::new()).await;
+    if flag.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(err(StatusCode::CONFLICT, "备份已取消，请重试"));
+    }
+    if response.status().is_success() {
+        response.headers_mut().insert(axum::http::header::CONTENT_DISPOSITION,
+            axum::http::HeaderValue::from_static("attachment; filename=\"civil-task.zip\""));
+    }
+    Ok(response)
 }
 
 async fn skills_list() -> Json<Value> {
@@ -537,68 +540,33 @@ async fn deliverables_zip(State(st): State<Arc<AppState>>, Query(q): Query<ZipQ>
         .into_response())
 }
 
-fn zip_entry(bytes: &[u8], name: &str) -> Result<Vec<u8>, String> {
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .map_err(|_| "不是任务备份压缩包".to_string())?;
-    let mut file = archive
-        .by_name(name)
-        .map_err(|_| format!("压缩包里没有 {name}"))?;
-    let mut limited = std::io::Read::take(&mut file, 8 * 1024 * 1024 + 1);
-    let mut out = Vec::new();
-    std::io::Read::read_to_end(&mut limited, &mut out).map_err(|_| "备份读取失败".to_string())?;
-    if out.len() > 8 * 1024 * 1024 {
-        return Err("备份里的会话记录过大".into());
-    }
-    Ok(out)
-}
-
 async fn session_import(
     State(st): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     if body.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "备份包是空的"));
     }
-    let raw = zip_entry(&body, "session.json").map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-    let detail: Value = serde_json::from_slice(&raw)
-        .map_err(|_| err(StatusCode::BAD_REQUEST, "session.json 不是 JSON"))?;
-    let transcript = detail
-        .get("transcript")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let hex = Uuid::new_v4().simple().to_string();
-    let sid = format!("imp{}", &hex[..12]);
-    let title = detail
-        .get("title")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("导入的任务")
-        .to_string();
-    crate::projects::set_session_meta(&st.paths, &sid, None, Some(title.as_str()))
-        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-    for turn in transcript {
-        let role = turn.get("role").and_then(|v| v.as_str()).unwrap_or("");
-        if role != "user" && role != "assistant" {
-            continue;
-        }
-        let text = turn.get("text").and_then(|v| v.as_str()).unwrap_or("");
-        if text.trim().is_empty() {
-            continue;
-        }
-        crate::projects::append_turn(&st.paths, &sid, role, text);
-    }
-    Ok(Json(json!({"ok": true, "session_id": sid, "title": title})))
+    let engine = st.engine.as_ref().ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE,
+        "完整任务包需要 Python 工具引擎；未将旧包静默降级为聊天记录导入"))?;
+    let content_type = headers.get(axum::http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok());
+    // Preserve the complete binary body (and any multipart boundary). The bundle
+    // service alone validates the archive, restores sources/artifacts and resets approval.
+    Ok(engine.forward(reqwest::Method::POST, "/api/session-import", content_type, body.to_vec()).await)
 }
 
 async fn session_get(
     State(st): State<Arc<AppState>>,
     AxPath(sid): AxPath<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
+    let sid = require_sid(&sid)?;
+    if let Some(engine) = &st.engine {
+        return Ok(engine.forward(reqwest::Method::GET, &format!("/api/sessions/{sid}"), None, Vec::new()).await);
+    }
     let v = crate::projects::session_detail(&st.paths, &sid)
         .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
-    Ok(Json(v))
+    Ok(Json(v).into_response())
 }
 
 #[derive(Deserialize)]
@@ -624,7 +592,8 @@ async fn session_patch(
     Ok(Json(json!({"ok": true, "session": v})))
 }
 
-async fn health(State(st): State<Arc<AppState>>) -> Json<Value> {
+async fn health(State(st): State<Arc<AppState>>, identity: Option<Extension<Arc<crate::product::auth::InstanceAuth>>>) -> Json<Value> {
+    let identity = identity.map(|Extension(auth)| auth.capabilities()).unwrap_or_else(|| json!({"mode":"unprotected_legacy_router","authentication_required":false,"multi_tenant":false}));
     /* ux(round4)：probe() 走 reqwest::blocking，必须在 spawn_blocking 里跑——
        直接在 async 上下文 drop blocking runtime 会 panic 并截断 /api/health（同 round3 对 /api/chat 的修复）。 */
     let keyed = st.has_key();
@@ -648,7 +617,7 @@ async fn health(State(st): State<Arc<AppState>>) -> Json<Value> {
         "packing": packing_up,
         "attachments": true,
         "cancel": true,
-        "session_backup": true,
+        "session_backup": st.engine.is_some(),
         "skills": true,
         "mcp": true,
         "context": true,
@@ -661,7 +630,7 @@ async fn health(State(st): State<Arc<AppState>>) -> Json<Value> {
         "upload_url": true,
         "semantic_summary": false,
         "asr": false,
-        "auth": false,
+        "auth": identity["authentication_required"] == true,
         "cad": st.engine.is_some(),
         "logistics": st.engine.is_some(),
         "engineering": st.engine.is_some(),
@@ -673,6 +642,7 @@ async fn health(State(st): State<Arc<AppState>>) -> Json<Value> {
         "deepseek": keyed,
         "model": llm_model(),
         "capabilities": capabilities,
+        "identity": identity,
         "context": crate::context::Policy::from_env().to_value(),
         "harness": crate::harness::architecture(),
         "parse": probes["parse"],
@@ -685,10 +655,11 @@ async fn architecture() -> Json<Value> {
 }
 
 async fn eval_shadow(State(st): State<Arc<AppState>>, Json(body): Json<FirmBidIn>) -> Result<Json<Value>, ApiError> {
+    let confirmed = request_confirmation(body.confirm_ok, &body.confirm_text)?;
     let session = if body.session_id.is_empty() {
         Uuid::new_v4().simple().to_string().chars().take(12).collect()
     } else {
-        body.session_id.clone()
+        require_sid(&body.session_id)?
     };
     let args = json!({
         "project_name": body.project_name,
@@ -696,7 +667,7 @@ async fn eval_shadow(State(st): State<Arc<AppState>>, Json(body): Json<FirmBidIn
         "path": body.path,
         "brief": body.brief,
         "tender_text": body.brief,
-        "confirm_ok": body.confirm_ok,
+        "confirm_ok": confirmed,
     });
     let ticket = crate::harness::Ticket::from_args(&session, &args);
     Ok(Json(crate::harness::shadow_eval(&st.paths, ticket)))
@@ -744,6 +715,8 @@ struct ExpertRunIn {
     brief: String,
     #[serde(default)]
     confirm_ok: bool,
+    #[serde(default)]
+    confirm_text: String,
 }
 
 fn expert_ticket(session: &str, body: &ExpertRunIn) -> crate::harness::Ticket {
@@ -753,18 +726,19 @@ fn expert_ticket(session: &str, body: &ExpertRunIn) -> crate::harness::Ticket {
         "path": body.path,
         "brief": body.brief,
         "tender_text": body.brief,
-        "confirm_ok": body.confirm_ok,
+        "confirm_ok": body.confirm_text == "我明白，将由持证人员签认",
     });
     crate::harness::Ticket::from_args(session, &args)
 }
 
 async fn harness_expert(State(st): State<Arc<AppState>>, Json(body): Json<ExpertRunIn>) -> Result<Json<Value>, ApiError> {
+    request_confirmation(body.confirm_ok, &body.confirm_text)?;
     let exp = store::get_expert(&st.paths, &body.expert_id)
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "unknown expert"))?;
     let session = if body.session_id.is_empty() {
         Uuid::new_v4().simple().to_string().chars().take(12).collect()
     } else {
-        body.session_id.clone()
+        require_sid(&body.session_id)?
     };
     let ticket = expert_ticket(&session, &body);
     Ok(Json(crate::harness::run_turn(&st.paths, &exp, ticket).to_value()))
@@ -783,12 +757,13 @@ async fn eval_shadow_expert(
     State(st): State<Arc<AppState>>,
     Json(body): Json<ExpertRunIn>,
 ) -> Result<Json<Value>, ApiError> {
+    request_confirmation(body.confirm_ok, &body.confirm_text)?;
     let exp = store::get_expert(&st.paths, &body.expert_id)
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "unknown expert"))?;
     let session = if body.session_id.is_empty() {
         Uuid::new_v4().simple().to_string().chars().take(12).collect()
     } else {
-        body.session_id.clone()
+        require_sid(&body.session_id)?
     };
     let ticket = expert_ticket(&session, &body);
     Ok(Json(crate::harness::shadow_eval_expert(&st.paths, &exp, ticket)))
@@ -1118,20 +1093,31 @@ struct FirmBidIn {
     brief: String,
     #[serde(default)]
     confirm_ok: bool,
+    #[serde(default)]
+    confirm_text: String,
+}
+
+fn request_confirmation(legacy_flag: bool, text: &str) -> Result<bool, ApiError> {
+    let confirmed = text == "我明白，将由持证人员签认";
+    if legacy_flag && !confirmed {
+        return Err(err(StatusCode::UNPROCESSABLE_ENTITY, "confirm_ok cannot grant approval; type the exact confirmation in confirm_text for this request"));
+    }
+    Ok(confirmed)
 }
 
 async fn firm_bid(State(st): State<Arc<AppState>>, Json(body): Json<FirmBidIn>) -> Result<Json<Value>, ApiError> {
+    let confirmed = request_confirmation(body.confirm_ok, &body.confirm_text)?;
     let session = if body.session_id.is_empty() {
         Uuid::new_v4().simple().to_string().chars().take(12).collect()
     } else {
-        body.session_id.clone()
+        require_sid(&body.session_id)?
     };
     let args = json!({
         "project_name": body.project_name,
         "jurisdiction": body.jurisdiction,
         "path": body.path,
         "brief": body.brief,
-        "confirm_ok": body.confirm_ok,
+        "confirm_ok": confirmed,
     });
     let v = crate::firm::run_bid_job(&st.paths, &session, &args);
     if v.get("ok").and_then(|x| x.as_bool()) != Some(true) {
@@ -1156,6 +1142,8 @@ struct ChatIn {
     expert_ids: Vec<String>,
     #[serde(default)]
     confirm_ok: bool,
+    #[serde(default)]
+    confirm_text: String,
     #[serde(default)]
     session_id: String,
     #[serde(default)]
@@ -1194,7 +1182,17 @@ fn sse_offline_chat(text: String) -> Response {
         .into_response()
 }
 
-async fn chat(State(st): State<Arc<AppState>>, Json(body): Json<ChatIn>) -> Result<Response, ApiError> {
+async fn chat(State(st): State<Arc<AppState>>, Json(mut body): Json<ChatIn>) -> Result<Response, ApiError> {
+    let confirm_ok = request_confirmation(body.confirm_ok, &body.confirm_text)?;
+    let session = if body.session_id.is_empty() {
+        Uuid::new_v4().simple().to_string().chars().take(12).collect()
+    } else {
+        require_sid(&body.session_id)?
+    };
+    let (turn_flag, turn_notify) = crate::turns::try_begin(&session)
+        .map_err(|_| err(StatusCode::CONFLICT, "这个会话正在运行、取消或备份，请等待结束后重试"))?;
+    let turn_guard = crate::turns::Guard { sid: session.clone(), flag: turn_flag.clone() };
+    body.session_id = session.clone();
     if let Some(engine) = &st.engine {
         if chat_needs_python_tools(
             &body.message,
@@ -1230,12 +1228,6 @@ async fn chat(State(st): State<Arc<AppState>>, Json(body): Json<ChatIn>) -> Resu
         }
         // Run/Both: exclusive steps do not need a live model.
     }
-    let session = if body.session_id.is_empty() {
-        let raw = Uuid::new_v4().simple().to_string();
-        raw.chars().take(12).collect()
-    } else {
-        body.session_id.clone()
-    };
     let _ = std::fs::create_dir_all(&st.paths.out_root);
     let mut ids: Vec<String> = body
         .expert_ids
@@ -1269,7 +1261,7 @@ async fn chat(State(st): State<Arc<AppState>>, Json(body): Json<ChatIn>) -> Resu
     let mut fetch_notes: Vec<String> = Vec::new();
     if intent != crate::agent::Intent::Chat && !attach::addresses_in(&body.message).is_empty() {
         let (paths, sess, msg) = (st.paths.clone(), session.clone(), body.message.clone());
-        if let Ok((ids, notes)) = tokio::task::spawn_blocking(move || attach::import_addresses(&paths, &sess, &msg)).await {
+        if let Ok((ids, notes)) = crate::turns::blocking(&session, move || attach::import_addresses(&paths, &sess, &msg)).await {
             for id in ids {
                 if !attachment_ids.contains(&id) {
                     attachment_ids.push(id);
@@ -1289,7 +1281,6 @@ async fn chat(State(st): State<Arc<AppState>>, Json(body): Json<ChatIn>) -> Resu
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(32);
     let st2 = st.clone();
     let llm = st.llm.clone();
-    let confirm_ok = body.confirm_ok;
     /* ux(round19) 会话索引与对话落盘：在 send 闭包里截 done 事件取回复，spawn 收尾时
        统一写一次 —— chat 有三条出口（run_plain / firm / 专家循环），逐个挂钩必漏。
        全部失败吞掉：绝不因索引写不动而阻断 SSE。 */
@@ -1303,13 +1294,8 @@ async fn chat(State(st): State<Arc<AppState>>, Json(body): Json<ChatIn>) -> Resu
     let files_send = files_acc.clone();
     let run_acc = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     let run_send = run_acc.clone();
-    let (turn_flag, turn_notify) = crate::turns::begin(&session);
-    let turn_sid = session.clone();
     tokio::spawn(async move {
-        let _turn = crate::turns::Guard {
-            sid: turn_sid,
-            flag: turn_flag.clone(),
-        };
+        let _turn = turn_guard;
         let send = move |ev: agent::EventOut| {
             let (name, data) = ev;
             if name == "done" {
@@ -1386,7 +1372,7 @@ async fn chat(State(st): State<Arc<AppState>>, Json(body): Json<ChatIn>) -> Resu
                 let run_v = {
                     let st3 = st2.clone();
                     let session3 = session.clone();
-                    match tokio::task::spawn_blocking(move || {
+                    match crate::turns::blocking(&session, move || {
                         crate::firm::run_bid_job(&st3.paths, &session3, &args)
                     })
                     .await
@@ -1450,10 +1436,14 @@ async fn chat(State(st): State<Arc<AppState>>, Json(body): Json<ChatIn>) -> Resu
             }
             Ok::<(), llm::LlmError>(())
         };
+        let mut was_cancelled = false;
         let result = tokio::select! {
+            biased;
             _ = crate::turns::cancelled(&turn_flag, &turn_notify) => {
-                let payload = json!({"cancelled": true, "ok": false, "text": "已停止，已有结果已保留。"}).to_string();
-                let _ = tx_cancel.send(Ok(Event::default().event("done").data(payload))).await;
+                was_cancelled = true;
+                let payload = json!({"phase":"cancelling","text":"已请求停止，正在等待已开始的文件操作结束。"}).to_string();
+                let _ = tx_cancel.send(Ok(Event::default().event("status").data(payload))).await;
+                crate::turns::wait_for_blocking(&session, &turn_flag).await;
                 Ok(())
             }
             result = result => result,
@@ -1485,6 +1475,10 @@ async fn chat(State(st): State<Arc<AppState>>, Json(body): Json<ChatIn>) -> Resu
             }
         })
         .await;
+        if was_cancelled {
+            let payload = json!({"cancelled":true,"ok":false,"text":"已停止，已开始的文件操作已结束，已有结果保留待核查。"}).to_string();
+            let _ = tx_cancel.send(Ok(Event::default().event("done").data(payload))).await;
+        }
     });
 
     Ok(Sse::new(ReceiverStream::new(rx))
@@ -1492,8 +1486,14 @@ async fn chat(State(st): State<Arc<AppState>>, Json(body): Json<ChatIn>) -> Resu
         .into_response())
 }
 
-async fn file_get(State(st): State<Arc<AppState>>, Query(q): Query<HashMap<String, String>>) -> Result<Response, ApiError> {
+async fn file_get(State(st): State<Arc<AppState>>, axum::extract::OriginalUri(uri): axum::extract::OriginalUri, Query(q): Query<HashMap<String, String>>) -> Result<Response, ApiError> {
     let raw = q.get("path").cloned().unwrap_or_default();
+    if raw.is_empty() {
+        if let Some(engine) = &st.engine {
+            return Ok(engine.forward(reqwest::Method::GET,
+                uri.path_and_query().map(|v| v.as_str()).unwrap_or("/api/file"), None, Vec::new()).await);
+        }
+    }
     let target = PathBuf::from(&raw);
     let target = target.canonicalize().map_err(|_| err(StatusCode::NOT_FOUND, "missing"))?;
     let root = st
@@ -1506,6 +1506,10 @@ async fn file_get(State(st): State<Arc<AppState>>, Query(q): Query<HashMap<Strin
     }
     if !target.is_file() {
         return Err(err(StatusCode::NOT_FOUND, "missing"));
+    }
+    if let Some(engine) = &st.engine {
+        return Ok(engine.forward(reqwest::Method::GET,
+            uri.path_and_query().map(|v| v.as_str()).unwrap_or("/api/file"), None, Vec::new()).await);
     }
     let bytes = tokio::fs::read(&target)
         .await

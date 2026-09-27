@@ -79,7 +79,7 @@ submit_blocked=true  secret_leak=false  禁止：可以投标 / 可以开工
 | 端到端金线 | 8/8（R13 时点实测，需 playwright，未进 CI） | `python scripts/r13_golden_path_e2e.py` |
 
 **试用（源码）** — `pip install -r requirements.txt` → `python -m packing_assistant.civil app`（浏览器工作台 :8765）；或先跑离线 demo：`python scripts/demo_facade.py`（全部输入为合成夹具）。要看装柜台：`uvicorn gateway.app:app --host 127.0.0.1 --port 8000`。边界见 [TRY.md](TRY.md)。
-旧的 Rust 零编译试用包（v0.4.0-workbench）早于安全基线 #61（合并提交 `d3ada11`），仍接受 `confirm_ok` 标志，属于 legacy，本仓不提供该发布。
+旧的 Rust 试用包（v0.4.0-workbench）早于本轮改进，不作为当前源码的验收证据。新比赛仓库为 `LUOaini1213/civil-buddy-sme`；当前统一入口与身份隔离见[统一工作台](docs/civil-buddy/unified-workbench.md)和[交接指南](docs/civil-buddy/release-handoff.md)。
 
 **提交署名说明** — 截至 `cab9249`，`main` 上 447 个提交里有 98 个（约 22%）署名为 `Packing Assistant`（`git log --format=%an | sort | uniq -c`）：agent 起草并落盘的改动独立署名，经人审后合入 `main`。这是 HITL 流程的一部分，不是第二位作者。
 
@@ -101,7 +101,7 @@ submit_blocked=true  secret_leak=false  禁止：可以投标 / 可以开工
 
 ### 1) Civil Buddy 工作台
 
-主入口是 Python 工作台：`python -m packing_assistant.civil app`。下面的 Rust 工作台是 **legacy**：它早于安全基线 #61，仍接受 `confirm_ok` 标志（`workbench/src/api.rs:1292`、`workbench/src/mcp.rs:173-176`），不要把它当作高风险岗位的安全入口部署。
+Python 工作台继续可用：`python -m packing_assistant.civil app`。当前 Rust 统一工作台通过 `scripts/start_unified_workbench.py` 同时启动主程序和固定 Python 工具服务；具名实例使用独立工程、状态与端口。高风险 HTTP 操作校验本次输入的确认句，MCP 参数不能提供签认。旧版二进制不可替代本轮源码验收。
 
 ```powershell
 cd workbench

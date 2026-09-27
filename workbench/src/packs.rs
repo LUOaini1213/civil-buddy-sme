@@ -3267,7 +3267,7 @@ fn pack_ship_export(args: &Value) -> String {
 /// ux(round20)：从用户文本里找表格路径（.xlsx/.xlsm/.csv/.tsv）。
 /// 认 Windows 反斜杠与正斜杠、带引号、中文文件名；只取第一个命中。
 /// 这里**只负责找**；能不能读由 attach::allow_local_path 判。
-fn find_table_path(text: &str) -> Option<String> {
+pub(crate) fn find_table_path(text: &str) -> Option<String> {
     for tok in text.split(|c: char| {
         c == '\n' || c == '\r' || c == '\t' || c == ' ' || c == '\u{ff0c}' || c == '\u{3002}'
     }) {

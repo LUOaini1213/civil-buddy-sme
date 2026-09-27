@@ -19,6 +19,8 @@ pub mod session_surface;
 pub mod turns;
 pub mod packs;
 pub mod rag;
+pub mod runtime_core;
+pub mod product;
 pub mod store;
 pub mod tier_map;
 pub mod websearch;

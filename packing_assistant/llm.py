@@ -64,7 +64,7 @@ def llm_config() -> Dict[str, str]:
     model = _first("CIVIL_MODEL", "LLM_MODEL", "DEEPSEEK_MODEL", "OPENAI_MODEL")
     if not model:
         model = (
-            "deepseek-v4-flash"
+            "deepseek-flash"
             if "deepseek" in base_url.lower()
             else "gpt-4o-mini"
         )

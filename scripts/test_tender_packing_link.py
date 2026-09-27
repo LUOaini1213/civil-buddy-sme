@@ -23,6 +23,7 @@ No model and no network.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -260,6 +261,24 @@ class Link(unittest.TestCase):
         self.assertNotIn("Delivery packing was **not run**", book)
         self.assertTrue(out["submit_blocked"])
 
+    def test_the_english_bidbook_reads_in_english_and_says_it_is_synthetic(self):
+        book = self.link()["bidbook_markdown"]
+        lines = book.splitlines()
+        self.assertEqual([line for line in lines if re.search(r"[㐀-鿿]", line)], [])      # no Chinese row left
+        self.assertEqual(lines[0], "# Contractor's Proposal (Draft) — SYNTHETIC EXAMPLE - Facade Works Subcontract for "
+                                   "Synthetic Office Tower")                                     # not "INVITATION TO TENDER"
+        self.assertIn("> **SYNTHETIC.** The tender this draft answers is marked SYNTHETIC", book)
+        for raw in ("can_fit =", "n0 =", "N0", "mid50", "type_source", "clause_names", "readiness:", "human_required"):
+            self.assertNotIn(raw, book)
+        self.assertIn("| Specialist method statement named in the tender |", book)
+        self.assertIn("pending detailed design", book)
+        self.assertIn("lower bound 6; 24 pieces; 10,800 kg net", book)
+        self.assertEqual((book.count("[TO FILL]"), book.count("S$ [TO FILL]")), (50, 12))       # qualifications and price
+        from packing_assistant.bidbook.sg_facade import build_sg_facade_bidbook
+        real = build_sg_facade_bidbook(tender_text="# INVITATION TO TENDER\n# Facade Works for Harbour Tower\n")
+        self.assertNotIn("SYNTHETIC", real["markdown"])                    # the banner follows the tender, not the demo
+        self.assertEqual((real["project_title"], real["synthetic"]), ("Facade Works for Harbour Tower", False))
+
     # stay linked -----------------------------------------------------------------------------------------------
     def test_changed_panel_list_names_the_stale_statements(self):
         first = self.link()
@@ -331,6 +350,53 @@ class Link(unittest.TestCase):
         for text in ("解析招标 facade_itt_doc.md", "按 facade_panels.xlsx 装柜，柜型 40HQ", "Parse the tender facade_itt_doc.md",
                      "不要做物流应答"):
             self.assertFalse(wants_link(text), text)
+
+    def test_an_estimator_s_own_wording_reaches_the_link(self):
+        """A tender document and a panel / packing list named together, and a check / match / comply / clauses word."""
+        from packing_assistant.runtime.task_router import route_task, wants_link
+
+        for text in ("Check whether facade_panels.xlsx meets the logistics clauses of facade_itt_doc.md",
+                     "Match facade_itt_doc.md against facade_panels.xlsx",
+                     "Does our loading plan for facade_panels.xlsx comply with the container clauses in facade_itt_doc.md?",
+                     "Check facade_panels.xlsx against the shipping requirements in facade_itt_doc.md",
+                     "Link ITT_Block_C.docx with panel_schedule_rev3.xlsx",
+                     "核对 facade_panels.xlsx 是否满足 facade_itt_doc.md 的物流条款",
+                     "对照 facade_itt_doc.md 的运输条款检查 facade_panels.xlsx",
+                     "装箱单 facade_panels.xlsx 符合招标 facade_itt_doc.md 的装柜要求吗？"):
+            route = route_task(text)
+            self.assertTrue(wants_link(text), text)
+            self.assertEqual((route["expert_ids"], route["intent"]), (["bid-parse"], "run"), text)
+        for text in ("How do I check facade_panels.xlsx against facade_itt_doc.md?",          # asks about it
+                     "Why is the securing statement of the link for facade_itt_doc.md and facade_panels.xlsx left for a person?",
+                     "怎么核对 facade_panels.xlsx 是否满足 facade_itt_doc.md 的物流条款？"):
+            self.assertEqual(route_task(text)["intent"], "chat", text)
+        for text in ("Match the BOQ boq_facade.xlsx against the tender facade_itt_doc.md",     # not a packing list
+                     "Check the price schedule rates.xlsx against the tender facade_itt_doc.md",
+                     "Check the tender facade_itt_doc.md against our response bid_response.docx",  # no list at all
+                     "Check whether spec.pdf meets the clauses of contract.docx",
+                     "核对工程量清单 boq.xlsx 是否满足招标 facade_itt_doc.md 的要求",
+                     "Don't link facade_itt_doc.md to facade_panels.xlsx",
+                     "Check facade_panels.xlsx for missing weights"):
+            self.assertFalse(wants_link(text), text)
+
+    def test_an_english_request_is_answered_in_english(self):
+        from packing_assistant.civil import run_task
+
+        cjk = re.compile(r"[㐀-鿿]")
+        ran = run_task("Check facade_panels.xlsx against the shipping requirements in facade_itt_doc.md", session_id="link-en-reply")
+        self.assertIn("tender.packing_link", ran["tools_run"])
+        self.assertIsNone(cjk.search(ran["reply"]), ran["reply"])
+        missing = run_task("Link the tender facade_itt_doc.md to the packing list and write the logistics response", session_id="link-en-miss")
+        self.assertEqual((missing["error_code"], cjk.search(missing["reply"])), ("link_inputs", None), missing["reply"])
+        zh = run_task("招标装柜联动：按招标 facade_itt_doc.md 出物流应答", session_id="link-zh-miss")
+        self.assertIn("招标与装柜联动需要", zh["reply"])                   # a Chinese request keeps the Chinese sentence
+        asked = run_task("How do I check facade_panels.xlsx against facade_itt_doc.md?", session_id="link-en-ask")
+        self.assertEqual((asked["wrote"], asked["intent"]), (False, "chat"))
+        self.assertIsNone(cjk.search(asked["reply"]), asked["reply"])     # no internal slot line, no Chinese note
+        self.assertIn("nothing was run and nothing was written", asked["reply"])
+        other = run_task("What does clause 4.9 of facade_itt_doc.md require?", session_id="link-en-ask2")
+        self.assertTrue(other["reply"].startswith("Nothing was run and nothing was written"), other["reply"][:120])
+        self.assertNotIn("本会话槽", other["reply"])
 
     def test_steps_mode_turns_write_the_linked_response(self):
         from packing_assistant.civil import run_task

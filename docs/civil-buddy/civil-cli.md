@@ -30,7 +30,7 @@ civil exec -o 回复.txt "……"                        # 最终回复另存
 
 - **数字只由工具算。** 缺重量或尺寸的装箱行会逐条列出来，不给柜数；`can_fit=False` 按失败说，不是「方案已出」。
 - **不猜。** 任务里点了两份表、或一份都没点，就不替你选；招标/响应的角色读不出来，就不分角色。
-- **高风险岗位**（施工方案、安全交底、结构、岩土……）写盘前要你原样输入确认句「我明白，将由持证人员签认」：TUI 里当场问，`exec` 不提问、如实返回 `approval_required`（确认过就加 `--confirm`）。
+- **高风险岗位**（施工方案、安全交底、结构、岩土……）每次写盘前要你确认当前操作：TUI 里原样输入「我明白，将由持证人员签认」或 `I understand; a licensed person will sign this off.`；`exec` 不提问、如实返回 `approval_required`（明确确认本次操作时加 `--confirm`）。历史签认、引用或否认确认句均不能授权新操作。
 - 一切产出都是内部讨论草稿：`submit_blocked=true`，不下「可以投标 / 可以开工」的结论。
 - `--sandbox read-only` 时只读不写：`steps` 下整轮不执行、只答复；模型模式下装箱照算，只是不落盘。
 
@@ -91,10 +91,11 @@ civil
 /status  /init  /mode [steps|model|auto]  /model [名称]  /skills [词]
 /approvals [untrusted|on-request|never]   /sandbox [read-only|workspace-write]
 /new [标题]  /threads  /resume <id>  /bg <任务>  /files  /plan  /review <文稿>  /plugins
+/confirm <完整签认句>  # 仅确认并重试当前尚待签认的原任务，完成后即失效
 $construction 编制深基坑专项施工方案        # $id 或 @岗位名 = 点名岗位
 ```
 
-每一轮都记在 thread 旁边的 rollout 里，`civil resume --last "接着上次的，把部位改成 4 号墩"` 会带着前面的对话继续（模型模式下有意义；`steps` 模式的上下文只有会话槽：项目、辖区、是否已确认）。
+每一轮都记在 thread 旁边的 rollout 里，`civil resume --last "接着上次的，把部位改成 4 号墩"` 会带着前面的对话继续（模型模式下有意义；`steps` 模式的上下文主要是项目、辖区等会话槽）。恢复历史不恢复操作授权；切换对话、提交新任务或完成一次确认重试后，都需要为新的高风险操作重新确认。
 
 ## 8. 它不是什么
 

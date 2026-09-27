@@ -1,4 +1,4 @@
 # Optional: local speech-to-text for the workbench voice button (demo/asr.py, /api/asr).
 # Without it the page falls back to the browser's own recognizer, which the UI discloses
-# before first use. First transcription downloads the Whisper "small" model (~460 MB).
+# before first use. Explicit preparation downloads the Whisper "small" model (~460 MB).
 faster-whisper>=1.1

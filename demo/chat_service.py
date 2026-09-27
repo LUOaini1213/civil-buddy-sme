@@ -25,7 +25,8 @@ from llm import LLMError
 import turn_control
 from turn_control import TurnCancelled
 from packing_assistant.expert_roster import get_expert as roster_expert
-from packing_assistant.runtime.civil_config import CONFIRM, hitl_reply
+from packing_assistant.runtime.civil_config import CONFIRM, contains_confirmation, hitl_reply, is_confirmation, message_confirmation
+from packing_assistant.runtime.reply_language import english_request
 from packing_assistant.runtime.expert_skills import match_skill
 from packing_assistant.understand import understand
 
@@ -346,7 +347,7 @@ def prepare_turn(root: Path, body: dict) -> dict:
             "requests": requests, "prepared_context": prepared,
             "local_sources": [session_context.citation(sid, s["hit"]) for s in prepared["sources"]],
             "intent": intent, "project_id": project_id, "project_name": project_name,
-            "confirmed": str(body.get("confirm_text") or "").strip() == CONFIRM or CONFIRM in message,
+            "confirmed": is_confirmation(str(body.get("confirm_text") or "")) or message_confirmation(message),
             "attachments": attachment_ids, "route": route,
             "workflow_sources": workflow_sources, "workflow_unreadable": workflow_unreadable,
             "workflow_budget": body.get("workflow_budget"),
@@ -715,12 +716,12 @@ def _stream_turn(root: Path, turn: dict, *, key_available: bool, plain_runner, l
                 for name in (result.get("tools_run") or [])
             ]
             if result.get("hitl_pending"):
-                if CONFIRM not in str(result.get("reply") or ""):
+                if not contains_confirmation(str(result.get("reply") or "")):
                     who = ""
                     if eid:
                         rec = roster_expert(eid)
                         who = rec.name if rec else eid
-                    extra = hitl_reply(who)
+                    extra = hitl_reply(who, english=english_request(turn.get("message")))
                     result["reply"] = (str(result.get("reply") or "").rstrip() + "\n\n" + extra).strip()
                 nodes.append({
                     "kind": "decision",
