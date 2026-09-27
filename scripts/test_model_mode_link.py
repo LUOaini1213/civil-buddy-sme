@@ -138,7 +138,7 @@ class ExplanationGuards(unittest.TestCase):
             out = model_loop.explain_link("Explain the record", {"ok": True, "reply": "record generated",
                                            "tender_packing_link": record}, complete=script)
         shown = "\n".join(line for line in out["model_explanation"].splitlines() if not line.startswith("⚠"))
-        self.assertIn("1 of 7 statements are covered", shown)
+        self.assertIn("1 of 7 statements is covered", shown)
         self.assertIn("S1 is covered by the plan", shown)
         for wrong in ("5 statements are covered", "6 statements are covered", "plan uses 40GP", CONFIRM, CONFIRM_EN):
             self.assertNotIn(wrong, shown)
@@ -159,7 +159,7 @@ class ExplanationGuards(unittest.TestCase):
                                                "files": [{"path": str(path)}]}, complete=script)
         shown = "\n".join(line for line in out["model_explanation"].splitlines() if not line.startswith("⚠"))
         self.assertNotIn("5 statements are covered", shown)
-        self.assertIn("1 of 7 statements are covered", shown)
+        self.assertIn("1 of 7 statements is covered", shown)
         self.assertIn("S1 is covered by the plan. S2 is partial.", shown)
         self.assertEqual(out["provenance"]["claims_corrected"], ["5 statements are covered"])
         self.assertEqual(out["provenance"]["rewrites"], 0)
@@ -402,6 +402,18 @@ class RecordGuard(unittest.TestCase):
         self.assertIn("A person confirms.", out)
         self.assertNotIn("S4 is covered", out)
 
+    def test_covered_and_approval_said_in_other_words(self):
+        # the reviewer's probes of PR #71 (2026-09-27): the same claims without the words "covered" or "approved"
+        for text in ("S5 is satisfied.", "S2 and S3 are met by the plan.", "Every logistics requirement has been met.",
+                     "All statements are satisfied.", "The bid is compliant with all logistics clauses.",
+                     "You can book the containers now.", "The submission can go ahead.",
+                     "This draft is final and may be issued.", "S4、S5 已满足。", "全部陈述均已满足。"):
+            self.assertTrue(self.flagged(text), text)
+        for text in ("S1 is met by the plan.", "S7 is not met yet; a person decides.", "S2 is not yet satisfied.",
+                     "You can submit the corrected panel list again.", "Once a person confirms, you can book the containers.",
+                     "The submission cannot go ahead until a person confirms.", "Clause 4.9 is met only when a person checks it."):
+            self.assertEqual(self.flagged(text), [], text)
+
 
 class EndpointCheck(unittest.TestCase):
     """scripts/check_model_endpoint.py against a stub on 127.0.0.1: the shape it prints, and never the key."""
@@ -463,6 +475,62 @@ class EndpointCheck(unittest.TestCase):
         self.assertEqual(json.loads(text)["no_tools"]["status"], 401)
         self.assertIn("***", text)
         self.assertNotIn("SECRET", text)
+
+    def test_a_key_that_json_escapes_is_still_masked(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import check_model_endpoint
+
+        for key in ('SECRET"quoted', "SECRET\\slash", "SECRET-é-non-ascii"):
+            for ensure_ascii in (True, False):
+                text = json.dumps({"error": "bad key Bearer " + key}, ensure_ascii=ensure_ascii)
+                self.assertNotIn("SECRET", check_model_endpoint._hide(text, key), (key, ensure_ascii))
+
+    def test_url_encoded_base64_and_cut_short_echoes_are_masked(self):
+        """Main masked only the key as sent and JSON-escaped: a gateway echoing it URL-encoded, in base64 (Basic
+        auth, at any of the three byte alignments) or one character short printed it (review 2026-09-27)."""
+        import base64
+        from urllib.parse import quote, quote_plus
+
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import check_model_endpoint
+
+        key = "sk-Probe/Key+with=odd&chars_0123456789"
+        echoes = [key, quote(key, safe=""), quote_plus(key), quote(key), key[:-1], key[1:], key[5:30]]
+        # review of #77: lower-case %xx escapes, a JSON writer's '\/' and a hex dump still printed most of the key
+        echoes += [quote(key, safe="").replace("%2F", "%2f").replace("%2B", "%2b").replace("%3D", "%3d"),
+                   key.replace("/", "\\/"), key.encode().hex(), key.encode().hex().upper()]
+        for prefix in ("", "u:", "us:", "user:"):
+            raw = (prefix + key).encode()
+            echoes += [base64.b64encode(raw).decode(), base64.urlsafe_b64encode(raw).decode().rstrip("=")]
+        for echo in echoes:
+            for text in ("error: " + echo + " end", json.dumps({"message": "bad key " + echo}), echo):
+                out = check_model_endpoint._hide(text, key)
+                self.assertIn("***", out, echo)
+                left = [echo[i:i + 12] for i in range(len(echo) - 11) if echo[i:i + 12] in out]
+                self.assertEqual([], left, (echo, out))
+        self.assertEqual("model *** ready", check_model_endpoint._hide("model ollama ready", "ollama"))
+        record = json.dumps({"model": "stub-model", "endpoint_host": "127.0.0.1", "no_tools": {"status": 200}})
+        self.assertEqual(record, check_model_endpoint._hide(record, key), "nothing but the key is masked")
+
+    def test_a_key_or_url_httpx_cannot_send_is_reported_by_type_only(self):
+        """A non-ASCII key cannot go in a header, and a bad port is not a URL: both raised through main() with a
+        traceback. Now the call row carries the exception's type name and nothing else."""
+        import contextlib
+        import io
+
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import check_model_endpoint
+
+        for base, key, error in (("http://127.0.0.1:9/v1", "\u043a\u043b\u044e\u0447-SECRET-1", "UnicodeEncodeError"),
+                                 ("http://127.0.0.1:9/v\x01", "short-term-SECRET-123", "InvalidURL")):
+            buffer = io.StringIO()
+            env = {"CIVIL_API_BASE": base, "CIVIL_API_KEY": key, "CIVIL_MODEL": "stub-model"}
+            with patch.dict(os.environ, env), contextlib.redirect_stdout(buffer):
+                code = check_model_endpoint.main(["--timeout", "2"])
+            text = buffer.getvalue()
+            self.assertEqual(1, code, text)
+            self.assertEqual(error, json.loads(text)["no_tools"]["error"], text)
+            self.assertNotIn("SECRET", text)
 
     def test_a_pasted_full_url_is_cut_back_to_its_base(self):
         sys.path.insert(0, str(ROOT / "scripts"))

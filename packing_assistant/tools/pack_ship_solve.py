@@ -351,15 +351,60 @@ def rows_oversize_for_container(
     return out
 
 
+#: 这一行是包装 / 运输器具（A 型架、周转架、托盘），不是货。按货装会把架子当成板块装进柜里：
+#: 件数、重量、柜数都多出来，而架子本身的装法（架上放几块板、架子的皮重）装箱器并不建模。
+NEEDS_HUMAN_PACKAGING = "packaging_not_cargo"
+
+# what a row IS, from its mark / name / spec (never the remarks: "Vision panel, on A-frame stillage" is a panel)
+# (a pallet is not here: "Motor pallet", "托盘整包" are goods on a pallet, and the generic tables pack them as cargo)
+_PACKAGING_RE = re.compile(r"(?<![A-Za-z])(?:a[\s\-‐–]?frames?|stillages?|returnable\s+(?:steel\s+)?(?:racks?|frames?|stands?)|"
+                           r"(?:steel|transport|delivery)\s+(?:racks?|stands?))(?![A-Za-z])|周转架|回收架|A字架|A型架", re.I)
+_CARGO_WORD_RE = re.compile(r"(?<![A-Za-z])(?:panels?|units?|glass|glazing|glazed|mullions?|transoms?|cladding|louv(?:re|er)s?|"
+                            r"canop(?:y|ies)|brackets?|spandrels?|vision|modules?)(?![A-Za-z])|板块|幕墙|玻璃|面板|单元",
+                            re.I)
+# cargo words that only say what the equipment carries: "Glass stillage", "A-frame for panels", "Returnable rack for
+# glazing units", "stillage unit", "玻璃周转架" are equipment, not panels ("Unitised panel on A-frame stillage" is a panel)
+_CARRIES_RE = re.compile(r"(?<![A-Za-z])(?:for|carrying|holding|to\s+(?:carry|hold))\s+(?:[\w'’-]+\s+){0,3}?(?:"
+                         + _CARGO_WORD_RE.pattern + r")(?:[\s-]+(?:" + _CARGO_WORD_RE.pattern + r"))*"
+                         r"|(?:(?:" + _CARGO_WORD_RE.pattern + r")[\s\-‐–]*){1,3}(?=" + _PACKAGING_RE.pattern + r")"
+                         r"|(?<![A-Za-z])(?:stillages?|a[\s-]?frames?|racks?)\s+units?(?![A-Za-z])", re.I)
+
+
+def rows_packaging_not_cargo(materials: Sequence[Dict[str, Any]], *, lang: str = "zh",
+                             sheet_rows: Optional[Sequence[Optional[int]]] = None) -> List[Dict[str, Any]]:
+    """Rows that name packaging or transport equipment - an A-frame stillage, a returnable rack, a pallet - and no
+    panel. Packed as cargo they add pieces, kilograms and containers that are not the panels (a sealed list: 4 steel
+    A-frame stillages of 420 kg became 4 more "panels"); the planner models neither what a stillage carries nor its
+    tare. A person removes the row or says it ships as cargo."""
+    out: List[Dict[str, Any]] = []
+    for index, m in enumerate(materials or []):
+        fields = [str(m.get(key) or "") for key in ("id", "name", "spec", "part_no")]
+        what = " ".join(fields)
+        found = _PACKAGING_RE.search(what)
+        # each cell is read on its own: a name "Vision panel" beside a spec "A-frame" is a panel
+        if not found or _CARGO_WORD_RE.search(" | ".join(_CARRIES_RE.sub(" ", field) for field in fields)):
+            continue
+        word = found.group(0)
+        ask = (f"这一行是包装 / 运输器具（{word}），不是板块：请从装箱单里移出（它的皮重和装法另行确认），"
+               "或确认它作为货物装运。")
+        if lang == "en":
+            ask = (f"{_row_label(m, _sheet_row(sheet_rows, index))} reads as packaging or transport equipment ({cell_text(word)}), "
+                   "not a panel: take it off the panel list (its tare and what it carries are confirmed separately), "
+                   "or confirm it ships as cargo.")
+        out.append(_located({"id": m.get("id") or "", "name": m.get("name") or "", "reason": NEEDS_HUMAN_PACKAGING,
+                             "ask": ask}, sheet_rows, index))
+    return out
+
+
 def rows_blocking_plan(
     materials: Sequence[Dict[str, Any]], container_type: str = "", *, lang: str = "zh",
     sheet_rows: Optional[Sequence[Optional[int]]] = None,
 ) -> List[Dict[str, Any]]:
-    """出方案之前必须由人处理的全部行：缺重量、缺尺寸、数量不可用，一次问完；
+    """出方案之前必须由人处理的全部行：缺重量、缺尺寸、数量不可用、包装器具当成了货，一次问完；
     给了柜型时再加上进不了该柜的超限件。lang / sheet_rows: see rows_needing_human."""
     where = {"lang": lang, "sheet_rows": sheet_rows}
     rows = (rows_needing_human(materials, **where) + rows_missing_dimensions(materials, **where)
-            + rows_invalid_quantity(materials, **where))
+            + rows_invalid_quantity(materials, **where) + rows_packaging_not_cargo(materials, **where))
     if container_type:
         rows += rows_oversize_for_container(materials, container_type, **where)
     return rows

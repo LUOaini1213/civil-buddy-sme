@@ -72,3 +72,14 @@ thousands separators in a size pair (`1,500 x 3,900` was left unread) was first 
 **pl06 is now "seen"**. The fix does not change pl06's score (the Cover sheet still stops it). The scores after the
 fixes are identical to the AFTER column. From now on the set is in the repository, so every later number on it is
 a DEV number.
+
+## Round 3 (2026-09-27, seen)
+
+Two independent reviews named pl03's failure (the A-frame stillages packed as 4 more panels) and asked for the
+fix. `pack_ship_solve.rows_packaging_not_cargo` now sends a row whose mark / name / spec names an A-frame, a
+stillage, a returnable rack or frame, or a steel / transport / delivery rack (and no panel word) to a person
+before any plan. The rule was written against the reviewers' description and the builder's own sheets
+(`scripts/test_panel_list_reading.py`); it was then run on all 74 tables in the repository and stops only pl03.
+**pl03 is now "seen" as well.** Scores (DEV): exact 4 -> 5, safe 5 -> 6, row named 2 -> 3, link ok 5 -> 6,
+wrong plan 1 -> 0. The floors in `score_sealed.py` were raised to these numbers, so a wrong plan now fails the check.
+pl06 (the Cover sheet first) still stops at `no_materials`.

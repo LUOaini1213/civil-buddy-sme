@@ -5,7 +5,8 @@
     python scripts/eval_link_routing.py --show     # and every miss
     python scripts/eval_link_routing.py --e2e      # also run each request that names only the SYNTHETIC demo files
                                                    # through civil.run_task (steps mode) in a fresh demo job
-    python scripts/eval_link_routing.py --check    # CI floor on the DEV set
+    python scripts/eval_link_routing.py --check    # CI floor on the DEV sets
+    python scripts/eval_link_routing.py --set round3 --show    # the round-3 look-alikes (dev_round3.json) only
 
 dev.json is a DEV set: written before the router change and used while building it, not held-out. Per request:
 link = wants_link true and the route is bid-parse / run; chat = the route's intent is chat; other = wants_link false
@@ -30,6 +31,10 @@ os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
 from packing_assistant.runtime.task_router import route_task, wants_link  # noqa: E402
 
 DEV = ROOT / "test" / "benchmarks" / "link_routing" / "dev.json"
+# Round 3: look-alikes that name both files but do not ask for the run (advice, hypothetical, past tense, negated).
+# Also DEV (the review's failing inputs plus the implementer's own). A wrong link here writes ~13 files.
+DEV_ROUND3 = ROOT / "test" / "benchmarks" / "link_routing" / "dev_round3.json"
+SETS = {"dev": DEV, "round3": DEV_ROUND3}
 FLOOR = 0.95          # the DEV set was used to build the rule: this floor guards against a regression, it is not a score
 _CJK = re.compile(r"[㐀-鿿]")
 _DEMO_FILES = {"facade_itt_doc.md", "facade_panels.xlsx"}
@@ -60,6 +65,8 @@ def score(cases):
     for want in ("link", "other", "chat"):
         out[want] = acc([r for r in rows if r["want"] == want])
     out["false_link"] = sum(r["got"] == "link" and r["want"] != "link" for r in rows)
+    # a look-alike the route would run (any post): a question or a statement that writes files
+    out["false_run"] = sum(r["want"] == "chat" and r["got"] != "chat" for r in rows)
     return out
 
 
@@ -88,15 +95,22 @@ def main() -> int:
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--e2e", action="store_true")
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--set", choices=("all", *SETS), default="all")
     args = ap.parse_args()
-    cases = json.loads(DEV.read_text(encoding="utf-8"))["cases"]
-    s = score(cases)
-    print(f"link_routing dev n={s['n']}  acc {s['accuracy']:.3f}  en {s['en']:.3f}  zh {s['zh']:.3f}  "
-          f"link {s['link']:.3f}  other {s['other']:.3f}  chat {s['chat']:.3f}  false_link {s['false_link']}")
-    if args.show or args.check:
-        for r in s["rows"]:
-            if not r["ok"]:
-                print(f"    want {r['want']:<5} got {r['got']:<5} {r['text']}")
+    scores, cases = {}, []
+    for name, path in SETS.items():
+        if args.set not in ("all", name) and not args.check:
+            continue
+        rows = json.loads(path.read_text(encoding="utf-8"))["cases"]
+        cases += rows
+        s = scores[name] = score(rows)
+        print(f"link_routing {name} n={s['n']}  acc {s['accuracy']:.3f}  en {s['en']:.3f}  zh {s['zh']:.3f}  "
+              f"link {s['link']:.3f}  other {s['other']:.3f}  chat {s['chat']:.3f}  false_link {s['false_link']}  "
+              f"false_run {s['false_run']}")
+        if args.show or args.check:
+            for r in s["rows"]:
+                if not r["ok"]:
+                    print(f"    want {r['want']:<5} got {r['got']:<5} {r['text']}")
     if args.e2e:
         rows = e2e(cases)
         want_link = [r for r in rows if r["want"] == "link"]
@@ -108,8 +122,8 @@ def main() -> int:
             print(f"    [{r['want']:<5}] link={int(r['ran_link'])} cjk={int(r['cjk_reply'])} skill={r['skill']} :: {r['text'][:70]}"
                   f"\n              {r['first_line']}")
     if args.check:
-        ok = s["accuracy"] >= FLOOR and s["false_link"] == 0
-        print(("PASS" if ok else "FAIL") + f" link_routing dev floor (accuracy >= {FLOOR}, false_link 0)")
+        ok = all(s["accuracy"] >= FLOOR and s["false_link"] == 0 and s["false_run"] == 0 for s in scores.values())
+        print(("PASS" if ok else "FAIL") + f" link_routing dev floors (dev and round3: accuracy >= {FLOOR}, false_link 0, false_run 0)")
         return 0 if ok else 1
     return 0
 

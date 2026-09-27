@@ -20,7 +20,11 @@ DROPPED = "更早对话已压缩，细节标 [A001] / UNSPECIFIED，不要假装
 
 
 def _safe(session_id: str) -> str:
-    return (session_id or "default").replace("..", "_").replace("/", "_").replace("\\", "_") or "default"
+    # one rule for a session's folder name, shared with the link record, the packing snapshot and the job files
+    # (the old rule here kept '.', so session "." wrote into demo/out itself)
+    from packing_assistant.runtime.agent_loop import _safe_sid
+
+    return _safe_sid(session_id)
 
 
 def summary_path(session_id: str) -> Path:

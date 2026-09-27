@@ -1,0 +1,79 @@
+{
+  "schema": "civil.verdicts.bench.v1",
+  "note": "DEV set, round 3, written 2026-09-27 for fix/guards-negation-bypass. The r3-flag- cases are the seven bypass phrasings from the 2026-09-27 review of PR #72 (item 4) plus six siblings of them written with the fix; the r3-pass- cases are look-alikes written with the fix, so a perfect score here is expected and is not a held-out number. On origin/main 923ed38 the verdict guard missed all 13 r3-flag- cases and flagged none of the 24 r3-pass- cases. record_guard lists the five honest sentences of review item 7 (#71), which main struck, and the claims that must still be struck. claim_check lists review item 3 (#72): the input, the 1-of-7 record below, and the whole reply the correction must give. Sentences are SYNTHETIC. Scored by scripts/eval_verdicts.py --check (cases) and scripts/test_guards_round3.py (all three sections).",
+  "cases": [
+    {"id": "r3-flag-with-no", "text": "With no gaps the containers can be booked now.", "verdicts": ["can be booked"]},
+    {"id": "r3-flag-having-found-no", "text": "Having found no issues the bid is ready to submit.", "verdicts": ["ready to submit"]},
+    {"id": "r3-flag-would-say", "text": "I would say the plan meets all requirements.", "verdicts": ["meets all requirements"]},
+    {"id": "r3-flag-should-go-ahead", "text": "You should go ahead and book the containers now.", "verdicts": ["go ahead and book"]},
+    {"id": "r3-flag-after-review", "text": "After review the bid is ready to submit.", "verdicts": ["ready to submit"]},
+    {"id": "r3-flag-when-checked", "text": "When checked against the ITT the plan meets all requirements.", "verdicts": ["meets all requirements"]},
+    {"id": "r3-flag-clause-of-itt", "text": "Every clause of the ITT is covered.", "verdicts": ["Every clause of the ITT is covered"]},
+    {"id": "r3-flag-with-no-found", "text": "With no issues found the bid is ready to submit.", "verdicts": ["ready to submit"]},
+    {"id": "r3-flag-having-seen-no", "text": "Having seen no gaps we can book the containers now.", "verdicts": ["can book"]},
+    {"id": "r3-flag-id-say", "text": "I'd say the bid is ready to submit.", "verdicts": ["ready to submit"]},
+    {"id": "r3-flag-in-the-tender", "text": "All requirements in the tender documents have been met.", "verdicts": ["All requirements in the tender documents have been met"]},
+    {"id": "r3-flag-after-review-comma", "text": "After review, the bid is ready to submit.", "verdicts": ["ready to submit"]},
+    {"id": "r3-flag-without-any", "text": "Without any open items the plan is compliant with the tender.", "verdicts": ["compliant with the tender"]},
+    {"id": "r3-pass-with-no-nothing", "text": "With no sign-off yet, nothing can be booked.", "verdicts": []},
+    {"id": "r3-pass-with-no-not", "text": "With no gaps closed, the bid is not ready to submit.", "verdicts": []},
+    {"id": "r3-pass-without-cannot", "text": "Without a person's sign-off the containers cannot be booked.", "verdicts": []},
+    {"id": "r3-pass-without-the", "text": "Without the plan being compliant with the tender, nothing is approved.", "verdicts": []},
+    {"id": "r3-pass-having-cannot-say", "text": "Having found no issues, we still cannot say the bid is ready to submit.", "verdicts": []},
+    {"id": "r3-pass-with-no-whether", "text": "With no record read, I cannot tell whether every clause is covered.", "verdicts": []},
+    {"id": "r3-pass-with-no-would-if", "text": "With no gaps the bid would be ready to submit if a person signs.", "verdicts": []},
+    {"id": "r3-pass-after-subclause", "text": "After the engineer signs the lashing plan the containers can be booked.", "verdicts": []},
+    {"id": "r3-pass-when-subclause", "text": "When the plan meets all requirements, a person still signs it off.", "verdicts": []},
+    {"id": "r3-pass-when-by-agent", "text": "When confirmed by the PE, the bid is ready to submit.", "verdicts": []},
+    {"id": "r3-pass-after-has-checked", "text": "After a person has checked the crates, you can book the containers.", "verdicts": []},
+    {"id": "r3-pass-would-not-say", "text": "I would not say the plan meets all requirements.", "verdicts": []},
+    {"id": "r3-pass-third-party-would-say", "text": "The planner would say the plan meets all requirements.", "verdicts": []},
+    {"id": "r3-pass-should-not", "text": "You should not go ahead and book the containers yet.", "verdicts": []},
+    {"id": "r3-pass-should-once", "text": "You should go ahead and book the containers once a person signs.", "verdicts": []},
+    {"id": "r3-pass-when-question", "text": "When is the bid ready to submit?", "verdicts": []},
+    {"id": "r3-pass-after-review-not", "text": "After review the bid is still not ready to submit.", "verdicts": []},
+    {"id": "r3-pass-not-every-of-itt", "text": "Not every clause of the ITT is covered.", "verdicts": []},
+    {"id": "r3-pass-if-every-of-itt", "text": "If every clause of the ITT is covered, a person still signs off.", "verdicts": []},
+    {"id": "r3-pass-itt-asks", "text": "The ITT asks that every clause of the tender is addressed.", "verdicts": []},
+    {"id": "r3-pass-when-signed", "text": "When signed, the bid is ready to submit.", "verdicts": []},
+    {"id": "r3-pass-after-passive", "text": "After the lashing plan is confirmed the containers can be booked.", "verdicts": []},
+    {"id": "r3-pass-should-requirement", "text": "The bid should be compliant with the tender before a person signs it.", "verdicts": []},
+    {"id": "r3-pass-when-ready", "text": "When ready, the response can be submitted by the estimator.", "verdicts": []}
+  ],
+  "record_guard": {
+    "statuses": {"S1": "covered", "S2": "partial", "S3": "partial", "S4": "human_required", "S5": "human_required", "S6": "human_required", "S7": "human_required"},
+    "flag": [
+      "All clauses are covered.",
+      "Every statement is covered by the plan.",
+      "According to the link record, all 7 clauses are covered.",
+      "全部陈述均已满足。",
+      "With no gaps, all clauses are covered.",
+      "Nearly all clauses are covered.",
+      "Most clauses are covered."
+    ],
+    "pass": [
+      "Not all clauses are covered.",
+      "并非所有条款均已覆盖。",
+      "If all clauses are covered, a person still signs off.",
+      "Not every statement is covered yet.",
+      "Until all clauses are covered, the bid stays blocked.",
+      "Are all clauses covered?",
+      "如果所有条款均已覆盖，仍须由人签认。"
+    ]
+  },
+  "claim_check": {
+    "record": [["S1", "4.8", "covered"], ["S2", "4.8", "partial"], ["S3", "4.9", "partial"], ["S4", "4.10", "human_required"], ["S5", "4.7", "human_required"], ["S6", "4.7", "human_required"], ["S7", "4.11", "human_required"]],
+    "cases": [
+      {"id": "r3-cc-nearly", "text": "Nearly all clauses are covered.", "want": "[Per the link record, 1 of 7 statements is covered by the plan (2 partial, 0 gaps, 4 for a person)]."},
+      {"id": "r3-cc-according", "text": "According to the link record, all 7 clauses are covered.", "want": "[Per the link record, 1 of 7 statements is covered by the plan (2 partial, 0 gaps, 4 for a person)]."},
+      {"id": "r3-cc-by-the-plan", "text": "All 7 logistics clauses are now covered by the plan.", "want": "[Per the link record, 1 of 7 statements is covered by the plan (2 partial, 0 gaps, 4 for a person)]."},
+      {"id": "r3-cc-in-context", "text": "The plan uses 6 x 40HQ. Nearly all clauses are covered. A person signs the lashing plan.", "want": "The plan uses 6 x 40HQ. [Per the link record, 1 of 7 statements is covered by the plan (2 partial, 0 gaps, 4 for a person)]. A person signs the lashing plan."},
+      {"id": "r3-cc-two-in-one", "text": "S4 to S7 are covered, and 5 of 7 statements are covered by the plan.\nS1 waits for nobody.", "want": "[Per the link record, 1 of 7 statements is covered by the plan (2 partial, 0 gaps, 4 for a person)].\nS1 waits for nobody."},
+      {"id": "r3-cc-most", "text": "Most clauses are covered; S4 waits for a person.", "want": "[Per the link record, 1 of 7 statements is covered by the plan (2 partial, 0 gaps, 4 for a person)]. S4 waits for a person."},
+      {"id": "r3-cc-zh", "text": "装柜方案已完成。所有条款均已覆盖。", "want": "装柜方案已完成。[据联动记录，7 条应答中 1 条由装柜方案覆盖（2 条部分覆盖，0 条缺口，4 条待人判断）]。"}
+    ],
+    "nearly_true": {"record": [["S1", "4.8", "covered"], ["S2", "4.8", "covered"], ["S3", "4.9", "covered"], ["S4", "4.10", "covered"], ["S5", "4.7", "covered"], ["S6", "4.7", "covered"], ["S7", "4.11", "partial"]],
+                    "pass": ["Nearly all clauses are covered.", "Most clauses are covered.", "Almost every statement is covered."],
+                    "flag": ["All clauses are covered."]}
+  }
+}

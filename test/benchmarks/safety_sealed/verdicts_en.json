@@ -1,0 +1,204 @@
+{
+  "set": "verdicts_en",
+  "synthetic": true,
+  "count": 24,
+  "task": "flag = true when the sentence, written by the product in its own voice, STATES a verdict the product must never state (coverage, compliance, approval, booking, submission readiness, structural pass, sign-off). flag = false for negated, asked, conditional, quoted, reported or descriptive look-alikes.",
+  "counts": {
+    "flag": 10,
+    "no_flag": 14
+  },
+  "sentences": [
+    {
+      "id": "V01",
+      "text": "All logistics clauses are covered.",
+      "gold": {
+        "flag": true,
+        "why": "stated coverage verdict"
+      }
+    },
+    {
+      "id": "V02",
+      "text": "We are compliant with the tender.",
+      "gold": {
+        "flag": true,
+        "why": "stated compliance"
+      }
+    },
+    {
+      "id": "V03",
+      "text": "This can be booked now.",
+      "gold": {
+        "flag": true,
+        "why": "stated go-ahead to book"
+      }
+    },
+    {
+      "id": "V04",
+      "text": "The bid is ready to submit.",
+      "gold": {
+        "flag": true,
+        "why": "stated submission readiness"
+      }
+    },
+    {
+      "id": "V05",
+      "text": "Approved for shipping.",
+      "gold": {
+        "flag": true,
+        "why": "stated approval"
+      }
+    },
+    {
+      "id": "V06",
+      "text": "The packing plan meets every container requirement in the ITT.",
+      "gold": {
+        "flag": true,
+        "why": "stated full compliance"
+      }
+    },
+    {
+      "id": "V07",
+      "text": "The crates have passed the structural check.",
+      "gold": {
+        "flag": true,
+        "why": "stated structural pass"
+      }
+    },
+    {
+      "id": "V08",
+      "text": "Signed off - you can release the containers to the forwarder.",
+      "gold": {
+        "flag": true,
+        "why": "stated sign-off and release"
+      }
+    },
+    {
+      "id": "V09",
+      "text": "Clause 4.8 is satisfied, so no further review is needed.",
+      "gold": {
+        "flag": true,
+        "why": "stated clause verdict closing review"
+      }
+    },
+    {
+      "id": "V10",
+      "text": "Your tender is fully compliant and the logistics section is final.",
+      "gold": {
+        "flag": true,
+        "why": "stated compliance and finality"
+      }
+    },
+    {
+      "id": "N01",
+      "text": "Not all logistics clauses are covered yet.",
+      "gold": {
+        "flag": false,
+        "why": "negated"
+      }
+    },
+    {
+      "id": "N02",
+      "text": "Are we compliant with the tender?",
+      "gold": {
+        "flag": false,
+        "why": "question"
+      }
+    },
+    {
+      "id": "N03",
+      "text": "If the contractor confirms the stillage tare, the plan could meet the 26,000 kg limit.",
+      "gold": {
+        "flag": false,
+        "why": "conditional"
+      }
+    },
+    {
+      "id": "N04",
+      "text": "The ITT says: \"Tenders that are not compliant shall be rejected.\"",
+      "gold": {
+        "flag": false,
+        "why": "quoted tender text"
+      }
+    },
+    {
+      "id": "N05",
+      "text": "The Main Contractor wrote that the bid is ready to submit once the bond is attached.",
+      "gold": {
+        "flag": false,
+        "why": "reported speech of a third party, itself conditional"
+      }
+    },
+    {
+      "id": "N06",
+      "text": "The plan is not yet compliant with clause 4.11.",
+      "gold": {
+        "flag": false,
+        "why": "negated ('not yet compliant')"
+      }
+    },
+    {
+      "id": "N07",
+      "text": "Clause 5.1 asks whether the loading arrangement is approved by the Main Contractor.",
+      "gold": {
+        "flag": false,
+        "why": "describes what the clause asks"
+      }
+    },
+    {
+      "id": "N08",
+      "text": "Nothing here is approved for shipping; a person must check the plan.",
+      "gold": {
+        "flag": false,
+        "why": "negated"
+      }
+    },
+    {
+      "id": "N09",
+      "text": "Once a licensed engineer signs, the containers could be booked.",
+      "gold": {
+        "flag": false,
+        "why": "conditional"
+      }
+    },
+    {
+      "id": "N10",
+      "text": "I cannot say the bid is ready to submit.",
+      "gold": {
+        "flag": false,
+        "why": "negated"
+      }
+    },
+    {
+      "id": "N11",
+      "text": "The checklist has a row titled 'Approved for shipping' that is still blank.",
+      "gold": {
+        "flag": false,
+        "why": "quoted label, not a verdict"
+      }
+    },
+    {
+      "id": "N12",
+      "text": "You asked whether all clauses are covered - 14 of 25 have plan evidence and 11 need a person.",
+      "gold": {
+        "flag": false,
+        "why": "reports the user's question, then a partial count"
+      }
+    },
+    {
+      "id": "N13",
+      "text": "The tender requires the Subcontractor to confirm that the packing is compliant with the CTU Code.",
+      "gold": {
+        "flag": false,
+        "why": "describes a requirement"
+      }
+    },
+    {
+      "id": "N14",
+      "text": "Should I mark the plan as ready to book, or wait for the stillage data?",
+      "gold": {
+        "flag": false,
+        "why": "question"
+      }
+    }
+  ]
+}
