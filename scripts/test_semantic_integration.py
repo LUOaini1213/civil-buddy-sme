@@ -5,6 +5,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import sys
+import time
 from threading import Event, Thread
 import types
 import unittest
@@ -137,21 +138,30 @@ class SemanticIntegrationTests(unittest.TestCase):
 
     def test_timeout_does_not_persist_late_model_reply(self):
         turn = self.turn()
-        release, finished = Event(), Event()
+        entered, release, finished = Event(), Event(), Event()
         self.addCleanup(release.set)
+        started = time.monotonic()
+        # Exercise the real 50ms deadline only after the transport has entered.
+        # A busy worker may otherwise correctly time out before invoking the mock,
+        # which proves no late reply exists rather than the case this test targets.
+        clock = types.SimpleNamespace(time=time.time,
+            monotonic=lambda: 1.0 if entered.is_set() or time.monotonic() - started > 5 else 0.0)
         def blocked(*args, **kwargs):
             try:
+                entered.set()
                 release.wait(2)
                 return {"content": "LATE_SUMMARY_739"}
             finally:
                 finished.set()
         before = deepcopy(turn["requests"])
-        with patch("llm.chat", side_effect=blocked), patch.object(semantic_service, "SUMMARY_TIMEOUT_SECONDS", .05):
+        with patch("llm.chat", side_effect=blocked), patch.object(semantic_service, "SUMMARY_TIMEOUT_SECONDS", .05), \
+                patch.object(semantic_service, "time", clock):
             self.events(turn)
+            self.assertTrue(entered.is_set(), "the late-reply case requires an entered transport")
             self.assertEqual(turn["context"]["semantic"]["error_code"], "timeout")
             self.assertEqual(turn["requests"], before)
             release.set()
-            self.assertTrue(finished.wait(1))
+            self.assertTrue(finished.wait(5), "the explicitly released transport did not finish")
         self.core.persist.assert_not_called()
         self.core.accept.assert_not_called()
 

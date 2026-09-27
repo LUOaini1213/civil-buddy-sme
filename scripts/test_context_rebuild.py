@@ -60,6 +60,37 @@ class ContextRebuildTests(unittest.TestCase):
         return {p.name: p.read_bytes() for p in self.folder.iterdir() if p.is_file()
                 and (p.name.startswith("context.") or p.name.startswith("semantic.") or p.name.startswith("local-retrieval"))}
 
+    @unittest.skipUnless(os.name == "nt", "Windows shared-read replacement retry")
+    def test_context_report_retries_transient_windows_reader_lock(self):
+        replace = Path.replace
+        attempts = []
+        def busy_once(source, target):
+            if Path(target).name == "context.last.json":
+                attempts.append(target)
+                if len(attempts) == 1:
+                    raise PermissionError(5, "synthetic reader sharing conflict")
+            return replace(source, target)
+        with patch.object(Path, "replace", busy_once):
+            session_context.persist(self.root, self.sid, {"used": 321, "note": "new report"})
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(json.loads((self.folder / "context.last.json").read_text(encoding="utf-8"))["used"], 321)
+        self.assertEqual(list(self.folder.glob(".context.last.json.*.tmp")), [])
+        self.assert_originals()
+
+    def test_context_report_permanent_replace_failure_retains_previous_cache(self):
+        target = self.folder / "context.last.json"
+        original = target.read_bytes()
+        replace = Path.replace
+        def denied(source, destination):
+            if Path(destination) == target:
+                raise PermissionError(5, "synthetic persistent refusal")
+            return replace(source, destination)
+        with patch.object(Path, "replace", denied), self.assertRaises(PermissionError):
+            session_context.persist(self.root, self.sid, {"used": 999})
+        self.assertEqual(target.read_bytes(), original)
+        self.assertEqual(list(self.folder.glob(".context.last.json.*.tmp")), [])
+        self.assert_originals()
+
     def test_corrupt_caches_rebuild_from_originals_and_clear_model_summary(self):
         (self.folder / "context.summary.json").write_text("broken JSON", encoding="utf-8")
         (self.folder / "local-retrieval.sqlite3").write_bytes(b"broken index")

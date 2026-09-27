@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import errno
 from hashlib import sha256
 from io import BytesIO
 import json
@@ -75,10 +76,30 @@ def json_request(base, path, body=None, *, token=None, cookie=None, expected=200
     return json.loads(data)
 
 
-def port_closed(port):
+def port_closed(port, timeout=None):
     with socket.socket() as connection:
-        connection.settimeout(0.25)
-        return connection.connect_ex(("127.0.0.1", port)) != 0
+        connection.settimeout(timeout if timeout is not None else (3.0 if os.name == "nt" else 0.25))
+        # A timeout can mean a live listener has a full backlog. Only refusal proves the port is closed.
+        return connection.connect_ex(("127.0.0.1", port)) in {errno.ECONNREFUSED, 10061}  # WSAECONNREFUSED
+
+
+def wait_listener_closed(port, timeout=5.0):
+    """Wait for observed TCP closure after process exit; a persistent listener still fails at the deadline.
+
+    Windows can briefly complete a loopback connect after the owning process has exited. Synchronize against
+    the socket state as well as the already-awaited process, without changing the production shutdown path.
+    """
+    deadline = time.monotonic() + timeout
+    # Winsock may take about two seconds to report refusal on a closed loopback port. Shorter attempts only
+    # return WSAEWOULDBLOCK; retain the total deadline while allowing one refusal response to arrive.
+    probe_timeout = 3.0 if os.name == "nt" else 0.25
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        if port_closed(port, timeout=min(probe_timeout, remaining)):
+            return True
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
 
 def legacy_chat(instance, cookie, payload, output):
@@ -283,9 +304,9 @@ class Instance:
         finally:
             self.log.close()
             self.process = None
-        require(port_closed(self.port), "Rust host listener survived shutdown")
+        require(wait_listener_closed(self.port), "Rust host listener survived shutdown")
         if self.domain_port:
-            require(port_closed(self.domain_port), "Python domain listener survived shutdown")
+            require(wait_listener_closed(self.domain_port), "Python domain listener survived shutdown")
 
     def login(self):
         status, headers, _ = request(self.base, "/auth/login", {"token": self.token}, form=True)

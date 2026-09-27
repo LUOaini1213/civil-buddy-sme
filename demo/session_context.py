@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 import re
 from urllib.parse import urlencode
-from uuid import uuid4
 
 import local_retrieval
 import projects
@@ -13,7 +12,7 @@ import task_memory
 import uploads
 from context import policy
 from packing_assistant.runtime.civil_config import scrub_confirmations
-from packing_assistant.sandbox import assert_open, assert_write, guarded_write_text
+from packing_assistant.sandbox import assert_open, assert_write
 
 
 def citation(sid: str, hit: dict) -> dict:
@@ -248,12 +247,10 @@ def persist(root: Path, sid: str, report: dict | None = None) -> dict:
     if report is not None:
         folder = root / sid
         target = assert_write(folder / "context.last.json")
-        tmp = assert_write(folder / (".context-" + uuid4().hex + ".tmp"))
-        try:
-            guarded_write_text(tmp, json.dumps(report, ensure_ascii=False))
-            tmp.replace(target)
-        finally:
-            tmp.unlink(missing_ok=True)
+        # Readers may still hold the prior cache open on Windows. Use the same
+        # bounded atomic replacement as project records; failed writes retain it.
+        projects._write_atomic(target, json.dumps(report, ensure_ascii=False),
+                               before_replace=lambda: assert_write(target))
     return summary
 
 
