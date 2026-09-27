@@ -218,6 +218,7 @@ CHECKS = (
     # confirm runs Team B once (replay / 409), exports never collide, busy 429s carry Retry-After, restarts mark
     # running sessions interrupted, a pipeline concurrency cap
     Check("gateway-state-safety", ("scripts/test_gateway_state_safety.py",), timeout=300),
+    Check("python-idempotency", ("scripts/test_python_idempotency.py",), timeout=300),
     Check("offline-eval", ("-c", "from packing_assistant.runtime.eval_live import live_eval; "
           "v=live_eval(); assert v.get('verdict')=='offline_gate_pass', v; print(v['verdict'])")),
     Check("industry-eval", ("scripts/test_industry_agent_eval.py",)),

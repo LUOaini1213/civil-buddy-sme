@@ -64,6 +64,7 @@ from packing_assistant.harness import (  # noqa: E402
     run_team_b,
 )
 from packing_assistant.session_store import (  # noqa: E402
+    SessionPersistError,
     delete_checkpoint,
     list_checkpoints,
     load_checkpoint_meta,
@@ -87,6 +88,10 @@ def _store_session(session_id: str, state: Dict[str, Any]) -> None:
         _SESSIONS[rid] = state
     try:
         save_session(sid, state)
+    except SessionPersistError as exc:
+        # Loud, not silent: the database stayed locked, nothing was saved to disk (RAM holds the new
+        # state), and a restart would resume the previous one. The caller sees 503 and can retry.
+        raise HTTPException(503, f"the session was not saved: {exc}", headers={"Retry-After": "5"}) from exc
     except Exception:
         pass
 
@@ -109,6 +114,11 @@ def _get_session(session_id: str) -> Optional[Dict[str, Any]]:
 
 
 app = FastAPI(title="Civil Buddy Gateway", version=HARNESS_VERSION)
+# Added first, so it sits inside CORS and the access guard: a repeated Idempotency-Key on a run-starting
+# POST gets the stored response instead of a second run (gateway/idempotency.py).
+from gateway.idempotency import IdempotencyMiddleware  # noqa: E402
+
+app.add_middleware(IdempotencyMiddleware)
 # Same-machine pages only (the :8765 workbench probes /api/health); no cookies cross origins.
 app.add_middleware(
     CORSMiddleware,

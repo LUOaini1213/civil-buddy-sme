@@ -101,6 +101,18 @@ CREATE TABLE IF NOT EXISTS scores(
 );
 CREATE INDEX IF NOT EXISTS idx_scores_kind ON scores(kind, created_at DESC);
 
+-- Idempotency-Key -> stored response (packing_assistant/idempotency.py). A client that repeats a
+-- request with the same key and the same body gets this response back instead of a second run.
+CREATE TABLE IF NOT EXISTS idempotency_keys(
+  scope TEXT NOT NULL, key TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  status INTEGER NOT NULL,
+  response_json TEXT NOT NULL,
+  created_at REAL NOT NULL,
+  PRIMARY KEY(scope, key)
+);
+CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency_keys(created_at);
+
 -- KB 索引（D-R3 / M3 使用，schema 先随 M1 建好，data-plan §1.2）
 CREATE TABLE IF NOT EXISTS kb_index(
   path TEXT NOT NULL, kb TEXT NOT NULL,
@@ -145,10 +157,29 @@ def default_db_path() -> Path:
     return Path(raw) if raw else repo_root() / "data" / "civilbuddy.db"
 
 
+def busy_timeout_ms() -> int:
+    """How long one SQLite statement waits for another writer's lock (CB_SQLITE_BUSY_MS, default 5000)."""
+    try:
+        return max(0, int(os.getenv("CB_SQLITE_BUSY_MS") or 5000))
+    except ValueError:
+        return 5000
+
+
+def is_lock_error(exc: BaseException) -> bool:
+    """'database is locked' / 'database table is locked' / busy: another writer kept the lock past
+    busy_timeout. Transient, unlike a missing table or a damaged file."""
+    text = str(exc).lower()
+    return isinstance(exc, sqlite3.OperationalError) and ("locked" in text or "busy" in text)
+
+
 def storage_mode() -> str:
     """CB_STORAGE=json|dual|sqlite（默认 sqlite；非法值回落 sqlite）。"""
     raw = (os.getenv("CB_STORAGE") or "sqlite").strip().lower()
     return raw if raw in ("json", "dual", "sqlite") else "sqlite"
+
+
+#: a second event with the same (run_id, seq) is the same event again (index ux_events_run_seq)
+_EVENT_CONFLICT = " ON CONFLICT(run_id, seq) DO NOTHING"
 
 
 class Storage:
@@ -165,10 +196,11 @@ class Storage:
 
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=5.0)
+        busy = busy_timeout_ms()
+        conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=busy / 1000)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute(f"PRAGMA busy_timeout={busy}")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
@@ -186,6 +218,12 @@ class Storage:
             self._local.conn = conn
         return conn
 
+    def rollback_write(self) -> None:
+        """End a write transaction a failed statement left open, so a retry starts from a fresh snapshot."""
+        with self._lock:
+            if self._write_conn is not None and self._write_conn.in_transaction:
+                self._write_conn.rollback()
+
     def close(self) -> None:
         with self._lock:
             if self._write_conn is not None:
@@ -202,6 +240,7 @@ class Storage:
         with self._lock:
             conn = self.write_conn
             conn.executescript(_SCHEMA_SQL)
+            self._migrate_events_unique(conn)
             cur = conn.execute("PRAGMA user_version").fetchone()
             current = int(cur[0] or 0)
             if current != SCHEMA_VERSION:
@@ -211,6 +250,26 @@ class Storage:
                     (SCHEMA_VERSION, _now_iso()),
                 )
             conn.commit()
+
+    def _migrate_events_unique(self, conn: sqlite3.Connection) -> None:
+        """One event per (run_id, seq): a replayed or re-imported event must not become a second row.
+
+        Readers already treat (run_id, integer seq) as an event's identity (trace_events._merge_events
+        keeps the first row by id), so the copies this removes from an older database were never shown.
+        Events without a seq (NULL) stay distinct, as SQLite's UNIQUE allows. Runs once per database.
+        """
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='ux_events_run_seq'"
+        ).fetchone():
+            return
+        removed = conn.execute(
+            "DELETE FROM events WHERE seq IS NOT NULL AND id NOT IN"
+            " (SELECT MIN(id) FROM events WHERE seq IS NOT NULL GROUP BY run_id, seq)"
+        ).rowcount
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_events_run_seq ON events(run_id, seq)")
+        conn.commit()
+        if removed:
+            logger.warning("events: removed %d duplicate (run_id, seq) rows before adding the unique index", removed)
 
     def user_version(self) -> int:
         return int(self._read_conn().execute("PRAGMA user_version").fetchone()[0])
@@ -467,11 +526,11 @@ class Storage:
 
     def insert_event(self, ev: dict) -> None:
         with self._lock:
-            self.write_conn.execute(
+            cur = self.write_conn.execute(
                 "INSERT INTO events"
                 "(run_id, seq, ts, t_ms, type, node, agent_id, parent_node, tool, status,"
                 " duration_ms, payload_json)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)" + _EVENT_CONFLICT,
                 (
                     str(ev.get("run_id") or ""),
                     ev.get("seq"),
@@ -488,6 +547,18 @@ class Storage:
                 ),
             )
             self.write_conn.commit()
+        if not cur.rowcount:
+            self._note_duplicate_event(ev)
+
+    def _note_duplicate_event(self, ev: dict) -> None:
+        """(run_id, seq) is taken. The same event again is a replay and is dropped quietly; a different
+        event under a used seq is a writer bug worth a warning (readers show the first one either way)."""
+        row = self._read_conn().execute(
+            "SELECT type FROM events WHERE run_id=? AND seq=?", (str(ev.get("run_id") or ""), ev.get("seq"))
+        ).fetchone()
+        if row and row[0] != str(ev.get("type") or "event"):
+            logger.warning("events: run %s seq %s is already %r; dropped %r", ev.get("run_id"), ev.get("seq"),
+                           row[0], ev.get("type"))
 
     def insert_events(self, events: List[dict]) -> None:
         if not events:
@@ -514,7 +585,7 @@ class Storage:
                 "INSERT INTO events"
                 "(run_id, seq, ts, t_ms, type, node, agent_id, parent_node, tool, status,"
                 " duration_ms, payload_json)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)" + _EVENT_CONFLICT,
                 rows,
             )
             self.write_conn.commit()
@@ -677,6 +748,30 @@ class Storage:
                 " VALUES(?,?,?,?,?,?,?,?)",
                 (str(kind), case_id, run_id, session_id, passed, score,
                  json.dumps(detail or {}, ensure_ascii=False, default=str), _now_iso()),
+            )
+            self.write_conn.commit()
+
+    # ---------- idempotency keys (packing_assistant/idempotency.py) ----------
+
+    def idem_get(self, scope: str, key: str) -> Optional[dict]:
+        row = self._read_conn().execute(
+            "SELECT fingerprint, status, response_json, created_at FROM idempotency_keys WHERE scope=? AND key=?",
+            (str(scope), str(key)),
+        ).fetchone()
+        if not row:
+            return None
+        return {"fingerprint": row[0], "status": int(row[1]), "response": json.loads(row[2]), "created_at": row[3]}
+
+    def idem_put(self, scope: str, key: str, *, fingerprint: str, status: int, response: Any,
+                 created_at: float, expire_before: float) -> None:
+        """Store the response under (scope, key); drop every entry created before expire_before."""
+        with self._lock:
+            self.write_conn.execute("DELETE FROM idempotency_keys WHERE created_at < ?", (float(expire_before),))
+            self.write_conn.execute(
+                "INSERT OR REPLACE INTO idempotency_keys(scope, key, fingerprint, status, response_json, created_at)"
+                " VALUES(?,?,?,?,?,?)",
+                (str(scope), str(key), str(fingerprint), int(status),
+                 json.dumps(response, ensure_ascii=False, default=str), float(created_at)),
             )
             self.write_conn.commit()
 
