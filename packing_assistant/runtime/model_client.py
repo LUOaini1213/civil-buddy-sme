@@ -132,16 +132,21 @@ def complete(messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]
                     with interrupt_event(response, cancel_event):
                         status = response.status_code
                         if status >= 400:
+                            # The provider's body may echo the key or the submitted documents, and this message
+                            # becomes the turn's reply: the redacted excerpt goes to the civil.model_retry log only
+                            # (same rule as demo/llm.py, pinned by test_workbench_settings).
                             excerpt = model_retry.safe_excerpt(model_retry.read_body(response), secrets)
-                            said = f" 上游返回：{excerpt}" if excerpt else ""
                             if model_retry.retryable_status(status):
                                 hint = "请求受限（限流或额度）" if status == 429 else "模型服务暂不可用"
                                 raise model_retry.Transient(
                                     lambda attempts: ModelError(
-                                        f"模型接口返回 {status}：{hint}，已尝试 {attempts} 次，请稍后重试。{said}"),
+                                        f"模型接口返回 {status}：{hint}，已尝试 {attempts} 次，请稍后重试。"),
                                     reason=f"HTTP {status}", excerpt=excerpt,
                                     retry_after=model_retry.parse_retry_after(response.headers.get("retry-after")))
-                            raise ModelError(f"模型接口返回 {status}，请检查模型名、Key 与额度。{said}")
+                            if excerpt:
+                                model_retry.logger.warning("model_client.complete: HTTP %d, not retried - upstream "
+                                                           "said: %s", status, excerpt)
+                            raise ModelError(f"模型接口返回 {status}，请检查模型名、Key 与额度。")
                         response.read()
                         check_cancelled()
                         try:

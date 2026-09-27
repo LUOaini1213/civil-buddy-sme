@@ -191,15 +191,29 @@ class ModelClient(Case):
         self.assertGreaterEqual(fake.gaps[0], 0.95)
         self.assertLess(fake.gaps[0], 6.0)
 
-    def test_400_is_not_retried_and_says_what_the_endpoint_said_without_the_key(self):
+    def test_400_is_not_retried_and_the_body_goes_to_the_log_not_the_reply(self):
         from packing_assistant.runtime.model_client import ModelError
-        fake = self.serve((400, {"error": {"message": f"model 'fixture' does not exist (key {KEY})"}}, {}))
-        with self.assertRaises(ModelError) as caught:
+        fake = self.serve((400, {"error": {"message": f"model 'fixture' does not exist (key {KEY}); private document"}},
+                           {}))
+        with self.assertRaises(ModelError) as caught, self.assertLogs("civil.model_retry", "WARNING") as logs:
             self.complete()
         self.assertEqual(len(fake.stamps), 1)
         self.assertIn("400", str(caught.exception))
-        self.assertIn("does not exist", str(caught.exception))
+        self.assertNotIn("private document", str(caught.exception))   # the message becomes the turn's reply
         self.assertNotIn(KEY, str(caught.exception))
+        self.assertIn("does not exist", logs.output[-1])
+        self.assertNotIn(KEY, "\n".join(logs.output))
+
+    def test_a_5xx_body_stays_out_of_the_final_message(self):
+        from packing_assistant.runtime.model_client import ModelError
+        os.environ["CIVIL_MODEL_RETRIES"] = "0"
+        self.serve((503, {"error": f"echoed {KEY} and a private document"}, {}))
+        with self.assertRaises(ModelError) as caught, self.assertLogs("civil.model_retry", "WARNING") as logs:
+            self.complete()
+        self.assertIn("503", str(caught.exception))
+        self.assertNotIn("private document", str(caught.exception))
+        self.assertNotIn(KEY, str(caught.exception))
+        self.assertNotIn(KEY, "\n".join(logs.output))
 
     def test_persistent_5xx_gives_up_after_three_attempts_and_does_not_blame_the_key(self):
         from packing_assistant.runtime.model_client import ModelError
@@ -259,6 +273,30 @@ class DemoLLM(Case):
             chat([{"role": "user", "content": "hi"}])
         self.assertLess(time.monotonic() - started, 7.0)
         self.assertEqual(len(fake.stamps), 1)
+
+    def test_a_cancel_while_the_request_is_in_flight_sends_nothing_more_and_logs_no_retry(self):
+        import logging
+
+        import turn_control
+        from llm import LLMError, chat
+        for how in ("turn", "event"):
+            with self.subTest(how=how):
+                fake = self.serve("hang", (200, OK, {}))
+                control, event = turn_control.TurnControl("retry-cancel-" + how), threading.Event()
+                threading.Timer(1.0, control.request_cancel if how == "turn" else event.set).start()
+                records = []
+                handler = logging.Handler(logging.DEBUG)
+                handler.emit = records.append
+                log = logging.getLogger("civil.model_retry")
+                log.addHandler(handler)
+                self.addCleanup(log.removeHandler, handler)
+                started = time.monotonic()
+                with self.assertRaises(LLMError), turn_control.using(control):
+                    chat([{"role": "user", "content": "hi"}], cancel_event=event)
+                self.assertLess(time.monotonic() - started, 4.0)
+                time.sleep(1.5)   # a retry, had one been scheduled, would have been sent by now
+                self.assertEqual(len(fake.stamps), 1)
+                self.assertFalse([r for r in records if "retrying" in r.getMessage()])
 
     def test_stream_retries_before_the_first_text_only(self):
         from llm import stream_plain

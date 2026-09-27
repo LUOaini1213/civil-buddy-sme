@@ -55,9 +55,20 @@ def _check_status(response: httpx.Response, secrets: tuple = ()) -> None:
     raise LLMError(f"LLM HTTP {status}：{hint}")
 
 
-def _transient_transport(exc: BaseException, final: LLMError) -> LLMError | model_retry.Transient:
+def _cancel_requested(cancel_event=None) -> bool:
+    from turn_control import _CURRENT
+
+    control = _CURRENT.get()
+    return bool((control is not None and control.event.is_set())
+                or (cancel_event is not None and cancel_event.is_set()))
+
+
+def _transient_transport(exc: BaseException, final: LLMError, cancel_event=None) -> LLMError | model_retry.Transient:
     """Connect/read timeouts and a reset or dropped connection are worth another attempt; a refused
-    connection, a bad URL or a write/pool timeout are not."""
+    connection, a bad URL or a write/pool timeout are not. A cancel closes the socket and shows up here as a
+    dropped connection: that is not retried, and ends with the same error it did before retries existed."""
+    if _cancel_requested(cancel_event):
+        return final
     if isinstance(exc, (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ReadError, httpx.WriteError,
                         httpx.RemoteProtocolError)):
         return model_retry.Transient(final, reason=type(exc).__name__)
@@ -265,9 +276,9 @@ def chat(
                             raise LLMError("模型返回了无效回复，请检查接口兼容性后重试") from None
                         return message
         except httpx.TimeoutException as exc:
-            raise _transient_transport(exc, LLMError("模型响应超时，请稍后重试")) from None
+            raise _transient_transport(exc, LLMError("模型响应超时，请稍后重试"), cancel_event) from None
         except (httpx.RequestError, httpx.InvalidURL) as exc:
-            raise _transient_transport(exc, LLMError("无法连接模型接口，请检查 Base URL 和网络后重试")) from None
+            raise _transient_transport(exc, LLMError("无法连接模型接口，请检查 Base URL 和网络后重试"), cancel_event) from None
 
     return model_retry.run(attempt, budget_s=_retry_budget(), label="llm.chat", wait=_retry_wait(cancel_event))
 
