@@ -6,6 +6,9 @@
   <meta name="theme-color" content="#17181a" />
   <title>Agent 工作台 · Civil Buddy</title>
   <link rel="icon" href="/static/icons/cb-icon.svg" type="image/svg+xml" />
+  <script src="/static/i18n.js"></script>
+  <script src="/static/i18n-agent.js"></script>
+  <script src="/static/i18n-home.js"></script>
   <script src="/static/theme.js?v=unified1"></script>
   <link rel="stylesheet" href="/static/theme.css?v=unified1" />
   <link rel="stylesheet" href="/static/agent.css?v=unified1" />
@@ -39,16 +42,16 @@
       <p id="agentWorkspaceStatus" class="muted wrap" role="status">尚未选择文件夹</p>
       <div class="section-title"><h2>本次资料</h2><button id="agentRefreshFiles" type="button" class="quiet" disabled>刷新</button></div>
       <p class="muted small">勾选的文件随下一条任务提交；切换文件夹会分别保留选择。</p>
-      <div id="agentFiles" class="file-list"><p class="muted">打开文件夹后显示可读资料。</p></div>
+      <div id="agentFiles" data-i18n-skip class="file-list"><p class="muted">打开文件夹后显示可读资料。</p></div>
       <div class="section-title"><h2>工程计算来源</h2><button id="agentRefreshEngineering" type="button" class="quiet" disabled>刷新</button></div>
       <p class="muted small">最多选 4 个已保存项目。读取当前快照后加入；模型不能修改几何或原始参数。</p>
       <p id="agentEngineeringStatus" class="muted small" role="status">打开工程文件夹后可选择。</p>
-      <div id="agentEngineering" class="engineering-list"></div>
+      <div id="agentEngineering" data-i18n-skip class="engineering-list"></div>
       <div class="section-title"><h2>会话</h2><button id="agentNewSession" type="button" class="quiet" disabled>新会话</button></div>
       <label class="sr-only" for="agentSession">当前会话</label>
-      <select id="agentSession" disabled></select>
+      <select id="agentSession" data-i18n-skip disabled></select>
       <div class="section-title"><h2>执行记录</h2><button id="agentRefreshTurns" type="button" class="quiet" disabled>刷新</button></div>
-      <div id="agentTurns" class="turn-list"><p class="muted">本会话暂无执行记录。</p></div>
+      <div id="agentTurns" data-i18n-skip class="turn-list"><p class="muted">本会话暂无执行记录。</p></div>
     </aside>
     <section class="main-panel" aria-label="任务执行">
       <div id="agentCapability" class="notice" role="status">正在检测 Agent 能力…</div>
@@ -70,7 +73,7 @@
         <p id="voiceStatus" class="cb-voice-status" role="status" aria-live="polite"></p>
         <p id="voiceInterim" class="cb-voice-interim" aria-hidden="true"></p>
         <div class="composer-controls">
-          <label>岗位<select id="agentExpert"><option value="">自动选择</option></select></label>
+          <label>岗位<select id="agentExpert" data-i18n-skip><option value="">自动选择</option></select></label>
           <label>执行方式<select id="agentMode"><option value="steps">检查资料（无需模型）</option><option value="model">模型规划与工具执行</option></select></label>
           <label>文件权限<select id="agentSandbox"><option value="read-only">只读</option><option value="workspace-write">允许工作区写入</option></select></label>
           <button id="agentSend" type="submit" disabled>开始任务</button>
@@ -78,7 +81,7 @@
         </div>
         <p id="agentExpertNote" class="muted small">正在读取可用岗位。</p>
         <label id="agentRiskWrap" class="risk-confirmation" hidden>高风险岗位写入前，请完整输入：我明白，将由持证人员签认
-          <input id="agentRiskConfirmation" autocomplete="off" placeholder="我明白，将由持证人员签认" />
+          <input id="agentRiskConfirmation" data-i18n-skip autocomplete="off" placeholder="我明白，将由持证人员签认" />
         </label>
         <p id="agentSandboxNote" class="muted small">正在读取权限能力。</p>
       </form>
@@ -92,13 +95,13 @@
         <div class="section-title"><h2 id="agentResultTitle">任务结果</h2><span id="agentTurnStatus" class="status-tag">尚未开始</span></div>
         <p id="agentTurnActor" class="muted small">尚无任务发起者记录。</p>
         <p id="agentPartial" class="notice warning" hidden>本轮只完成了部分工作，已保存的产物仍可下载。</p>
-        <div id="agentReply" class="reply">结果将显示在这里。</div>
-        <div id="agentArtifacts" class="artifact-list"></div>
+        <div id="agentReply" data-i18n-skip class="reply">结果将显示在这里。</div>
+        <div id="agentArtifacts" data-i18n-skip class="artifact-list"></div>
         <details id="agentUsage" hidden><summary>实际调用用量</summary><pre id="agentUsageText"></pre></details>
       </section>
       <section class="panel" aria-labelledby="agentEventsTitle">
         <div class="section-title"><h2 id="agentEventsTitle">执行过程</h2><span class="muted small">按后端事件恢复</span></div>
-        <ol id="agentEvents" class="events"></ol>
+        <ol id="agentEvents" data-i18n-skip class="events"></ol>
       </section>
       <p class="muted small footer-note">文档产物为内部草稿。工程数字依据原始资料和计算工具，签认由相应专业人员完成。</p>
     </section>

@@ -403,3 +403,18 @@ def test_client_stops_before_the_server_limit():
     seconds = int(re.search(r"const MAX_SECONDS = (\d+);", js).group(1))
     assert seconds == asr.MAX_SECONDS
     assert "const MAX_MS = (MAX_SECONDS - 1) * 1000;" in js  # 1 s early, plus the server's grace
+
+
+def test_english_locale_controls_decode_without_mandarin_lexicon(client, fake_engine):
+    response = client.post("/api/asr", content=b"synthetic-audio", headers={"x-civil-asr-language": "en"})
+    assert response.status_code == 200
+    assert response.json()["language"] == "en"
+    assert response.json()["lexicon"] is False
+    assert fake_engine.calls[0]["language"] == "en"
+    assert "English speech" in fake_engine.calls[0]["initial_prompt"]
+
+
+def test_unsupported_speech_language_is_refused_before_decode(client, fake_engine):
+    response = client.post("/api/asr", content=b"synthetic-audio", headers={"x-civil-asr-language": "invalid"})
+    assert response.status_code == 400
+    assert fake_engine.calls == []

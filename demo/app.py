@@ -69,6 +69,7 @@ _PUBLIC = {"/", "/sw.js", "/api/health", "/cad", "/logistics", "/engineering", "
 
 class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=40_000)
+    locale: str = Field(default="zh-CN", pattern=r"^(zh-CN|en)$")
     history: list[dict] = Field(default_factory=list, max_length=80)
     expert_ids: list[str] = Field(default_factory=list, max_length=8)
     confirm_ok: StrictBool = False  # still sent for the Rust workbench that serves the same page; never approves here
@@ -376,7 +377,7 @@ async def asr_transcribe(request: Request) -> dict:
             raise HTTPException(413, "录音不能超过 8 MB")
         data.extend(chunk)
     try:
-        return {"ok": True, **(await run_in_threadpool(asr.transcribe, bytes(data)))}
+        return {"ok": True, **(await run_in_threadpool(asr.transcribe, bytes(data), language=request.headers.get("x-civil-asr-language", "zh")))}
     except asr.AsrTooLarge as exc:
         raise HTTPException(413, str(exc)) from exc
     except asr.AsrInputError as exc:

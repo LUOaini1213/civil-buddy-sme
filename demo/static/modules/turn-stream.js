@@ -1,3 +1,4 @@
+const cbStreamText = (source, values = {}) => globalThis.CBI18n?.t(source, values) ?? String(source || "").replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
 /* One turn of the conversation, from the page's side.
  *
  * The first /api/chat stream, a resume after a dropped connection (GET
@@ -30,6 +31,7 @@ export function createTurnStream(deps) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         message,
+        locale: globalThis.CBI18n?.locale || "zh-CN",
         // The server owns full history; this bounded fallback excludes this turn.
         history: state.history.slice(-81, -1),
         expert_ids: [...state.summoned],
@@ -73,7 +75,7 @@ export function createTurnStream(deps) {
       }
       deps.loadThreads().catch(() => {});
     } catch (err) {
-      if (runs.active() === run && v.tl) v.tl.error(err.name === "AbortError" ? "已停止接收回答" : String(err.message || err));
+      if (runs.active() === run && v.tl) v.tl.error(err.name === "AbortError" ? cbStreamText("已停止接收回答") : String(err.message || err));
       throw err;
     }
   }
@@ -260,7 +262,7 @@ export function createTurnStream(deps) {
       if (v.bodyEl) {
         const note = ui.doc.createElement("p");
         note.className = stopped ? "status-line" : "status-line err";
-        note.textContent = stopped ? "已停止接收回答。已有内容已保留。" : String(err.message || err);
+        note.textContent = stopped ? cbStreamText("已停止接收回答。已有内容已保留。") : String(err.message || err);
         v.bodyEl.parentElement.appendChild(note);
       } else if (!stopped) ui.addStatus(String(err.message || err));
     } finally {

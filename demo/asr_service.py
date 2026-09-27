@@ -37,7 +37,7 @@ def worker_environment(command: str) -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if key.upper() in names}
     env.update(PYTHONUTF8="1", PYTHON_DOTENV_DISABLED="1", HF_HUB_DISABLE_TELEMETRY="1")
     env["CB_ASR_MODEL"] = asr.MODEL_NAME
-    if command == "transcribe":
+    if command in {"transcribe", "transcribe-en"}:
         env.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
     return env
 
@@ -148,6 +148,9 @@ class AsrService:
         return {"ok": True, "request_id": request_id, "status": previous or "cancelled", "process_reaped": True}
 
     async def transcribe(self, request: Request, request_id: str) -> dict:
+        language = request.headers.get("x-civil-asr-language", "zh")
+        if language not in {"zh", "en"}:
+            raise HTTPException(400, "Unsupported speech language")
         info = await self.status()
         if not info["available"]:
             raise HTTPException(503, info["reason"])
@@ -175,7 +178,7 @@ class AsrService:
                 raise HTTPException(400, str(exc)) from exc
             if job.cancelled:
                 raise HTTPException(409, "语音请求已取消")
-            job.process = await self.spawn("transcribe")
+            job.process = await self.spawn("transcribe-en" if language == "en" else "transcribe")
             if job.cancelled:
                 raise HTTPException(409, "语音请求已取消")
             communication = asyncio.create_task(job.process.communicate(bytes(audio)))

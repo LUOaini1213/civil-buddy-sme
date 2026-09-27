@@ -82,6 +82,22 @@ def _weekdays(value):
 
 
 def _command(plan, raw):
+    # English aliases use the same bounded, full-match grammar and validators.
+    # IDs retain their case; questions, negation and trailing clauses do not match.
+    english = raw.strip().rstrip(".")
+    match = re.fullmatch(rf"(?:please\s+)?set\s+(?:task\s+)?({ID})\s+duration\s+to\s+([0-9]+)\s+working\s+days?", english, re.I)
+    if match:
+        _task(plan, match[1])["duration"] = int(match[2]); return
+    match = re.fullmatch(rf"(?:please\s+)?set\s+(?:task\s+)?({ID})\s+(?:progress|completion)\s+to\s+([0-9]+(?:\.[0-9]+)?)\s*%", english, re.I)
+    if match:
+        _task(plan, match[1])["progress"] = float(match[2]); return
+    match = re.fullmatch(rf"(?:please\s+)?set\s+resource\s+({ID})\s+capacity\s+to\s+([0-9]+)", english, re.I)
+    if match:
+        _resource(plan, match[1])["capacity"] = int(match[2]); return
+    match = re.fullmatch(rf"(?:please\s+)?set\s+(?:task\s+)?({ID})\s+resource\s+({ID})\s+(?:demand|quantity)\s+to\s+([0-9]+)", english, re.I)
+    if match:
+        row = _task(plan, match[1]); _resource(plan, match[2])
+        row["resources"][match[2]] = int(match[3]); return
     # Removing whitespace is safe only because every remaining token is matched
     # against this bounded grammar; trailing text, questions and negation fail.
     text = re.sub(r"\s+", "", raw).strip("。")
@@ -175,18 +191,19 @@ def propose_command(plan, message, method="cpm"):
     after = deepcopy(before)
     base_method = method
     method_command = re.fullmatch(r"(?:请)?(?:按资源容量优化|优化资源排程|改用资源排程|改用关键路径排程|计算关键路径|重新计算关键路径|重新计算计划)", re.sub(r"\s+", "", text))
+    english_method = re.fullmatch(r"(?:please\s+)?(?:(optimise|optimize)\s+for\s+resource\s+capacity|(?:calculate|recalculate)\s+(?:the\s+)?critical\s+path)", text, re.I)
     commands = [part.strip() for part in re.split(r"[;；\n]+", text) if part.strip()]
     if not 1 <= len(commands) <= 30:
         raise ValueError("每次请提交 1–30 项明确修改。")
-    if method_command:
-        method = "resource" if "资源" in text else "cpm" if "关键路径" in text else base_method
+    if method_command or english_method:
+        method = ("resource" if english_method[1] else "cpm") if english_method else "resource" if "资源" in text else "cpm" if "关键路径" in text else base_method
     else:
         for command in commands:
             check()
             _command(after, command)
     after = validate_plan(after)
     changes = _changes(before, after)
-    if method_command:
+    if method_command or english_method:
         changes.append({"parameter": "method", "before": base_method, "after": method})
     if not changes:
         raise ValueError("指定值与当前计划一致，没有待应用的修改。")
@@ -239,6 +256,10 @@ def inspect_plan(context):
 
 def operation(message, context=None):
     text = _text(message)
+    if re.fullmatch(r"(?:please\s+)?(?:check|inspect|review)\s+(?:the\s+|current\s+)?(?:plan|schedule)\??", text, re.I):
+        return "planning_inspect"
+    if re.fullmatch(r"(?:please\s+)?undo\s+(?:the\s+)?last\s+save", text, re.I):
+        return "planning_undo"
     if re.fullmatch(r"(?:请)?(?:撤销|撤回)(?:上一次|上次|刚才的)?(?:保存|修改|操作)?", text):
         return "planning_undo"
     if re.search(r"改用|计算|优化", text):

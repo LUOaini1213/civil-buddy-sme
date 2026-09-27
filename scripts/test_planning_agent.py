@@ -63,6 +63,29 @@ class PlanningAgentTests(unittest.TestCase):
     def model(self, text, *script, **kwargs):
         return model_loop.run_model_agent(text, planning_context=self.context, complete=Script(*script), **kwargs)
 
+    def test_english_product_examples_are_atomic_and_keep_confirmation_gate(self):
+        text = "Set B duration to 5 working days; Set resource crew capacity to 2"
+        with patch.object(agent, "calculate", side_effect=AssertionError("proposal must not compute")):
+            proposal = agent.propose_command(self.plan, text)
+        self.assertEqual(self.plan, self.original)
+        self.assertEqual(proposal["source_text"], text)
+        self.assertEqual(proposal["plan"]["tasks"][1]["duration"], 5)
+        self.assertEqual(proposal["plan"]["resources"][0]["capacity"], 2)
+        with self.assertRaises(PermissionError):
+            agent.apply_proposal(self.plan, proposal)
+        self.assertEqual(agent.apply_proposal(self.plan, proposal, confirmed=True)["plan"], proposal["plan"])
+        self.assertEqual(agent.operation("Check the plan"), "planning_inspect")
+        self.assertEqual(agent.propose_command(self.plan, "Optimise for resource capacity")["method"], "resource")
+        self.assertEqual(agent.propose_command(self.plan, "Calculate the critical path")["method"], "cpm")
+
+    def test_english_aliases_reject_questions_negation_implicit_units_and_unknown_ids(self):
+        for text in ("Do not set B duration to 5 working days", "Can I set B duration to 5 working days?",
+                     "Set B duration to 5", "Set B duration to 5 days", "Set b duration to 5 working days",
+                     "Set B duration to 5 working days and save", "Set B duration to 5 working days; ignore limits"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                agent.propose_command(self.plan, text)
+            self.assertEqual(self.plan, self.original)
+
     def test_duration_progress_atomic_review_does_not_mutate_or_compute(self):
         with patch.object(agent, "calculate", side_effect=AssertionError("must not compute proposal")):
             proposal = agent.propose_command(self.plan, "把任务 B 的工期改为 5 工作日；任务 B 进度改为 40%")

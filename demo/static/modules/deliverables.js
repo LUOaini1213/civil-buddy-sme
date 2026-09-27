@@ -1,3 +1,4 @@
+const cbDeliverableText = (source, values = {}) => globalThis.CBI18n?.t(source, values) ?? String(source || "").replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
 /* Deliverables on the page: download links without server paths, the card under an
  * answer (one row per document with its md / docx / xlsx, a zip for a multi-file run), and
  * the preview. Pure helpers are exported for tests; the DOM side is a factory:
@@ -123,14 +124,14 @@ export function createDeliverables({ state, capability, obStep, addStatus, openD
         row.className = "cb-doc-row";
         const t = doc.createElement("span");
         t.className = "cb-doc-card-t";
-        t.textContent = g.stem || "文书";
+        t.textContent = g.stem || cbDeliverableText("文书");
         t.title = g.formats.map((f) => f.name).join(" / ");
         row.appendChild(t);
         const md = g.formats.find(isDocMd);
         if (md) {
           const b = doc.createElement("button");
           b.type = "button";
-          b.textContent = "预览";
+          b.textContent = cbDeliverableText("预览");
           b.addEventListener("click", () => openDeliverable(md));
           row.appendChild(b);
         }

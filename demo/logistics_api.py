@@ -50,6 +50,7 @@ class SaveIn(eng.Input):
 class ChatIn(eng.RevisionIn):
     message: str = Field(min_length=1, max_length=4000)
     compare_project_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    locale: Literal["zh-CN", "en"] | None = None
 
 
 class ChangesIn(eng.RevisionIn):
@@ -215,9 +216,11 @@ async def conversation(ident: str, request: Request):
     def work():
         project = project_at(ident, body.expected_revision)
         context = project_context(project)
+        context["locale"] = body.locale
         if body.compare_project_id:
             other = eng.storage_call(store().open, body.compare_project_id)
-            return {"ok": True, "reply": "已按两个保存台账的明确材料编号对照；未修改台账。", "comparison": compare_documents(project["document"], other["document"]), "comparison_revision": other["revision"]}
+            reply = "Compared the saved ledgers by explicit material IDs. Neither ledger was changed." if body.locale == "en" else "已按两个保存台账的明确材料编号对照；未修改台账。"
+            return {"ok": True, "reply": reply, "comparison": compare_documents(project["document"], other["document"]), "comparison_revision": other["revision"]}
         result = execute(context, operation(body.message, context), {}, body.message)
         if result.get("logistics_proposal") or result.get("logistics_action"):
             pid = register_proposal(context, result.get("logistics_proposal"), result.get("logistics_action"))

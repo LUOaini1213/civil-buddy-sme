@@ -18,13 +18,13 @@ def main() -> None:
             # Only this explicit command may download. Exit releases model memory.
             WhisperModel(asr.MODEL_NAME, device=asr.DEVICE, compute_type=asr.COMPUTE_TYPE)
             result = {"ok": True, "state": "ready"}
-        elif command == "transcribe":
+        elif command in {"transcribe", "transcribe-en"}:
             audio = sys.stdin.buffer.read(asr.MAX_AUDIO_BYTES + 1)
             asr.check_size(len(audio))
             # No implicit prepare()/download path can run during a transcription.
             asr._model = WhisperModel(asr.MODEL_NAME, device=asr.DEVICE,
                                      compute_type=asr.COMPUTE_TYPE, local_files_only=True)
-            result = {"ok": True, **asr.transcribe(audio)}
+            result = {"ok": True, **asr.transcribe(audio, language="en" if command == "transcribe-en" else "zh")}
         else:
             raise ValueError("unknown ASR worker command")
     except asr.AsrTooLarge:

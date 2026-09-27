@@ -521,8 +521,9 @@ async fn gate(State(auth): State<Arc<InstanceAuth>>, mut request: Request, next:
     response
 }
 
-async fn login_page() -> Html<&'static str> {
-    Html("<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Civil Buddy 登录</title><body><h1>Civil Buddy</h1><p>每位成员使用独立实例与资料目录。请输入管理员提供的访问令牌。</p><form action=\"/auth/login\" method=\"post\"><label>访问令牌 <input type=\"password\" name=\"token\" required autocomplete=\"current-password\"></label><button type=\"submit\">登录</button></form></body></html>")
+async fn login_page() -> Html<String> {
+    // Inline the same public language helper: login cannot fetch authenticated assets yet.
+    Html(format!(r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Civil Buddy 登录</title><script>{}</script><style>body{{font:16px/1.6 system-ui,sans-serif;max-width:520px;margin:8vh auto;padding:24px;background:#f8fafc;color:#172033}}header{{display:flex;align-items:center;justify-content:space-between;gap:16px}}input{{display:block;box-sizing:border-box;width:100%;padding:12px;margin:8px 0 20px}}button{{padding:9px 16px;border:1px solid #64748b;border-radius:7px;background:white;color:#172033;cursor:pointer;font:inherit}}button:focus-visible,input:focus-visible{{outline:3px solid #2563eb;outline-offset:3px}}</style></head><body><header><h1>Civil Buddy</h1></header><p>每位成员使用独立实例与资料目录。请输入管理员提供的访问令牌。</p><form action="/auth/login" method="post"><label>访问令牌 <input type="password" name="token" required autocomplete="current-password"></label><button type="submit">登录</button></form></body></html>"#, include_str!("../../../demo/static/i18n.js")))
 }
 #[derive(Deserialize)]
 struct Login {

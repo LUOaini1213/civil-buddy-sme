@@ -118,6 +118,18 @@ app.add_middleware(access_guard.AccessGuard,
                    public=lambda path: path in {"/", "/workbench", "/api/health"} or path.startswith("/static/"))
 
 FRONTEND_DIR = ROOT / "frontend"
+
+
+@app.get("/static/i18n.js")
+def workbench_i18n_core():
+    return FileResponse(ROOT / "demo/static/i18n.js", media_type="application/javascript")
+
+
+@app.get("/static/i18n-logistics.js")
+def workbench_i18n_logistics():
+    return FileResponse(ROOT / "demo/static/i18n-logistics.js", media_type="application/javascript")
+
+
 if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 # The link from a browser: upload a tender + panel list, the /demo page (all behind the token; gateway/web_link.py)

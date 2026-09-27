@@ -1,4 +1,6 @@
 (() => {
+const cbStudioText = (source, values = {}) => window.CBI18n?.t(source, values) ?? String(source || "").replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
+(() => {
   const $ = (id) => document.getElementById(id);
   let tree = null;
   let currentPath = "";
@@ -205,7 +207,7 @@
     }
     currentPath = "";
     $("editor").value = "";
-    $("filePath").textContent = "未打开文件";
+    $("filePath").textContent = cbStudioText("未打开文件");
     $("saveFile").disabled = true;
     dirty = false;
     await loadTree();
@@ -301,4 +303,6 @@
     }
     await loadTree();
   });
+})();
+
 })();

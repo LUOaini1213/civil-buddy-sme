@@ -1,5 +1,15 @@
 import * as THREE from './vendor/three/three.module.js';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
+const translatedUI = new Map();
+const trEngineering = (source, values) => {
+  const result = (globalThis.CBI18n || globalThis.window?.CBI18n)?.t(source, values) ?? source.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, (match, key) => values && Object.hasOwn(values, key) ? String(values[key]) : match);
+  translatedUI.set(result, { source, values });
+  if (translatedUI.size > 2500) translatedUI.delete(translatedUI.keys().next().value);
+  return result;
+};
+// Only explicitly named app-owned status nodes are refreshed here. Source text and inputs are excluded.
+const relocalizeOwned = (doc, ids) => { for (const id of ids) { const node = doc.getElementById(id); if (!node) continue; const nodes = node.tagName === 'SELECT' ? [...node.options] : [node]; for (const target of nodes) { const item = translatedUI.get(target.textContent); if (item) target.textContent = trEngineering(item.source, item.values); } } };
+const uiLocale = () => (globalThis.CBI18n || globalThis.window?.CBI18n)?.locale || 'zh-CN';
 
 const COLORS = { wall: 0x85c9d6, column: 0x59d7ba, slab: 0x7a94b1, section: 0x66cdb7 };
 
@@ -15,11 +25,11 @@ export class CadViewer {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.domElement.setAttribute('aria-label', '可旋转的三维几何模型；构件详情也可从二维轮廓选择');
+    this.renderer.domElement.setAttribute('aria-label', trEngineering("可旋转的三维几何模型；构件详情也可从二维轮廓选择"));
     this.renderer.domElement.setAttribute('role', 'img');
     this.renderer.domElement.addEventListener('webglcontextlost', (event) => {
       event.preventDefault();
-      this.onError('三维显示上下文已丢失。模型数据仍保留，可导出；刷新页面可重新初始化查看器。');
+      this.onError(trEngineering("三维显示上下文已丢失。模型数据仍保留，可导出；刷新页面可重新初始化查看器。"));
     });
     host.prepend(this.renderer.domElement);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);

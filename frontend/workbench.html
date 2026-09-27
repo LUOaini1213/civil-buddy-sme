@@ -7,6 +7,8 @@
   <link rel="manifest" href="/static/manifest.webmanifest" />
   <link rel="icon" href="/static/icons/cb-icon.svg" type="image/svg+xml" />
   <title>装箱拼柜 · Civil Buddy</title>
+  <script src="/static/i18n.js"></script>
+  <script src="/static/i18n-logistics.js"></script>
   <!-- ux(round4)：零 CDN——Vue/marked/文书预览组件全部同源 vendored（frontend/vendor/） -->
   <script src="/static/vendor/vue.min.js"></script>
   <style>
@@ -2198,14 +2200,14 @@ button.danger { background: var(--cb-red); box-shadow: none; }
       var tb = document.getElementById("cbThemeBtn"), lb = document.getElementById("cbLargeBtn");
       var dark = window.cbIsDark();
       if (tb) {
-        tb.textContent = dark ? "暗" : "明"; /* 图标=文字：显示当前主题 */
+        tb.textContent = window.CBI18n ? CBI18n.t(dark ? "暗" : "明") : (dark ? "暗" : "明"); /* 图标=文字：显示当前主题 */
         tb.setAttribute("aria-pressed", dark ? "true" : "false");
-        tb.setAttribute("aria-label", dark ? "主题：当前深色，点击切换为浅色" : "主题：当前浅色，点击切换为深色");
+        tb.setAttribute("aria-label", CBI18n.t(dark ? "主题：当前深色，点击切换为浅色" : "主题：当前浅色，点击切换为深色"));
       }
       if (lb) {
         var on = d.classList.contains("cb-large");
         lb.setAttribute("aria-pressed", on ? "true" : "false");
-        lb.setAttribute("aria-label", (on ? "关闭" : "开启") + "大字模式（全站字号放大）");
+        lb.setAttribute("aria-label", CBI18n.t((on ? "关闭" : "开启") + "大字模式（全站字号放大）"));
       }
     };
     window.cbThemeToggle = function () {
@@ -2234,7 +2236,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
 <body>
   <!-- ux(round11) 屏读播报区：aria-live=polite，页面加载即存在；流式输出只在收口/出错时播报一行（附录 J） -->
   <div id="cbLive" class="cb-sr-only" aria-live="polite"></div>
-  <div id="app" class="shell"
+  <div id="app" class="shell" data-i18n-dynamic
        :class="{ 'demo-simple': demoSimpleMode, 'no-result': !hasAnyResult, 'has-result': hasAnyResult }"
        data-demo-simple-mode="true">
     <!-- Top bar -->
@@ -2243,93 +2245,93 @@ button.danger { background: var(--cb-red); box-shadow: none; }
         <div class="brand" :class="{ 'cb-app-brand': unifiedWorkbench }">
           <div class="brand-mark" :class="{ 'cb-app-mark': unifiedWorkbench }">{{ unifiedWorkbench ? 'CB' : 'P' }}</div>
           <div>
-            <h1>{{ unifiedWorkbench ? 'Civil Buddy' : '装箱拼柜 · Team Mode' }}</h1>
-            <small v-if="unifiedWorkbench">装箱拼柜</small>
-            <div class="tag tag-full" v-if="!unifiedWorkbench">大 Team⊃A/B · {{ agentCount || 13 }} Agents · HITL · v{{ harnessVersion || '0.6.4' }}</div>
-            <div class="tag tag-simple" v-if="!unifiedWorkbench">三步演示 · tools 定柜 · 人确认成箱</div>
+            <h1>{{ t(unifiedWorkbench ? 'Civil Buddy' : t('装箱拼柜 · Team Mode')) }}</h1>
+            <small v-if="unifiedWorkbench">{{ t("装箱拼柜") }}</small>
+            <div class="tag tag-full" v-if="!unifiedWorkbench">{{ t("大 Team⊃A/B ·") }} {{ agentCount || 13 }} Agents · HITL · v{{ harnessVersion || '0.6.4' }}</div>
+            <div class="tag tag-simple" v-if="!unifiedWorkbench">{{ t("三步演示 · tools 定柜 · 人确认成箱") }}</div>
           </div>
         </div>
         <div class="top-actions" :class="{ 'cb-app-actions': unifiedWorkbench }">
           <!-- ux(round8) 汉堡键：≤820 显示，展开左侧团队/岗位栏（.sidebar.mobile-open，附录 G） -->
-          <button type="button" class="soft cb-nav-toggle" v-show="!demoSimpleMode" aria-label="展开或收起侧栏"
+          <button type="button" class="soft cb-nav-toggle" v-show="!demoSimpleMode" :aria-label="t(&quot;展开或收起侧栏&quot;)"
                   aria-expanded="false"
-                  onclick="var sb=document.querySelector('.sidebar');if(sb){var o=sb.classList.toggle('mobile-open');this.setAttribute('aria-expanded',o?'true':'false')}">菜单</button>
+                  onclick="var sb=document.querySelector('.sidebar');if(sb){var o=sb.classList.toggle('mobile-open');this.setAttribute('aria-expanded',o?'true':'false')}">{{ t("菜单") }}</button>
           <!-- ux(round10) 三步引导重开入口：首访自动弹 checklist，之后点 ? 随时重开（localStorage cb_onboarded_v1） -->
-          <button type="button" class="soft" @click="cbObReopen" title="新手引导 · 三步上手" aria-label="重新打开三步新手引导">?</button>
+          <button type="button" class="soft" @click="cbObReopen" :title="t(&quot;新手引导 · 三步上手&quot;)" :aria-label="t(&quot;重新打开三步新手引导&quot;)">?</button>
           <!-- ux(round11) 主题/大字开关：cb_theme_v1 / cb_large_v1 持久化；图标=文字，与 demo 端同位（附录 J） -->
-          <button type="button" id="cbThemeBtn" class="soft" title="切换深色/浅色主题（默认深色）" onclick="cbThemeToggle()">明</button>
-          <button type="button" id="cbLargeBtn" class="soft" title="大字模式：全站字号放大一档" aria-pressed="false" onclick="cbLargeToggle()">大</button>
-          <a v-if="!unifiedWorkbench" href="/" class="soft" style="text-decoration:none;display:inline-flex;align-items:center">投标应答</a>
+          <button type="button" id="cbThemeBtn" class="soft" :title="t(&quot;切换深色/浅色主题（默认深色）&quot;)" onclick="cbThemeToggle()">{{ t("明") }}</button>
+          <button type="button" id="cbLargeBtn" class="soft" :title="t(&quot;大字模式：全站字号放大一档&quot;)" aria-pressed="false" onclick="cbLargeToggle()">{{ t("大") }}</button>
+          <a v-if="!unifiedWorkbench" href="/" class="soft" style="text-decoration:none;display:inline-flex;align-items:center">{{ t("投标应答") }}</a>
           <!-- ux(round16) 回跳：装柜台此前是单向终点，只能按浏览器后退；回环地址属 R12 零外链白名单 -->
-          <a v-if="unifiedWorkbench || isLocalHost" :href="unifiedWorkbench ? '/static/index.html' : 'http://127.0.0.1:8765/'" class="soft" title="回 Civil Buddy 66 岗工作台"
-             style="text-decoration:none;display:inline-flex;align-items:center">回工作台</a>
+          <a v-if="unifiedWorkbench || isLocalHost" :href="unifiedWorkbench ? '/static/index.html' : 'http://127.0.0.1:8765/'" class="soft" :title="t(&quot;回 Civil Buddy 66 岗工作台&quot;)"
+             style="text-decoration:none;display:inline-flex;align-items:center">{{ t("回工作台") }}</a>
           <span class="pill" v-if="loading || (streamProgress.done > 0 && streamProgress.total)">
             {{ streamProgress.done }}/{{ streamProgress.total || '—' }}
           </span>
           <label class="demo-mode-toggle" :class="{ on: demoSimpleMode }"
-                 title="开=三步演示剧本（成箱→确认→看裁决）；关=完整调试台与组织图">
+                 :title="t(&quot;开=三步演示剧本（成箱→确认→看裁决）；关=完整调试台与组织图&quot;)">
             <input type="checkbox" v-model="demoSimpleMode" />
-            简洁演示
+            {{ t("简洁演示") }}
           </label>
-          <label class="pill" v-show="!demoSimpleMode" style="cursor:pointer;user-select:none" title="关闭=露出 HITL 确认闸（比赛推荐）">
+          <label class="pill" v-show="!demoSimpleMode" style="cursor:pointer;user-select:none" :title="t(&quot;关闭=露出 HITL 确认闸（比赛推荐）&quot;)">
             <input type="checkbox" v-model="demoAutoConfirm" style="margin-right:4px;vertical-align:middle" />
-            演示自动确认
+            {{ t("演示自动确认") }}
           </label>
-          <button class="soft" v-show="!demoSimpleMode" @click="refreshHealth" title="健康预检">预检</button>
-          <button class="ghost" v-show="!demoSimpleMode" @click="runPipelineTrace" :class="{ busy: loading }">全流程</button>
-          <button class="soft" v-show="!demoSimpleMode" @click="runDemoSteel" :class="{ busy: loading }" title="少量钢件">钢件轻量</button>
+          <button class="soft" v-show="!demoSimpleMode" @click="refreshHealth" :title="t(&quot;健康预检&quot;)">{{ t("预检") }}</button>
+          <button class="ghost" v-show="!demoSimpleMode" @click="runPipelineTrace" :class="{ busy: loading }">{{ t("全流程") }}</button>
+          <button class="soft" v-show="!demoSimpleMode" @click="runDemoSteel" :class="{ busy: loading }" :title="t(&quot;少量钢件&quot;)">{{ t("钢件轻量") }}</button>
           <label class="soft" v-show="!demoSimpleMode || tableMaterials.length"
                  style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border-radius:8px"
-                 title="上传 CSV/XLSX → /api/table/parse → materials">
-            表上传
+                 :title="t(&quot;上传 CSV/XLSX → /api/table/parse → materials&quot;)">
+            {{ t("表上传") }}
             <input type="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.json" style="display:none"
                    @change="onTableFileSelected" :disabled="loading" />
           </label>
           <button class="soft" v-show="!demoSimpleMode && tableMaterials.length" @click="runWithTableMaterials" :class="{ busy: loading }"
-                  :disabled="!tableMaterials.length" title="用已解析表材料跑 pipeline">
-            表材料跑 ({{ tableMaterials.length || 0 }})
+                  :disabled="!tableMaterials.length" :title="t(&quot;用已解析表材料跑 pipeline&quot;)">
+            {{ t("表材料跑 (") }}{{ tableMaterials.length || 0 }})
           </button>
-          <button class="primary-lg" @click="runDemo" :class="{ busy: loading }" title="30×钢实模块·默认 HITL">
-            {{ loading ? '运行中…' : '满载演示' }}
+          <button class="primary-lg" @click="runDemo" :class="{ busy: loading }" :title="t(&quot;30×钢实模块·默认 HITL&quot;)">
+            {{ t(loading ? t('运行中…') : t('满载演示')) }}
           </button>
         </div>
       </div>
       <div class="topbar-row secondary" v-if="tableParseNote" style="font-size:12px;color:var(--muted);padding:0 12px 6px">
-        <span class="pill" :class="tableMaterials.length ? 'ok' : 'warn'">{{ tableParseNote }}</span>
+        <span class="pill" :class="tableMaterials.length ? 'ok' : 'warn'">{{ t(tableParseNote) }}</span>
       </div>
       <div class="topbar-row secondary">
         <div class="top-status-scroll">
-          <span class="pill" :class="gatewayOk ? 'ok' : 'err'" :title="preflightTitle">
-            <span class="dot"></span> 网关 {{ gatewayOk ? 'UP' : 'DOWN' }}
+          <span class="pill" :class="gatewayOk ? 'ok' : 'err'" :title="t(preflightTitle)">
+            <span class="dot"></span> {{ t("网关") }} {{ gatewayOk ? 'UP' : 'DOWN' }}
           </span>
-          <span class="pill warn" v-if="result.phase === 'await_user_confirm'">待确认</span>
+          <span class="pill warn" v-if="result.phase === 'await_user_confirm'">{{ t("待确认") }}</span>
           <span class="pill" v-if="verdict && verdict.level"
                 :class="verdict.level === 'ok' ? 'ok' : (verdict.level === 'block' ? 'err' : 'warn')"
                 :title="verdict.summary || ''">
-            {{ verdict.level === 'block' ? '阻断' : (verdict.level === 'warn' ? '预警' : '可用') }}
+            {{ t(verdict.level === 'block' ? t('阻断') : (verdict.level === 'warn' ? t('预警') : t('可用'))) }}
           </span>
           <template v-if="!demoSimpleMode">
           <span class="pill" :class="skjolberOk ? 'ok' : 'warn'">
-            <span class="dot"></span> 3D {{ skjolberOk ? 'skjolber' : '本地' }}
+            <span class="dot"></span> 3D {{ t(skjolberOk ? 'skjolber' : t('本地')) }}
           </span>
-          <span class="pill" :class="llmKeyPresent ? 'ok' : 'warn'" title="无 Key 时 steps 仍可用；llm_toolcall 仅影子参考">
+          <span class="pill" :class="llmKeyPresent ? 'ok' : 'warn'" :title="t(&quot;无 Key 时 steps 仍可用；llm_toolcall 仅影子参考&quot;)">
             LLM {{ llmKeyPresent ? 'Key' : 'fallback' }}
           </span>
           <span class="pill warn" v-if="pathHonesty && pathHonesty.reference_only"
                 :title="(pathHonesty.booking_containers_note || pathHonesty.note || '')">
-            {{ pathHonesty.ui_label || ('路径参考 · ' + (pathHonesty.this_run || 'llm')) }}
+            {{ pathHonesty.ui_label || (t('路径参考 · ') + (pathHonesty.this_run || 'llm')) }}
           </span>
           <span class="pill" v-if="vgmStatus && vgmStatus.status"
                 :class="vgmPillClass"
                 :title="vgmStatus.note || (vgmHuman && vgmHuman.pending_action) || ''">
-            {{ vgmStatus.ui_label || ('VGM ' + vgmStatus.status + (vgmHuman && vgmHuman.signed ? ' ·已签' : (vgmStatus.human_signoff_required ? ' ·须人签' : ''))) }}
+            {{ vgmStatus.ui_label || ('VGM ' + vgmStatus.status + (vgmHuman && vgmHuman.signed ? t(' ·已签') : (vgmStatus.human_signoff_required ? t(' ·须人签') : ''))) }}
           </span>
           <span class="pill" v-if="result.phase">{{ result.phase }}</span>
           <span class="pill warn" v-if="pendingCheckpoints.length"
                 style="cursor:pointer" @click="mainTab='history'; loadPendingCheckpoints()">
             HITL {{ pendingCheckpoints.length }}
           </span>
-          <span class="pill" :class="wsStatus === 'live' ? 'ok' : (wsStatus === 'err' ? 'err' : '')">{{ unifiedWorkbench ? '进度' : 'ws' }} {{ wsStatus }}</span>
+          <span class="pill" :class="wsStatus === 'live' ? 'ok' : (wsStatus === 'err' ? 'err' : '')">{{ t(unifiedWorkbench ? t('进度') : 'ws') }} {{ wsStatus }}</span>
           <span class="pill" v-if="result.container_plan && result.container_plan.can_fit != null"
                 :class="result.container_plan.can_fit ? 'ok' : 'err'">
             can_fit {{ result.container_plan.can_fit }}
@@ -2337,28 +2339,28 @@ button.danger { background: var(--cb-red); box-shadow: none; }
           <span class="pill" v-if="result.risk_report && result.risk_report.decision" :class="riskPillClass">
             risk {{ result.risk_report.decision }}
           </span>
-          <span class="pill err" v-if="result.ship_ok === false">ship_ok 否</span>
+          <span class="pill err" v-if="result.ship_ok === false">{{ t("ship_ok 否") }}</span>
           <span class="pill err" v-if="cogPrimary && cogPrimary.balance === 'block'">CoG block</span>
           <span class="pill" v-if="agentSteps.length">{{ agentSteps.length }} steps</span>
           </template>
         </div>
       </div>
-      <nav v-if="unifiedWorkbench" class="cb-app-nav" aria-label="工作台导航">
-        <a href="/static/index.html">工作台</a>
+      <nav v-if="unifiedWorkbench" class="cb-app-nav" :aria-label="t(&quot;工作台导航&quot;)">
+        <a href="/static/index.html">{{ t("工作台") }}</a>
         <a href="/static/agent.html">Agent</a>
-        <a href="/packing" aria-current="page">装箱拼柜</a>
+        <a href="/packing" aria-current="page">{{ t("装箱拼柜") }}</a>
         <a href="/cad">CAD</a>
-        <a href="/engineering">工程计算</a>
-        <a href="/engineering/planning">施工计划</a>
-        <a href="/engineering/schedule">日期计划</a>
-        <a href="/engineering/routes">现场路线</a>
+        <a href="/engineering">{{ t("工程计算") }}</a>
+        <a href="/engineering/planning">{{ t("施工计划") }}</a>
+        <a href="/engineering/schedule">{{ t("日期计划") }}</a>
+        <a href="/engineering/routes">{{ t("现场路线") }}</a>
       </nav>
       <div class="progress-track" v-if="loading || streamProgress.done">
         <div class="progress-fill" :style="{ width: streamProgress.pct + '%' }"></div>
       </div>
       <div v-if="loading" class="loading-toast">
-        <span>⏳ {{ statusText || '运行中…' }} · 连点会提示，不是死机</span>
-        <button type="button" class="soft" @click="forceUnlock">强制解锁</button>
+        <span>⏳ {{ t(statusText || t('运行中…')) }} {{ t("· 连点会提示，不是死机") }}</span>
+        <button type="button" class="soft" @click="forceUnlock">{{ t("强制解锁") }}</button>
       </div>
     </header>
 
@@ -2366,36 +2368,36 @@ button.danger { background: var(--cb-red); box-shadow: none; }
       <!-- Left: 三层组织图 + roster -->
       <aside class="sidebar">
         <div class="sidebar-mobile-head">
-          <strong>任务输入</strong>
-          <button type="button" class="ghost" aria-label="收起侧栏"
-                  onclick="this.closest('.sidebar').classList.remove('mobile-open');var b=document.querySelector('.cb-nav-toggle');if(b){b.setAttribute('aria-expanded','false');b.focus()}">收起</button>
+          <strong>{{ t("任务输入") }}</strong>
+          <button type="button" class="ghost" :aria-label="t(&quot;收起侧栏&quot;)"
+                  onclick="this.closest('.sidebar').classList.remove('mobile-open');var b=document.querySelector('.cb-nav-toggle');if(b){b.setAttribute('aria-expanded','false');b.focus()}">{{ t("收起") }}</button>
         </div>
         <!-- ux(round14) 左侧会话栏（参考图）：顶部「新建任务」（=清空当前会话回空态）+ 最近会话列表（/api/audit session 索引，只读） -->
         <div class="side-sessions">
-          <button type="button" class="rail-new" @click="cbNewTask" title="清空当前会话，回到空态卡">+ 新建任务</button>
-          <div class="sess-label">最近会话</div>
+          <button type="button" class="rail-new" @click="cbNewTask" :title="t(&quot;清空当前会话，回到空态卡&quot;)">{{ t("+ 新建任务") }}</button>
+          <div class="sess-label">{{ t("最近会话") }}</div>
           <button type="button" v-for="s in cbSessions" :key="s.session_id" class="sess-row"
                   :class="{ on: s.session_id === sessionId }" @click="cbOpenSession(s)" :title="s.session_id">
             <span class="t-name">{{ s.session_id }}</span>
             <span class="t-time">{{ cbRelTime(s.saved_at) }}</span>
           </button>
-          <div class="sess-none" v-if="!cbSessions.length">暂无会话；跑一次演示后自动落盘</div>
+          <div class="sess-none" v-if="!cbSessions.length">{{ t("暂无会话；跑一次演示后自动落盘") }}</div>
         </div>
         <div class="side-head">
-          <div class="label">大 Team ⊃ A + B</div>
-          <h2>智能体组织</h2>
-          <p>NL 通用 Agent · 点选成员 · tools 算数</p>
+          <div class="label">{{ t("大 Team ⊃ A + B") }}</div>
+          <h2>{{ t("智能体组织") }}</h2>
+          <p>{{ t("NL 通用 Agent · 点选成员 · tools 算数") }}</p>
         </div>
 
-        <div class="org-chart" :class="{ collapsed: !orgChartOpen }" title="大 Team 包两个小 Team">
+        <div class="org-chart" :class="{ collapsed: !orgChartOpen }" :title="t(&quot;大 Team 包两个小 Team&quot;)">
           <div class="org-title">
-            <span>三层组织 · {{ result.team_mode || 'big_team_a_b' }}</span>
+            <span>{{ t("三层组织 ·") }} {{ result.team_mode || 'big_team_a_b' }}</span>
             <button type="button" class="ghost" @click="orgChartOpen = !orgChartOpen">
-              {{ orgChartOpen ? '收起' : '展开' }}
+              {{ t(orgChartOpen ? t('收起') : t('展开')) }}
             </button>
           </div>
           <div class="org-layer-big" v-show="orgChartOpen">
-            <div class="org-label">大 Team · 编排 / 闸门 / critic / 收口</div>
+            <div class="org-label">{{ t("大 Team · 编排 / 闸门 / critic / 收口") }}</div>
             <div class="org-big-nodes">
               <span
                 class="org-chip"
@@ -2403,11 +2405,11 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                 :key="m.id"
                 :class="orgChipClass(m.id)"
                 @click="selectAgent(m.id)"
-              >{{ m.short }} {{ m.name }}</span>
+              >{{ t(m.short) }} {{ t(m.name) }}</span>
             </div>
             <div class="org-children">
               <div class="org-team-box team-a">
-                <div class="org-label">小 Team A · 成箱</div>
+                <div class="org-label">{{ t("小 Team A · 成箱") }}</div>
                 <div class="org-big-nodes">
                   <span
                     class="org-chip"
@@ -2415,11 +2417,11 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                     :key="m.id"
                     :class="orgChipClass(m.id)"
                     @click="selectAgent(m.id)"
-                  >{{ m.short }}</span>
+                  >{{ t(m.short) }}</span>
                 </div>
               </div>
               <div class="org-team-box team-b">
-                <div class="org-label">小 Team B · 拼柜</div>
+                <div class="org-label">{{ t("小 Team B · 拼柜") }}</div>
                 <div class="org-big-nodes">
                   <span
                     class="org-chip"
@@ -2427,7 +2429,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                     :key="m.id"
                     :class="orgChipClass(m.id)"
                     @click="selectAgent(m.id)"
-                  >{{ m.short }}</span>
+                  >{{ t(m.short) }}</span>
                 </div>
               </div>
             </div>
@@ -2436,21 +2438,21 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                 class="org-chip"
                 :class="orgChipClass('hitl_wait')"
                 @click="selectAgent('hitl_wait')"
-              >HITL 确认闸门</span>
+              >{{ t("HITL 确认闸门") }}</span>
             </div>
           </div>
         </div>
 
         <div class="pipeline-mini">
-          <span class="phase-chip" :class="{ on: phaseOn('big') }">大Team</span>
-          <span class="phase-chip" :class="{ on: phaseOn('A') }">小TeamA</span>
+          <span class="phase-chip" :class="{ on: phaseOn('big') }">{{ t("大Team") }}</span>
+          <span class="phase-chip" :class="{ on: phaseOn('A') }">{{ t("小TeamA") }}</span>
           <span class="phase-chip" :class="{ on: phaseOn('HITL') }">HITL</span>
-          <span class="phase-chip" :class="{ on: phaseOn('B') }">小TeamB</span>
+          <span class="phase-chip" :class="{ on: phaseOn('B') }">{{ t("小TeamB") }}</span>
         </div>
 
         <div class="roster">
           <div class="team-group" v-for="g in rosterGroups" :key="g.key">
-            <div class="g-title">{{ g.title }}</div>
+            <div class="g-title">{{ t(g.title) }}</div>
             <button
               type="button"
               class="member"
@@ -2459,17 +2461,17 @@ button.danger { background: var(--cb-red); box-shadow: none; }
               :class="[memberStatus(m.id), { active: selectedAgent === m.id }]"
               @click="selectAgent(m.id)"
             >
-              <div class="avatar" :style="{ background: m.color }">{{ m.short }}</div>
+              <div class="avatar" :style="{ background: m.color }">{{ t(m.short) }}</div>
               <div class="meta">
-                <div class="name">{{ m.name }}</div>
-                <div class="role">{{ m.role }}</div>
+                <div class="name">{{ t(m.name) }}</div>
+                <div class="role">{{ t(m.role) }}</div>
               </div>
               <span class="st-dot" :class="memberStatus(m.id)" :title="memberStatus(m.id)"></span>
             </button>
           </div>
 
           <div class="team-group" v-if="extraStepNodes.length">
-            <div class="g-title">其它步骤</div>
+            <div class="g-title">{{ t("其它步骤") }}</div>
             <button
               type="button"
               class="member"
@@ -2481,7 +2483,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
               <div class="avatar" style="background:#475569">+</div>
               <div class="meta">
                 <div class="name">{{ n }}</div>
-                <div class="role">运行时步骤</div>
+                <div class="role">{{ t("运行时步骤") }}</div>
               </div>
               <span class="st-dot" :class="memberStatus(n)"></span>
             </button>
@@ -2489,19 +2491,19 @@ button.danger { background: var(--cb-red); box-shadow: none; }
         </div>
 
         <div class="side-composer">
-          <div class="composer-note">AI 草稿 · 不签认</div>
+          <div class="composer-note">{{ t("AI 草稿 · 不签认") }}</div>
           <!-- ux(round14) 输入条重做（参考图）：大圆角容器 · 左"+"开快捷指令面板 · 中间 textarea · 右侧圆形发送键 -->
           <div class="composer-shell">
-            <button type="button" class="composer-plus" @click.prevent="cbPlusOpen" aria-label="打开快捷指令面板" title="快捷指令">+</button>
+            <button type="button" class="composer-plus" @click.prevent="cbPlusOpen" :aria-label="t(&quot;打开快捷指令面板&quot;)" :title="t(&quot;快捷指令&quot;)">+</button>
             <div class="input-wrap">
               <textarea
                 ref="userInput"
                 v-model="userInput"
-                placeholder="描述任务，或 /快捷指令 · @选择岗位；Enter 发送 / Shift+Enter 换行"
+                :placeholder="t(&quot;描述任务，或 /快捷指令 · @选择岗位；Enter 发送 / Shift+Enter 换行&quot;)"
                 @input="composerInput"
                 @keydown="composerKeydown"
               ></textarea>
-            <div class="cb-at-menu" v-if="atOpen" role="listbox" aria-label="岗位补全">
+            <div class="cb-at-menu" v-if="atOpen" role="listbox" :aria-label="t(&quot;岗位补全&quot;)">
               <div class="cb-at-item" :class="{ on: i === atIdx }" role="option"
                    :aria-selected="i === atIdx ? 'true' : 'false'"
                    v-for="(it, i) in atItems" :key="it.id"
@@ -2511,16 +2513,16 @@ button.danger { background: var(--cb-red); box-shadow: none; }
               </div>
             </div>
             <!-- ===== ux(round9) 快捷指令面板：/ 命令 + 模板填空 + 最近任务（附录 H） ===== -->
-            <div class="cb-at-menu cb-cmd-menu" v-if="cmdOpen" role="listbox" aria-label="快捷指令">
+            <div class="cb-at-menu cb-cmd-menu" v-if="cmdOpen" role="listbox" :aria-label="t(&quot;快捷指令&quot;)">
               <template v-if="cmdMode === 'cmds' && !cmdQueryText && cmdRecent.length">
-                <div class="cb-cmd-head">最近任务 · 点击重填（不自动发送）</div>
+                <div class="cb-cmd-head">{{ t("最近任务 · 点击重填（不自动发送）") }}</div>
                 <div class="cb-cmd-item cb-cmd-recent" v-for="(r, i) in cmdRecent" :key="'cbrc'+i"
                      :title="r.t" @mousedown.prevent="cmdApplyRecent(r.t)">
-                  <span class="cb-cmd-ico tone-gray">近</span>
+                  <span class="cb-cmd-ico tone-gray">{{ t("近") }}</span>
                   <span class="cb-cmd-name">{{ r.t.slice(0, 46) }}</span>
-                  <span class="cb-cmd-desc">重填</span>
+                  <span class="cb-cmd-desc">{{ t("重填") }}</span>
                 </div>
-                <div class="cb-cmd-head">命令 · ↑↓ 选择 / Enter 确认 / Esc 关闭</div>
+                <div class="cb-cmd-head">{{ t("命令 · ↑↓ 选择 / Enter 确认 / Esc 关闭") }}</div>
               </template>
               <div class="cb-cmd-item" :class="{ on: i === cmdIdx }" role="option"
                    :aria-selected="i === cmdIdx ? 'true' : 'false'"
@@ -2530,21 +2532,21 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                 <span class="cb-cmd-name">{{ cmdMode === 'tickets' ? it.id : it.name }}<code v-if="cmdMode === 'cmds'">/{{ it.id }}</code></span>
                 <span class="cb-cmd-desc">{{ cmdMode === 'tickets' ? cmdTicketDesc(it) : it.desc }}</span>
               </div>
-              <div class="cb-cmd-head" v-if="!cmdItems.length">{{ cmdMode === 'tickets' ? '没有匹配的票 · Esc 返回' : '没有匹配的命令' }}</div>
+              <div class="cb-cmd-head" v-if="!cmdItems.length">{{ t(cmdMode === 'tickets' ? t('没有匹配的票 · Esc 返回') : t('没有匹配的命令')) }}</div>
             </div>
             </div>
             <button class="composer-send" @click="runTeamA" :disabled="loading || !userInput.trim()" :class="{ busy: loading }"
-                    aria-label="发送（生成方案）" title="生成方案（Enter 发送）">↑</button>
+                    :aria-label="t(&quot;发送（生成方案）&quot;)" :title="t(&quot;生成方案（Enter 发送）&quot;)">↑</button>
           </div>
           <div class="composer-row">
-            <button class="soft" @click="runDemo" :class="{ busy: loading }" title="留空也可点：30×密实模块≈24t">满载</button>
+            <button class="soft" @click="runDemo" :class="{ busy: loading }" :title="t(&quot;留空也可点：30×密实模块≈24t&quot;)">{{ t("满载") }}</button>
             <button class="ghost" @click="runPdf" :class="{ busy: loading }">PDF</button>
             <button class="ghost" @click="exportShipment" :disabled="!result || !result.session_id && !sessionId"
-                    title="POR + 绑扎作业单 → xlsx">导出 xlsx</button>
+                    :title="t(&quot;POR + 绑扎作业单 → xlsx&quot;)">{{ t("导出 xlsx") }}</button>
             <a v-if="exportUrl" :href="exportUrl" download class="soft"
-               style="text-decoration:none;display:inline-flex;align-items:center">下载 {{ exportName }}</a>
+               style="text-decoration:none;display:inline-flex;align-items:center">{{ t("下载") }} {{ exportName }}</a>
           </div>
-          <div class="status-line">{{ statusText }}</div>
+          <div class="status-line">{{ t(statusText) }}</div>
         </div>
       </aside>
 
@@ -2552,22 +2554,22 @@ button.danger { background: var(--cb-red); box-shadow: none; }
       <main class="main">
         <nav class="tabs">
           <button type="button" class="tab" :class="{ active: mainTab === 'overview' }" @click="mainTab = 'overview'">
-            总览
+            {{ t("总览") }}
           </button>
           <button type="button" class="tab" :class="{ active: mainTab === 'boxes' }" @click="mainTab = 'boxes'">
-            装箱方案 <span class="n" v-if="(result.boxes||[]).length">{{ result.boxes.length }}</span>
+            {{ t("装箱方案") }} <span class="n" v-if="(result.boxes||[]).length">{{ result.boxes.length }}</span>
           </button>
           <button type="button" class="tab" :class="{ active: mainTab === 'visual' }" @click="mainTab = 'visual'">
-            可视化
+            {{ t("可视化") }}
           </button>
           <button type="button" class="tab" :class="{ active: mainTab === 'risk' }" @click="mainTab = 'risk'">
-            风险
+            {{ t("风险") }}
           </button>
           <button type="button" class="tab" :class="{ active: mainTab === 'agents' }" @click="mainTab = 'agents'">
-            Agent 输出 <span class="n" v-if="agentSteps.length">{{ filteredSteps.length }}/{{ agentSteps.length }}</span>
+            {{ t("Agent 输出") }} <span class="n" v-if="agentSteps.length">{{ filteredSteps.length }}/{{ agentSteps.length }}</span>
           </button>
           <button type="button" class="tab tab-history" :class="{ active: mainTab === 'history' }" @click="mainTab = 'history'; loadRuns()">
-            历史
+            {{ t("历史") }}
           </button>
         </nav>
 
@@ -2582,13 +2584,13 @@ button.danger { background: var(--cb-red); box-shadow: none; }
           <div class="demo-script" v-if="demoSimpleMode" data-demo-script="true">
             <div class="ds-head">
               <div>
-                <div class="ds-title">{{ hasAnyResult ? '简洁演示 · 三步剧本' : '三步演示，开始装柜' }}</div>
+                <div class="ds-title">{{ t(hasAnyResult ? t('简洁演示 · 三步剧本') : t('三步演示，开始装柜')) }}</div>
                 <div class="ds-sub">
-                  ①满载成箱 → ②人确认 HITL → ③看裁决 · tools 定柜 · 默认停确认闸
+                  {{ t("①满载成箱 → ②人确认 HITL → ③看裁决 · tools 定柜 · 默认停确认闸") }}
                 </div>
               </div>
               <span class="pill" :class="demoScriptStep >= 3 ? 'ok' : (demoScriptStep === 2 ? 'warn' : '')">
-                当前第 {{ demoScriptStep }} 步 / 3
+                {{ t("当前第") }} {{ demoScriptStep }} {{ t("步 / 3") }}
               </span>
             </div>
             <div class="demo-steps">
@@ -2596,55 +2598,55 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                       :class="demoStepClass(1)"
                       @click="goDemoStep(1)"
                       :disabled="loading">
-                <div class="ds-k"><span class="ds-num">1</span>满载成箱</div>
-                <div class="ds-v">跑 Team A · 出箱方案与 N0* · 不停在聊天编柜数</div>
+                <div class="ds-k"><span class="ds-num">1</span>{{ t("满载成箱") }}</div>
+                <div class="ds-v">{{ t("跑 Team A · 出箱方案与 N0* · 不停在聊天编柜数") }}</div>
               </button>
               <button type="button" class="demo-step"
                       :class="demoStepClass(2)"
                       @click="goDemoStep(2)"
                       :disabled="loading || demoScriptStep < 2">
-                <div class="ds-k"><span class="ds-num">2</span>人确认 HITL</div>
-                <div class="ds-v">确认柜型与成箱 · 再进拼柜（闸门一等公民）</div>
+                <div class="ds-k"><span class="ds-num">2</span>{{ t("人确认 HITL") }}</div>
+                <div class="ds-v">{{ t("确认柜型与成箱 · 再进拼柜（闸门一等公民）") }}</div>
               </button>
               <button type="button" class="demo-step"
                       :class="demoStepClass(3)"
                       @click="goDemoStep(3)"
                       :disabled="demoScriptStep < 3">
-                <div class="ds-k"><span class="ds-num">3</span>看裁决</div>
-                <div class="ds-v">mid50 / ship_ok / 可视化 · Agent 轨迹可回放</div>
+                <div class="ds-k"><span class="ds-num">3</span>{{ t("看裁决") }}</div>
+                <div class="ds-v">{{ t("mid50 / ship_ok / 可视化 · Agent 轨迹可回放") }}</div>
               </button>
             </div>
-            <div class="ds-features" v-if="!hasAnyResult" aria-label="产品要点">
+            <div class="ds-features" v-if="!hasAnyResult" :aria-label="t(&quot;产品要点&quot;)">
               <div class="empty-feature">
-                <div class="ef-k">Tools 定柜</div>
-                <div class="ef-v">N0* / 坐标由 tools 算，LLM 不写 xyz</div>
+                <div class="ef-k">{{ t("Tools 定柜") }}</div>
+                <div class="ef-v">{{ t("N0* / 坐标由 tools 算，LLM 不写 xyz") }}</div>
               </div>
               <div class="empty-feature">
-                <div class="ef-k">HITL 闸门</div>
-                <div class="ef-v">先确认成箱，再进入拼柜</div>
+                <div class="ef-k">{{ t("HITL 闸门") }}</div>
+                <div class="ef-v">{{ t("先确认成箱，再进入拼柜") }}</div>
               </div>
               <div class="empty-feature">
-                <div class="ef-k">可回放</div>
-                <div class="ef-v">agent_steps 与裁决条可观察</div>
+                <div class="ef-k">{{ t("可回放") }}</div>
+                <div class="ef-v">{{ t("agent_steps 与裁决条可观察") }}</div>
               </div>
             </div>
             <div class="ds-actions">
               <button class="primary-lg" v-if="demoScriptStep === 1" @click="runDemo" :class="{ busy: loading }">
-                {{ loading ? '成箱中…' : '开始第 1 步 · 满载演示' }}
+                {{ t(loading ? t('成箱中…') : t('开始第 1 步 · 满载演示')) }}
               </button>
               <button class="primary-lg" v-else-if="demoScriptStep === 2" @click="goDemoStep(2)">
-                去第 2 步 · 确认并拼柜
+                {{ t("去第 2 步 · 确认并拼柜") }}
               </button>
               <button class="primary-lg" v-else @click="goDemoStep(3)">
-                看第 3 步 · 总览裁决
+                {{ t("看第 3 步 · 总览裁决") }}
               </button>
-              <button class="soft" v-if="hasAnyResult" @click="runDemo" :class="{ busy: loading }" title="重跑成箱">
-                重跑成箱
+              <button class="soft" v-if="hasAnyResult" @click="runDemo" :class="{ busy: loading }" :title="t(&quot;重跑成箱&quot;)">
+                {{ t("重跑成箱") }}
               </button>
-              <span class="ds-hint">{{ demoScriptHint }}</span>
+              <span class="ds-hint">{{ t(demoScriptHint) }}</span>
             </div>
             <details class="ds-preflight" v-if="!hasAnyResult && preflightHints.length">
-              <summary>运行环境</summary>
+              <summary>{{ t("运行环境") }}</summary>
               <div class="status-line">
                 <div v-for="(h,i) in preflightHints" :key="'phs'+i">· {{ h }}</div>
               </div>
@@ -2654,82 +2656,82 @@ button.danger { background: var(--cb-red); box-shadow: none; }
           <!-- ===== ux(round3) 阶段时间线：事件流 → 8 阶段轨道（映射表见 docs/ux/ux-design-spec.md 附录 B）===== -->
           <div class="cb-tl" v-if="cbTl.active" data-cb-timeline="true">
             <div class="cb-tl-head">
-              <span class="cb-tl-title">阶段时间线</span>
-              <span class="cb-tl-badge" v-if="cbTl.replay">回放</span>
-              <span class="cb-tl-badge" v-if="cbTl.hitlWait" style="color:var(--cb-orange);border-color:var(--cb-orange)">HITL 等待中</span>
+              <span class="cb-tl-title">{{ t("阶段时间线") }}</span>
+              <span class="cb-tl-badge" v-if="cbTl.replay">{{ t("回放") }}</span>
+              <span class="cb-tl-badge" v-if="cbTl.hitlWait" style="color:var(--cb-orange);border-color:var(--cb-orange)">{{ t("HITL 等待中") }}</span>
               <span class="cb-tl-badge" v-if="cbTl.elapsedMs">{{ (cbTl.elapsedMs / 1000).toFixed(1) }}s</span>
               <button type="button" class="cb-tl-fold" v-if="cbTl.done" @click="cbTl.collapsed = !cbTl.collapsed">
-                {{ cbTl.collapsed ? '展开时间线' : '折叠为一行摘要' }}
+                {{ t(cbTl.collapsed ? t('展开时间线') : t('折叠为一行摘要')) }}
               </button>
             </div>
             <div class="cb-tl-summary" v-if="cbTl.done && cbTl.summary">
-              <span>{{ cbTl.summary.headline }}</span>
+              <span>{{ t(cbTl.summary.headline) }}</span>
               <span class="cb-tl-chip" v-for="(c, ci) in cbTl.summary.chips" :key="'tlc'+ci">{{ c.k }} {{ c.v }}</span>
             </div>
             <template v-if="!cbTl.done || !cbTl.collapsed">
-              <div class="cb-tl-track" role="list" aria-label="流水线阶段">
+              <div class="cb-tl-track" role="list" :aria-label="t(&quot;流水线阶段&quot;)">
                 <template v-for="(s, si) in cbTlStages" :key="s.key">
                   <span class="cb-tl-arrow" v-if="si > 0" aria-hidden="true">→</span>
                   <span class="cb-tl-stage" :class="cbTlStageClass(s.key)" role="listitem"
                         :title="cbTl.stages[s.key].note || s.label">
                     <span class="cb-tl-st" v-if="cbTl.stages[s.key].state !== 'run'">{{ cbTlStageIcon(s.key) }}</span>
                     <span class="cb-tl-spin" v-else aria-hidden="true"></span>
-                    {{ s.label }}<span class="cb-tl-dur" v-if="cbTl.stages[s.key].durMs != null">{{ (cbTl.stages[s.key].durMs / 1000).toFixed(1) }}s</span>
+                    {{ t(s.label) }}<span class="cb-tl-dur" v-if="cbTl.stages[s.key].durMs != null">{{ (cbTl.stages[s.key].durMs / 1000).toFixed(1) }}s</span>
                   </span>
                 </template>
               </div>
               <!-- R5 审批卡：显式决策事件 + Esc/关闭=驳回永不放行 + 决策写审计（docs/ux 附录 D） -->
               <div class="cb-tl-hitl" id="cb-hitl-slot" data-r5-approval-slot="true" v-if="cbApr.visible && cbApr.open">
                 <div class="cb-apr" :class="cbApr.state === 'approved' ? 'is-approved' : (cbApr.state === 'rejected' ? 'is-rejected' : '')"
-                     role="dialog" aria-label="HITL 人工确认审批卡" data-cb-approval="true" @keydown.esc.stop.prevent="cbAprEsc">
+                     role="dialog" :aria-label="t(&quot;HITL 人工确认审批卡&quot;)" data-cb-approval="true" @keydown.esc.stop.prevent="cbAprEsc">
                   <div class="cb-apr-bar" aria-hidden="true"></div>
                   <div class="cb-apr-head">
-                    <span class="cb-apr-title">人工确认 · 成箱方案</span>
-                    <span class="cb-apr-risk" :class="cbAprRisk === 'high' ? 'is-high' : ''">{{ cbAprRisk === 'high' ? '风险 · 高' : '风险 · 低' }}</span>
-                    <span class="cb-apr-state" v-if="cbApr.state === 'approved'">已确认 · 拼柜继续</span>
-                    <span class="cb-apr-state is-rejected" v-else-if="cbApr.state === 'rejected'">已驳回 · 未放行</span>
+                    <span class="cb-apr-title">{{ t("人工确认 · 成箱方案") }}</span>
+                    <span class="cb-apr-risk" :class="cbAprRisk === 'high' ? 'is-high' : ''">{{ t(cbAprRisk === 'high' ? t('风险 · 高') : t('风险 · 低')) }}</span>
+                    <span class="cb-apr-state" v-if="cbApr.state === 'approved'">{{ t("已确认 · 拼柜继续") }}</span>
+                    <span class="cb-apr-state is-rejected" v-else-if="cbApr.state === 'rejected'">{{ t("已驳回 · 未放行") }}</span>
                     <button type="button" class="cb-apr-x" v-if="cbApr.state === 'waiting'"
-                            title="关闭 = 驳回，永不放行" aria-label="关闭审批卡（等同驳回，不放行）"
+                            :title="t(&quot;关闭 = 驳回，永不放行&quot;)" :aria-label="t(&quot;关闭审批卡（等同驳回，不放行）&quot;)"
                             @click="cbAprReject('Esc/关闭')">×</button>
                   </div>
                   <div class="cb-apr-body" v-if="cbApr.state !== 'rejected'">
                     <div class="cb-apr-chips" data-cb-approval-summary="true">
-                      <span class="cb-apr-chip" v-if="cbAprChips.boxes">成箱 <b>{{ cbAprChips.boxes }}</b> 箱</span>
-                      <span class="cb-apr-chip" v-if="cbAprChips.mats">材料 <b>{{ cbAprChips.mats }}</b> 条</span>
-                      <span class="cb-apr-chip" v-if="cbAprChips.ctype">推荐柜型 <b>{{ cbAprChips.ctype }}</b></span>
-                      <span class="cb-apr-chip" v-if="cbAprChips.n0">建议柜数 N0* <b>{{ cbAprChips.n0 }}</b></span>
-                      <span class="cb-apr-chip" v-if="cbAprChips.gross">毛重合计 <b>{{ cbAprChips.gross }}</b> kg</span>
+                      <span class="cb-apr-chip" v-if="cbAprChips.boxes">{{ t("成箱") }} <b>{{ cbAprChips.boxes }}</b> {{ t("箱") }}</span>
+                      <span class="cb-apr-chip" v-if="cbAprChips.mats">{{ t("材料") }} <b>{{ cbAprChips.mats }}</b> {{ t("条") }}</span>
+                      <span class="cb-apr-chip" v-if="cbAprChips.ctype">{{ t("推荐柜型") }} <b>{{ cbAprChips.ctype }}</b></span>
+                      <span class="cb-apr-chip" v-if="cbAprChips.n0">{{ t("建议柜数 N0*") }} <b>{{ cbAprChips.n0 }}</b></span>
+                      <span class="cb-apr-chip" v-if="cbAprChips.gross">{{ t("毛重合计") }} <b>{{ cbAprChips.gross }}</b> kg</span>
                       <span class="cb-apr-chip" v-if="cbAprChips.canFit != null">can_fit <b>{{ cbAprChips.canFit ? 'true' : 'false' }}</b></span>
                     </div>
                     <div class="cb-apr-block" v-if="cbAprBlockers.length" data-cb-approval-blockers="true">
                       <div v-for="(b, bi) in cbAprBlockers" :key="'aprb'+bi">{{ b }}</div>
                     </div>
                     <div class="cb-apr-block is-ok" v-else>
-                      工具未报告阻断项 · 柜数与坐标以确认后拼柜 3D 实装为准（tools 计算，非模型拍脑袋）
+                      {{ t("工具未报告阻断项 · 柜数与坐标以确认后拼柜 3D 实装为准（tools 计算，非模型拍脑袋）") }}
                     </div>
                     <div class="cb-apr-actions" data-cb-approval-actions="true">
-                      <button type="button" class="cb-apr-confirm" :class="{ busy: loading }" aria-label="确认并拼柜（显式决策，写入审计行）"
-                              :disabled="cbApr.state !== 'waiting' || loading" @click="cbAprConfirm">确认并拼柜</button>
-                      <button type="button" class="cb-apr-reject" aria-label="驳回（显式决策：不放行，可修改输入后重跑）"
-                              :disabled="cbApr.state !== 'waiting'" @click="cbAprReject('驳回按钮')">驳回</button>
-                      <button type="button" class="cb-apr-later" aria-label="稍后（折叠为等待条，可重新展开）"
-                              :disabled="cbApr.state !== 'waiting'" @click="cbAprLater">稍后</button>
+                      <button type="button" class="cb-apr-confirm" :class="{ busy: loading }" :aria-label="t(&quot;确认并拼柜（显式决策，写入审计行）&quot;)"
+                              :disabled="cbApr.state !== 'waiting' || loading" @click="cbAprConfirm">{{ t("确认并拼柜") }}</button>
+                      <button type="button" class="cb-apr-reject" :aria-label="t(&quot;驳回（显式决策：不放行，可修改输入后重跑）&quot;)"
+                              :disabled="cbApr.state !== 'waiting'" @click="cbAprReject('驳回按钮')">{{ t("驳回") }}</button>
+                      <button type="button" class="cb-apr-later" :aria-label="t(&quot;稍后（折叠为等待条，可重新展开）&quot;)"
+                              :disabled="cbApr.state !== 'waiting'" @click="cbAprLater">{{ t("稍后") }}</button>
                     </div>
                     <div class="cb-apr-foot">
-                      确认 / 驳回为显式决策，写入下方审计行 · <b>Esc、关闭 = 驳回，永不放行</b> ·
-                      <span class="cb-apr-confirm-phrase" v-if="cbAprRisk === 'high'">高风险岗须持证人员签认（确认句：「我明白，将由持证人员签认」或 “I understand; a licensed person will sign this off.”，流程层已强制勾选门禁）</span>
-                      <span v-else>状态已持久化，可安全关闭后 resume</span>
+                      {{ t("确认 / 驳回为显式决策，写入下方审计行 ·") }} <b>{{ t("Esc、关闭 = 驳回，永不放行") }}</b> ·
+                      <span class="cb-apr-confirm-phrase" v-if="cbAprRisk === 'high'">{{ t("高风险岗须持证人员签认（确认句：「我明白，将由持证人员签认」或 “I understand; a licensed person will sign this off.”，流程层已强制勾选门禁）") }}</span>
+                      <span v-else>{{ t("状态已持久化，可安全关闭后 resume") }}</span>
                     </div>
                   </div>
                   <div class="cb-apr-body" v-else>
                     <div class="cb-apr-reject-note">
-                      已驳回（{{ cbApr.reason }}）· 未进入拼柜，未放行 · 请修改输入后重跑（例如调整柜型 / 拆并箱 / 补齐数据）
+                      {{ t("已驳回（") }}{{ cbApr.reason }}{{ t("）· 未进入拼柜，未放行 · 请修改输入后重跑（例如调整柜型 / 拆并箱 / 补齐数据）") }}
                     </div>
                   </div>
                 </div>
               </div>
               <div class="cb-tl-hitl cb-apr-open-slot" v-if="cbApr.visible && cbApr.state === 'waiting' && !cbApr.open" style="cursor:pointer" @click="cbApr.open = true" role="button" tabindex="0" @keydown.enter.prevent="cbApr.open = true">
-                等待人工确认 · 点此展开审批卡（确认 / 驳回须显式点击；Esc、关闭 = 驳回，永不放行）
+                {{ t("等待人工确认 · 点此展开审批卡（确认 / 驳回须显式点击；Esc、关闭 = 驳回，永不放行）") }}
               </div>
               <div class="cb-tl-lines" v-if="cbTl.lines.length">
                 <div class="cb-tl-line" v-for="(ln, li) in cbTl.lines" :key="'tll'+li"
@@ -2738,7 +2740,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                   <span class="tl-tool">{{ ln.tool }}</span>
                   <span class="tl-text">{{ ln.open ? ln.text : cbTlShort(ln.text) }}</span>
                   <button type="button" class="cb-tl-more" v-if="ln.text.length > 96" @click="cbTlToggleLine(li)">
-                    {{ ln.open ? '收起' : '展开' }}
+                    {{ t(ln.open ? t('收起') : t('展开')) }}
                   </button>
                   <span class="cb-tl-dur" v-if="ln.durMs != null">{{ ln.durMs }}ms</span>
                 </div>
@@ -2747,7 +2749,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
               <cb-fix-card v-if="cbFix.visible && cbFix.desc" :desc="cbFix.desc" @act="cbFixAct" data-cb-fix-slot="true"></cb-fix-card>
             </template>
             <!-- ux(round5) 审计行：决策留痕（决策+时间+操作者），折叠态也常驻，不可折叠消失（R6 时间线轮承接全量审计） -->
-            <div class="cb-tl-audit" v-if="cbTl.audit.length" data-cb-audit="true" aria-label="审批决策审计">
+            <div class="cb-tl-audit" v-if="cbTl.audit.length" data-cb-audit="true" :aria-label="t(&quot;审批决策审计&quot;)">
               <div class="cb-tl-audit-row" v-for="(a, ai) in cbTl.audit" :key="'apra'+ai">{{ a }}</div>
             </div>
           </div>
@@ -2755,107 +2757,107 @@ button.danger { background: var(--cb-red); box-shadow: none; }
           <!-- ===== ux(round4) 交付物文书：落盘 .md 文物 → 点开即正式文书预览（cbDocOpen） ===== -->
           <div class="section" v-if="docArtifacts.length" data-cb-doc-panel="true">
             <div class="section-h">
-              <h3>交付物文书</h3>
-              <span class="pill">AI 草稿 · 不签认</span>
+              <h3>{{ t("交付物文书") }}</h3>
+              <span class="pill">{{ t("AI 草稿 · 不签认") }}</span>
             </div>
             <div class="cb-doc-list">
               <div class="cb-doc-row" v-for="(d, i) in docArtifacts" :key="'cbdoc'+i">
                 <span class="cb-doc-row-t">{{ d.name }}</span>
-                <span class="cb-doc-row-k">{{ d.key }} · 落盘</span>
-                <button type="button" class="cb-doc-row-btn" @click="openDocArtifact(d)">文书预览</button>
+                <span class="cb-doc-row-k">{{ d.key }} {{ t("· 落盘") }}</span>
+                <button type="button" class="cb-doc-row-btn" @click="openDocArtifact(d)">{{ t("文书预览") }}</button>
               </div>
             </div>
-            <p class="foot-note">预览为落盘 markdown 原文渲染；数字只抄 tools 结果，UNSPECIFIED/[A001] 待人工补全。</p>
+            <p class="foot-note">{{ t("预览为落盘 markdown 原文渲染；数字只抄 tools 结果，UNSPECIFIED/[A001] 待人工补全。") }}</p>
           </div>
 
           <!-- ===== ux(round10) 三步引导 checklist：首访一次性（localStorage cb_onboarded_v1），逐步打勾，全完成自动收起（附录 I） ===== -->
           <div class="cb-ob" v-if="cbOb.open" data-cb-onboard="true">
             <div class="cb-ob-head">
-              <strong>{{ cbOb.done ? '三步引导 · 已完成' : '三步上手' }}</strong>
-              <span class="cb-ob-sub">{{ cbOb.done ? '任何时候点右上角 ? 重看' : '第一次用？跟着走 30 秒' }}</span>
-              <button type="button" class="cb-ob-x" title="收起（不再自动弹出）" aria-label="收起新手引导" @click="cbObDismiss">×</button>
+              <strong>{{ t(cbOb.done ? t('三步引导 · 已完成') : t('三步上手')) }}</strong>
+              <span class="cb-ob-sub">{{ t(cbOb.done ? t('任何时候点右上角 ? 重看') : t('第一次用？跟着走 30 秒')) }}</span>
+              <button type="button" class="cb-ob-x" :title="t(&quot;收起（不再自动弹出）&quot;)" :aria-label="t(&quot;收起新手引导&quot;)" @click="cbObDismiss">×</button>
             </div>
             <ol class="cb-ob-steps">
               <li v-for="(s, i) in cbObSteps" :key="'obo'+i"
                   :class="cbOb.s[i] ? 'on' : (i === cbObNow ? 'now' : '')">
                 <span class="cb-ob-dot" aria-hidden="true"></span>
-                <span class="cb-ob-t">{{ '①②③'[i] }} {{ s }}</span>
+                <span class="cb-ob-t">{{ '①②③'[i] }} {{ t(s) }}</span>
               </li>
             </ol>
-            <div class="cb-ob-foot">产出永远是 AI 草稿，高风险岗需人工确认 · 全部完成自动收起</div>
+            <div class="cb-ob-foot">{{ t("产出永远是 AI 草稿，高风险岗需人工确认 · 全部完成自动收起") }}</div>
           </div>
 
           <!-- Missing credentials are distinct from an unavailable gateway. -->
           <div class="cb-empty-down" v-if="needToken" data-cb-need-token="true" role="alert">
             <p><strong class="cb-empty-k">Access token needed</strong>: this server is private. Open the link you were given (it ends in <code>?token=...</code>).</p>
-            <p lang="zh">需要访问口令：请打开发给你的带 <code>?token=...</code> 的链接。</p>
+            <p lang="zh">{{ t("需要访问口令：请打开发给你的带") }} <code>?token=...</code> {{ t("的链接。") }}</p>
           </div>
 
           <!-- ===== ux(round10) 网关兜底空态：/api/health 不可达（附录 I，命令一键复制） ===== -->
           <div class="cb-empty-down" v-if="gatewayDown && !needToken && !hasAnyResult" data-cb-down="true" role="alert">
-            <p><strong class="cb-empty-k">网关未启动或不可达</strong> —— 界面在，但流水线跑不起来（{{ gatewayDownErr }}）。</p>
-            <p>现在能做什么：在仓库根目录启动网关（LLM Key 按需配置），然后点「重试检测」。</p>
+            <p><strong class="cb-empty-k">{{ t("网关未启动或不可达") }}</strong> {{ t("—— 界面在，但流水线跑不起来（") }}{{ t(gatewayDownErr) }}）。</p>
+            <p>{{ t("现在能做什么：在仓库根目录启动网关（LLM Key 按需配置），然后点「重试检测」。") }}</p>
             <code id="cbGatewayCmd">python -m uvicorn gateway.app:app --port 8000</code>
             <div class="cb-empty-acts">
-              <button type="button" @click="cbCopyGatewayCmd">{{ copiedGatewayCmd ? '已复制' : '复制启动命令' }}</button>
-              <button type="button" @click="refreshHealth">重试检测</button>
+              <button type="button" @click="cbCopyGatewayCmd">{{ t(copiedGatewayCmd ? t('已复制') : t('复制启动命令')) }}</button>
+              <button type="button" @click="refreshHealth">{{ t("重试检测") }}</button>
             </div>
           </div>
 
           <!-- ===== ux(round10) 空态卡：一句话定位 + 三张示例任务卡（点击预填左栏输入框，不自动发送）+ 诚实小字（附录 I） ===== -->
           <div class="cb-empty" v-if="!hasAnyResult" data-cb-empty="true">
             <div class="cb-empty-media" aria-hidden="true">CB</div>
-            <h3 class="cb-empty-title">土木版 Codex：66 岗工作台</h3>
-            <p class="cb-empty-desc">工具算数、模型只路由。点一张示例卡预填左侧输入框（不会自动发送），或直接发任务跑全流程。</p>
+            <h3 class="cb-empty-title">{{ t("土木版 Codex：66 岗工作台") }}</h3>
+            <p class="cb-empty-desc">{{ t("工具算数、模型只路由。点一张示例卡预填左侧输入框（不会自动发送），或直接发任务跑全流程。") }}</p>
             <div class="cb-empty-cards">
               <button type="button" class="cb-empty-card tone-blue" data-cb-sample="pack" @click="cbEmptySample('pack')">
-                <span class="cb-empty-ico" aria-hidden="true">装</span>
-                <span class="cb-empty-k"><code>/pack</code> 装一张票</span>
-                <span class="cb-empty-v">sim_materials 票 → 装柜单草稿，柜数与坐标由 tools 算</span>
+                <span class="cb-empty-ico" aria-hidden="true">{{ t("装") }}</span>
+                <span class="cb-empty-k"><code>/pack</code> {{ t("装一张票") }}</span>
+                <span class="cb-empty-v">{{ t("sim_materials 票 → 装柜单草稿，柜数与坐标由 tools 算") }}</span>
               </button>
               <button type="button" class="cb-empty-card tone-strong" data-cb-sample="bid" @click="cbEmptySample('bid')">
-                <span class="cb-empty-ico" aria-hidden="true">标</span>
-                <span class="cb-empty-k"><code>/bid</code> 解析一段招标</span>
-                <span class="cb-empty-v">资格条件与废标项清单 · P0 资格须人工确认</span>
+                <span class="cb-empty-ico" aria-hidden="true">{{ t("标") }}</span>
+                <span class="cb-empty-k"><code>/bid</code> {{ t("解析一段招标") }}</span>
+                <span class="cb-empty-v">{{ t("资格条件与废标项清单 · P0 资格须人工确认") }}</span>
               </button>
               <button type="button" class="cb-empty-card tone-orange" data-cb-sample="safety" @click="cbEmptySample('safety')">
-                <span class="cb-empty-ico" aria-hidden="true">安</span>
-                <span class="cb-empty-k"><code>/safety</code> 出安全交底</span>
-                <span class="cb-empty-v">工友班前三分钟白话，一条一个动作</span>
+                <span class="cb-empty-ico" aria-hidden="true">{{ t("安") }}</span>
+                <span class="cb-empty-k"><code>/safety</code> {{ t("出安全交底") }}</span>
+                <span class="cb-empty-v">{{ t("工友班前三分钟白话，一条一个动作") }}</span>
               </button>
             </div>
-            <p class="cb-empty-note">产出永远是 AI 草稿，高风险岗需人工确认。</p>
+            <p class="cb-empty-note">{{ t("产出永远是 AI 草稿，高风险岗需人工确认。") }}</p>
           </div>
 
           <!-- Empty: full mode landing（简洁无结果时隐藏，避免中间双空洞） -->
           <div class="empty-hero" v-if="!hasAnyResult && mainTab === 'overview' && !demoSimpleMode">
             <div class="hero-icon" aria-hidden="true">CB</div>
-            <h3>组建团队，开始装柜</h3>
+            <h3>{{ t("组建团队，开始装柜") }}</h3>
             <p>
-              结果工作区已就绪。左侧是 <strong>{{ agentCount || 13 }}</strong> 智能体（大 Team⊃A/B）+ HITL · harness v{{ harnessVersion || '0.6.4' }}。
+              {{ t("结果工作区已就绪。左侧是") }} <strong>{{ agentCount || 13 }}</strong> {{ t("智能体（大 Team⊃A/B）+ HITL · harness v") }}{{ harnessVersion || '0.6.4' }}。
             </p>
-            <div class="empty-features" aria-label="产品要点">
+            <div class="empty-features" :aria-label="t(&quot;产品要点&quot;)">
               <div class="empty-feature">
-                <div class="ef-k">Tools 定柜</div>
-                <div class="ef-v">N0* / 3D 坐标由 tools 计算，LLM 不写 xyz</div>
+                <div class="ef-k">{{ t("Tools 定柜") }}</div>
+                <div class="ef-v">{{ t("N0* / 3D 坐标由 tools 计算，LLM 不写 xyz") }}</div>
               </div>
               <div class="empty-feature">
-                <div class="ef-k">HITL 闸门</div>
-                <div class="ef-v">默认停确认成箱，再进入拼柜</div>
+                <div class="ef-k">{{ t("HITL 闸门") }}</div>
+                <div class="ef-v">{{ t("默认停确认成箱，再进入拼柜") }}</div>
               </div>
               <div class="empty-feature">
-                <div class="ef-k">可回放</div>
-                <div class="ef-v">agent_steps 与裁决条可观察</div>
+                <div class="ef-k">{{ t("可回放") }}</div>
+                <div class="ef-v">{{ t("agent_steps 与裁决条可观察") }}</div>
               </div>
             </div>
             <div class="actions">
-              <button class="primary-lg" @click="runDemo" :class="{ busy: loading }">一键演示（HITL）</button>
-              <button class="soft" @click="runPipelineTrace" :class="{ busy: loading }">全流程轨迹</button>
-              <button class="ghost" @click="runTeamA" :class="{ busy: loading }">仅团队 A</button>
-              <button class="soft" @click="refreshHealth">健康预检</button>
+              <button class="primary-lg" @click="runDemo" :class="{ busy: loading }">{{ t("一键演示（HITL）") }}</button>
+              <button class="soft" @click="runPipelineTrace" :class="{ busy: loading }">{{ t("全流程轨迹") }}</button>
+              <button class="ghost" @click="runTeamA" :class="{ busy: loading }">{{ t("仅团队 A") }}</button>
+              <button class="soft" @click="refreshHealth">{{ t("健康预检") }}</button>
             </div>
             <div class="hint-row">
-              点顶栏 <strong>满载演示</strong> 即可 · tools 定柜坐标 · 默认停在确认闸
+              {{ t("点顶栏") }} <strong>{{ t("满载演示") }}</strong> {{ t("即可 · tools 定柜坐标 · 默认停在确认闸") }}
             </div>
             <div class="status-line" v-if="preflightHints.length" style="margin-top:12px;text-align:left;max-width:520px">
               <div v-for="(h,i) in preflightHints" :key="'ph'+i">· {{ h }}</div>
@@ -2872,13 +2874,13 @@ button.danger { background: var(--cb-red); box-shadow: none; }
               v-if="errorBanner && errorBanner.show"
               :class="errorBanner.level === 'block' ? 'block' : 'warn'"
             >
-              <div class="vt">{{ errorBanner.title || '报错' }}</div>
+              <div class="vt">{{ errorBanner.title || t('报错') }}</div>
               <ul>
                 <li v-for="(ln, i) in (errorBanner.lines || [])" :key="'eb'+i">{{ ln }}</li>
               </ul>
               <div class="row-acts">
-                <button type="button" class="soft" @click="mainTab = 'boxes'">查看装箱</button>
-                <button type="button" class="ghost" @click="mainTab = 'agents'">Agent 轨迹</button>
+                <button type="button" class="soft" @click="mainTab = 'boxes'">{{ t("查看装箱") }}</button>
+                <button type="button" class="ghost" @click="mainTab = 'agents'">{{ t("Agent 轨迹") }}</button>
               </div>
             </div>
             <!-- ux(round7) 纠偏卡：总览报错/缺尺寸 → 可行动动作 -->
@@ -2889,7 +2891,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
               v-if="verdict && verdict.show_banner !== false && (verdict.title || verdict.summary)"
               :class="verdict.level || 'warn'"
             >
-              <div class="vt">{{ verdict.title || '裁决' }}</div>
+              <div class="vt">{{ verdict.title || t('裁决') }}</div>
               <div class="vs">{{ verdict.summary || verdict.headline }}</div>
               <div class="vs" style="margin-top:6px;font-size:12px;opacity:.95" v-if="verdict.headline && verdict.headline !== verdict.summary">
                 {{ verdict.headline }}
@@ -2899,37 +2901,37 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                   mid50 {{ pct(verdict.worst_mid50) }}
                 </span>
                 <span class="pill" v-if="verdict.booking_volume_utilization != null">
-                  订舱 {{ pct(verdict.booking_volume_utilization) }}
+                  {{ t("订舱") }} {{ pct(verdict.booking_volume_utilization) }}
                 </span>
                 <span class="pill" v-if="verdict.outer_space_utilization != null">
-                  外廓 {{ pct(verdict.outer_space_utilization) }}
+                  {{ t("外廓") }} {{ pct(verdict.outer_space_utilization) }}
                 </span>
                 <span class="pill" :class="verdict.ship_ok === false ? 'err' : (verdict.ship_ok ? 'ok' : '')">
-                  ship_ok {{ verdict.ship_ok === false ? '否' : (verdict.ship_ok ? '是' : '—') }}
+                  ship_ok {{ t(verdict.ship_ok === false ? t('否') : (verdict.ship_ok ? t('是') : '—')) }}
                 </span>
               </div>
               <ul v-if="verdict.issues && verdict.issues.length">
                 <li v-for="(iss, i) in verdict.issues" :key="'vi'+i">{{ iss }}</li>
               </ul>
               <div class="va" v-if="verdict.actions && verdict.actions.length">
-                <strong>建议：</strong>{{ verdict.actions.join('；') }}
+                <strong>{{ t("建议：") }}</strong>{{ verdict.actions.join('；') }}
               </div>
               <div class="row-acts">
                 <!-- ux(round18) 出图可发现性：简洁演示模式下拼柜完成故意停在总览先给裁决，
                      此前只用一行 statusText 提示「再点可视化」，混在一排 pill 里极易漏看
                      （实测：用户以为出不来图）。这里给一个首位主按钮直达布局图。 -->
                 <button type="button" @click="mainTab = 'visual'" v-if="hasViews || hasScene3d"
-                        title="3D 场景与俯视/侧视/正视布局图">
-                  看布局图
+                        :title="t(&quot;3D 场景与俯视/侧视/正视布局图&quot;)">
+                  {{ t("看布局图") }}
                 </button>
                 <button type="button" class="soft" @click="mainTab = 'risk'" v-if="(verdict.level === 'block' || verdict.level === 'warn')">
-                  查看风险详情
+                  {{ t("查看风险详情") }}
                 </button>
                 <button type="button" class="ghost" @click="scrollToCog" v-if="cogPrimary">
-                  查看重心 COG
+                  {{ t("查看重心 COG") }}
                 </button>
                 <button type="button" class="soft" @click="mainTab = 'boxes'" v-if="verdict.materials_incomplete || (result.boxes||[]).length">
-                  装箱 / 两排标签
+                  {{ t("装箱 / 两排标签") }}
                 </button>
                 <span class="pill" :class="verdict.level === 'ok' ? 'ok' : (verdict.level === 'block' ? 'err' : 'warn')">
                   {{ verdict.level }}
@@ -2941,13 +2943,13 @@ button.danger { background: var(--cb-red); box-shadow: none; }
             <div class="card" v-if="boundedDebate && boundedDebate.rounds"
                  style="margin-bottom:12px;border:1px solid var(--border);border-radius:12px;padding:12px 14px;background:var(--bg-elev)">
               <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-                <strong style="font-size:13px">有界辩论 · critic ↔ planner</strong>
+                <strong style="font-size:13px">{{ t("有界辩论 · critic ↔ planner") }}</strong>
                 <span class="pill" :class="boundedDebate.improved ? 'ok' : 'warn'">
-                  {{ boundedDebate.outcome || 'done' }} · {{ boundedDebate.rounds }} 轮
+                  {{ boundedDebate.outcome || 'done' }} · {{ boundedDebate.rounds }} {{ t("轮") }}
                 </span>
               </div>
               <div style="font-size:12px;color:var(--muted);margin-top:6px">
-                {{ boundedDebate.note || '策略协商后由 tools 裁决柜数/坐标' }}
+                {{ boundedDebate.note || t('策略协商后由 tools 裁决柜数/坐标') }}
                 <span v-if="boundedDebate.final_strategy"> · strategy={{ boundedDebate.final_strategy }}</span>
               </div>
               <ul style="margin:8px 0 0;padding-left:18px;font-size:12px;color:var(--text)"
@@ -2964,23 +2966,23 @@ button.danger { background: var(--cb-red); box-shadow: none; }
             <div class="hitl-bar" v-if="result.phase === 'await_user_confirm' || (result.hitl_summary && result.hitl_summary.n_boxes)">
               <div class="hitl-top">
                 <div>
-                  <strong>HITL 确认闸门</strong>
+                  <strong>{{ t("HITL 确认闸门") }}</strong>
                   <div style="font-size:12px;color:var(--muted);margin-top:4px;max-width:560px;">
-                    {{ (result.hitl_summary && result.hitl_summary.message) || '请确认柜型后进入团队 B 拼柜' }}
+                    {{ (result.hitl_summary && result.hitl_summary.message) || t('请确认柜型后进入团队 B 拼柜') }}
                   </div>
                 </div>
                 <div class="row">
                   <label style="font-size:13px;color:var(--muted)">
-                    柜型
+                    {{ t("柜型") }}
                     <select v-model="containerType" style="margin-left:6px">
                       <option v-for="opt in containerOptions" :key="opt.value" :value="opt.value">
-                        {{ opt.label }}{{ opt.recommended ? '（推荐）' : '' }}
+                        {{ opt.label }}{{ t(opt.recommended ? t('（推荐）') : '') }}
                       </option>
                     </select>
                   </label>
-                  <button @click="confirmPack" :class="{ busy: loading }">确认并拼柜 · resume</button>
-                  <button class="soft" @click="mainTab = 'boxes'">改方案</button>
-                  <button class="danger" @click="cancel">取消</button>
+                  <button @click="confirmPack" :class="{ busy: loading }">{{ t("确认并拼柜 · resume") }}</button>
+                  <button class="soft" @click="mainTab = 'boxes'">{{ t("改方案") }}</button>
+                  <button class="danger" @click="cancel">{{ t("取消") }}</button>
                 </div>
               </div>
               <div class="hitl-cards" v-if="hitlCards.length">
@@ -2992,7 +2994,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
               </div>
               <div style="overflow:auto" v-if="hitlPreview.length">
                 <table class="data">
-                  <thead><tr><th>箱号</th><th>箱型</th><th>外廓</th><th>毛重</th><th>结构</th></tr></thead>
+                  <thead><tr><th>{{ t("箱号") }}</th><th>{{ t("箱型") }}</th><th>{{ t("外廓") }}</th><th>{{ t("毛重") }}</th><th>{{ t("结构") }}</th></tr></thead>
                   <tbody>
                     <tr v-for="b in hitlPreview" :key="b.box_id">
                       <td>{{ b.box_id }}</td><td>{{ b.box_type }}</td><td>{{ b.outer }}</td>
@@ -3005,21 +3007,21 @@ button.danger { background: var(--cb-red); box-shadow: none; }
               <!-- 非标检验 v2 仪表盘 -->
               <div class="section" v-if="nsSummary && nsSummary.overall" style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--border)">
                 <div class="section-h" style="margin-bottom:8px">
-                  <h3 style="margin:0;font-size:14px">非标件检验</h3>
+                  <h3 style="margin:0;font-size:14px">{{ t("非标件检验") }}</h3>
                   <span class="pill" :class="nsLevelClass">{{ nsSummary.overall }}</span>
-                  <span class="pill" v-if="nsUi.overlength">超长 {{ nsUi.overlength }}</span>
-                  <span class="pill" v-if="nsUi.heavy">重件 {{ nsUi.heavy }}</span>
-                  <span class="pill" v-if="nsUi.custom_shape">定制 {{ nsUi.custom_shape }}</span>
-                  <span class="pill warn" v-if="nsUi.struct_pending">待详设 {{ nsUi.struct_pending }}</span>
-                  <span class="pill err" v-if="nsUi.data_gap">数据缺口 {{ nsUi.data_gap }}</span>
+                  <span class="pill" v-if="nsUi.overlength">{{ t("超长") }} {{ nsUi.overlength }}</span>
+                  <span class="pill" v-if="nsUi.heavy">{{ t("重件") }} {{ nsUi.heavy }}</span>
+                  <span class="pill" v-if="nsUi.custom_shape">{{ t("定制") }} {{ nsUi.custom_shape }}</span>
+                  <span class="pill warn" v-if="nsUi.struct_pending">{{ t("待详设") }} {{ nsUi.struct_pending }}</span>
+                  <span class="pill err" v-if="nsUi.data_gap">{{ t("数据缺口") }} {{ nsUi.data_gap }}</span>
                   <button class="soft" style="margin-left:auto;font-size:12px" @click="nsFilter = nsFilter === 'all' ? 'FAIL' : 'all'">
-                    {{ nsFilter === 'all' ? '筛选严重项' : '显示全部 Top' }}
+                    {{ t(nsFilter === 'all' ? t('筛选严重项') : t('显示全部 Top')) }}
                   </button>
                 </div>
                 <p class="foot-note" style="margin:0 0 8px">
-                  {{ (nsSummary.ship_gate && nsSummary.ship_gate.note) || '规则分型：数据缺口/超尺寸/重载/定制路径/结构；FAIL 阻断，WARN 人工复核。' }}
+                  {{ (nsSummary.ship_gate && nsSummary.ship_gate.note) || t('规则分型：数据缺口/超尺寸/重载/定制路径/结构；FAIL 阻断，WARN 人工复核。') }}
                   <span v-if="(nsSummary.summary||{}).n_nonstandard_materials != null">
-                    · 非标物料 {{ (nsSummary.summary||{}).n_nonstandard_materials }}
+                    {{ t("· 非标物料") }} {{ (nsSummary.summary||{}).n_nonstandard_materials }}
                   </span>
                 </p>
                 <div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:8px" v-if="(nsSummary.strategy_hints||[]).length">
@@ -3027,7 +3029,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                 </div>
                 <div style="overflow:auto" v-if="nsTopRisks.length">
                   <table class="data">
-                    <thead><tr><th>ID</th><th>level</th><th>tags</th><th>lane</th><th>尺寸</th><th>kg</th><th>动作</th></tr></thead>
+                    <thead><tr><th>ID</th><th>level</th><th>tags</th><th>lane</th><th>{{ t("尺寸") }}</th><th>kg</th><th>{{ t("动作") }}</th></tr></thead>
                     <tbody>
                       <tr v-for="r in nsTopRisks" :key="r.id">
                         <td>{{ r.id }}</td>
@@ -3043,17 +3045,17 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                 </div>
                 <div style="margin-top:8px" v-if="nsChecklistItems.length">
                   <div class="row" style="align-items:center;gap:8px;margin-bottom:4px">
-                    <div style="font-size:12px;color:var(--muted)">装运勾选（非标 · 确认拼柜前必填）</div>
-                    <button type="button" class="soft" style="font-size:11px;padding:2px 8px" @click="checkAllNsRequired">演示一键勾选</button>
-                    <span class="pill err" v-if="nsMissingRequired.length">缺 {{ nsMissingRequired.length }} 项</span>
-                    <span class="pill ok" v-else-if="nsSummary && nsSummary.overall && nsSummary.overall !== 'PASS'">已齐套</span>
+                    <div style="font-size:12px;color:var(--muted)">{{ t("装运勾选（非标 · 确认拼柜前必填）") }}</div>
+                    <button type="button" class="soft" style="font-size:11px;padding:2px 8px" @click="checkAllNsRequired">{{ t("演示一键勾选") }}</button>
+                    <span class="pill err" v-if="nsMissingRequired.length">{{ t("缺") }} {{ nsMissingRequired.length }} {{ t("项") }}</span>
+                    <span class="pill ok" v-else-if="nsSummary && nsSummary.overall && nsSummary.overall !== 'PASS'">{{ t("已齐套") }}</span>
                   </div>
                   <label v-for="it in nsChecklistItems" :key="it.id" style="display:flex;align-items:flex-start;gap:8px;font-size:12px;margin:4px 0;cursor:pointer"
                     :style="it.required && !nsChecked[it.id] ? 'outline:1px solid #c45c5c;border-radius:6px;padding:4px' : ''">
                     <input type="checkbox" v-model="nsChecked[it.id]" style="margin-top:2px" />
                     <span>
                       {{ it.label }}
-                      <span class="pill" v-if="it.required" style="font-size:10px">必填</span>
+                      <span class="pill" v-if="it.required" style="font-size:10px">{{ t("必填") }}</span>
                       <span style="color:var(--muted)"> · {{ it.auto_hint || '' }}</span>
                     </span>
                   </label>
@@ -3064,39 +3066,39 @@ button.danger { background: var(--cb-red); box-shadow: none; }
             <!-- 多柜解释：N0* → 实装 -->
             <div class="section" v-if="multiContainer && multiContainer.show">
               <div class="section-h">
-                <h3>多柜规划（Agent）</h3>
+                <h3>{{ t("多柜规划（Agent）") }}</h3>
                 <span class="pill" :class="(multiContainer.n0_gap||0)===0 ? 'ok' : 'warn'">
-                  N0*={{ multiContainer.n0_star || multiContainer.n0 }} → 实装 {{ multiContainer.containers_used }}
+                  N0*={{ multiContainer.n0_star || multiContainer.n0 }} {{ t("→ 实装") }} {{ multiContainer.containers_used }}
                 </span>
-                <span class="pill warn" v-if="multiContainer.residual_last_container">末柜偏空</span>
-                <span class="pill ok" v-if="multiContainer.merged_ok">已并回<span v-if="multiContainer.merge_rounds">×{{ multiContainer.merge_rounds }}</span></span>
-                <span class="pill warn" v-if="multiContainer.big_ticket">大票</span>
+                <span class="pill warn" v-if="multiContainer.residual_last_container">{{ t("末柜偏空") }}</span>
+                <span class="pill ok" v-if="multiContainer.merged_ok">{{ t("已并回") }}<span v-if="multiContainer.merge_rounds">×{{ multiContainer.merge_rounds }}</span></span>
+                <span class="pill warn" v-if="multiContainer.big_ticket">{{ t("大票") }}</span>
                 <span class="pill" v-if="multiContainer.weight_utilization != null"
                   :class="multiContainer.weight_utilization >= 0.7 ? 'ok' : 'warn'">
-                  重量 {{ pct(multiContainer.weight_utilization) }}
+                  {{ t("重量") }} {{ pct(multiContainer.weight_utilization) }}
                 </span>
               </div>
               <p class="foot-note" style="margin:0 0 8px">
-                {{ multiContainer.explain || multiContainer.n0_note || 'N0* = max(重量,体积,几何底面,几何槽位)；柜级递增试装 + 多轮末柜并回。柜内 multi_start 是固定 N 的多种放法，不是跨柜 FFD 最优。' }}
+                {{ multiContainer.explain || multiContainer.n0_note || t('N0* = max(重量,体积,几何底面,几何槽位)；柜级递增试装 + 多轮末柜并回。柜内 multi_start 是固定 N 的多种放法，不是跨柜 FFD 最优。') }}
               </p>
               <div class="row" style="flex-wrap:wrap;gap:8px" v-if="multiContainer.n0_components">
-                <span class="pill">重量 {{ multiContainer.n0_components.weight }}</span>
-                <span class="pill">体积 {{ multiContainer.n0_components.volume }}</span>
-                <span class="pill">底面 {{ multiContainer.n0_components.geom_floor }}</span>
-                <span class="pill">槽位 {{ multiContainer.n0_components.geom_slot }}</span>
+                <span class="pill">{{ t("重量") }} {{ multiContainer.n0_components.weight }}</span>
+                <span class="pill">{{ t("体积") }} {{ multiContainer.n0_components.volume }}</span>
+                <span class="pill">{{ t("底面") }} {{ multiContainer.n0_components.geom_floor }}</span>
+                <span class="pill">{{ t("槽位") }} {{ multiContainer.n0_components.geom_slot }}</span>
                 <span class="pill" v-if="multiContainer.n0_components.geom_slot_raw != null && multiContainer.n0_components.geom_slot_raw !== multiContainer.n0_components.geom_slot">
-                  槽位raw {{ multiContainer.n0_components.geom_slot_raw }}
+                  {{ t("槽位raw") }} {{ multiContainer.n0_components.geom_slot_raw }}
                 </span>
               </div>
               <div class="foot-note" v-if="multiContainer.last_container && multiContainer.last_container.n_boxes != null" style="margin-top:8px">
-                末柜 #{{ multiContainer.last_container.container_no }}：
-                {{ multiContainer.last_container.n_boxes }} 箱
+                {{ t("末柜 #") }}{{ multiContainer.last_container.container_no }}：
+                {{ multiContainer.last_container.n_boxes }} {{ t("箱") }}
                 <span v-if="multiContainer.last_container.floor_utilization != null">
-                  · 底面积 {{ pct(multiContainer.last_container.floor_utilization) }}
+                  {{ t("· 底面积") }} {{ pct(multiContainer.last_container.floor_utilization) }}
                 </span>
               </div>
               <div v-if="multiContainer.tips && multiContainer.tips.length" style="margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(230,184,77,0.12);border:1px solid rgba(230,184,77,0.35)">
-                <div style="font-weight:600;margin-bottom:4px;color:#e6b84d">大票 / 利用率提示</div>
+                <div style="font-weight:600;margin-bottom:4px;color:#e6b84d">{{ t("大票 / 利用率提示") }}</div>
                 <ul style="margin:0;padding-left:18px">
                   <li v-for="(t,i) in multiContainer.tips" :key="'mct'+i" class="foot-note" style="margin:2px 0">{{ t }}</li>
                 </ul>
@@ -3104,10 +3106,10 @@ button.danger { background: var(--cb-red); box-shadow: none; }
               <!-- Agent 策略决策：候选对比 -->
               <div v-if="strategyDecision && strategyDecision.show" style="margin-top:12px">
                 <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:6px">
-                  <span class="pill ok">策略 {{ strategyDecision.chosen || '—' }}</span>
-                  <span class="pill warn" v-if="strategyDecision.need_cog_warn">CoG 预警</span>
+                  <span class="pill ok">{{ t("策略") }} {{ strategyDecision.chosen || '—' }}</span>
+                  <span class="pill warn" v-if="strategyDecision.need_cog_warn">{{ t("CoG 预警") }}</span>
                   <span class="pill" v-if="strategyDecision.reference_light_used != null">
-                    light 下界 {{ strategyDecision.reference_light_used }}
+                    {{ t("light 下界") }} {{ strategyDecision.reference_light_used }}
                   </span>
                   <span class="pill" v-if="multiContainer.worst_mid50 != null"
                     :class="multiContainer.worst_mid50 >= 0.6 ? 'ok' : 'warn'">
@@ -3119,22 +3121,22 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                   <table>
                     <thead>
                       <tr>
-                        <th>策略</th>
-                        <th>柜数</th>
-                        <th>重量</th>
+                        <th>{{ t("策略") }}</th>
+                        <th>{{ t("柜数") }}</th>
+                        <th>{{ t("重量") }}</th>
                         <th>mid50</th>
-                        <th>出运</th>
-                        <th>备注</th>
+                        <th>{{ t("出运") }}</th>
+                        <th>{{ t("备注") }}</th>
                       </tr>
                     </thead>
                     <tbody>
                       <tr v-for="(c,i) in strategyDecision.candidates" :key="'sc'+i"
                         :style="c.strategy_id === strategyDecision.chosen ? 'background:rgba(62,207,142,0.12)' : ''">
-                        <td>{{ c.strategy_id }}<span v-if="c.reference_only" class="muted"> ·参考</span></td>
+                        <td>{{ c.strategy_id }}<span v-if="c.reference_only" class="muted"> {{ t("·参考") }}</span></td>
                         <td>{{ c.used }}</td>
                         <td>{{ c.weight_utilization != null ? pct(c.weight_utilization) : '—' }}</td>
                         <td>{{ c.mid50 != null ? pct(c.mid50) : '—' }}</td>
-                        <td>{{ c.ship_ok_hint ? '可' : (c.reference_only ? '否' : '慎') }}</td>
+                        <td>{{ t(c.ship_ok_hint ? t('可') : (c.reference_only ? t('否') : t('慎'))) }}</td>
                         <td class="foot-note">{{ c.note || '' }}</td>
                       </tr>
                     </tbody>
@@ -3145,8 +3147,8 @@ button.danger { background: var(--cb-red); box-shadow: none; }
 
             <div class="section" v-if="engineAbSummary">
               <div class="section-h">
-                <h3>引擎 A/B</h3>
-                <button class="ghost" type="button" @click="loadEngineAb" :disabled="loading">刷新</button>
+                <h3>{{ t("引擎 A/B") }}</h3>
+                <button class="ghost" type="button" @click="loadEngineAb" :disabled="loading">{{ t("刷新") }}</button>
               </div>
               <div class="metrics">
                 <div class="metric" v-for="row in engineAbSummary" :key="row.name">
@@ -3159,73 +3161,73 @@ button.danger { background: var(--cb-red); box-shadow: none; }
 
             <div class="section">
               <div class="section-h">
-                <h3>运行摘要</h3>
+                <h3>{{ t("运行摘要") }}</h3>
                 <span class="sub">{{ result.phase || '-' }} · session {{ sessionId }} · v{{ harnessVersion || '—' }} · {{ result.team_mode || 'big_team_a_b' }} · {{ (result.intent_spec && result.intent_spec.scheme_id) || (result.agent_style || '') }}</span>
               </div>
               <p class="foot-note" style="margin:0 0 8px">
-                <strong>双口径：</strong>订舱报 <em>N0</em>；工程装载看 <em>3D 用柜</em>——二者可不相同，勿混为一谈。
+                <strong>{{ t("双口径：") }}</strong>{{ t("订舱报") }} <em>N0</em>{{ t("；工程装载看") }} <em>{{ t("3D 用柜") }}</em>{{ t("——二者可不相同，勿混为一谈。") }}
               </p>
               <div class="metrics">
                 <div class="metric">
-                  <div class="k">箱数</div>
+                  <div class="k">{{ t("箱数") }}</div>
                   <div class="v">{{ (result.boxes || []).length || 0 }}</div>
-                  <div class="h">标准箱合箱结果</div>
+                  <div class="h">{{ t("标准箱合箱结果") }}</div>
                 </div>
                 <div class="metric">
-                  <div class="k">订柜 N0</div>
+                  <div class="k">{{ t("订柜 N0") }}</div>
                   <div class="v">{{ volMetrics.n0 != null ? volMetrics.n0 : '—' }}</div>
-                  <div class="h">订舱/汇报用 · max(重量,有效体积)</div>
+                  <div class="h">{{ t("订舱/汇报用 · max(重量,有效体积)") }}</div>
                 </div>
                 <div class="metric">
-                  <div class="k">3D 用柜</div>
+                  <div class="k">{{ t("3D 用柜") }}</div>
                   <div class="v">{{ volMetrics.used != null ? volMetrics.used : '—' }}</div>
-                  <div class="h">装载引擎实际柜数 · 可≥N0</div>
+                  <div class="h">{{ t("装载引擎实际柜数 · 可≥N0") }}</div>
                 </div>
                 <div class="metric">
-                  <div class="k">订柜有效体积率</div>
+                  <div class="k">{{ t("订柜有效体积率") }}</div>
                   <div class="v" style="color:var(--ok)">{{ pct(volMetrics.bookingVol) }}</div>
-                  <div class="h">V_eff / 柜可用 · 非空心实心</div>
+                  <div class="h">{{ t("V_eff / 柜可用 · 非空心实心") }}</div>
                 </div>
                 <div class="metric">
-                  <div class="k">外廓摆柜率</div>
+                  <div class="k">{{ t("外廓摆柜率") }}</div>
                   <div class="v" style="color:var(--warn)">{{ pct(volMetrics.outerVol) }}</div>
-                  <div class="h">仅布局松紧 · 不作订舱</div>
+                  <div class="h">{{ t("仅布局松紧 · 不作订舱") }}</div>
                 </div>
                 <div class="metric">
-                  <div class="k">重量利用率</div>
+                  <div class="k">{{ t("重量利用率") }}</div>
                   <div class="v">{{ pct(volMetrics.weight) }}</div>
-                  <div class="h">引擎 {{ (result.container_plan && result.container_plan.engine) || '—' }}</div>
+                  <div class="h">{{ t("引擎") }} {{ (result.container_plan && result.container_plan.engine) || '—' }}</div>
                 </div>
               </div>
             </div>
 
             <div class="section">
               <div class="section-h">
-                <h3>What-if 情景</h3>
-                <span class="sub">OptiGuide 式 · 求解器重算 · plan_diff</span>
+                <h3>{{ t("What-if 情景") }}</h3>
+                <span class="sub">{{ t("OptiGuide 式 · 求解器重算 · plan_diff") }}</span>
               </div>
               <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:8px">
                 <select v-model="packProfile" style="min-width:160px;padding:6px 8px" @change="onProfileHint">
-                  <option v-for="p in packProfiles" :key="p.id" :value="p.id">{{ p.label || p.id }}</option>
+                  <option v-for="p in packProfiles" :key="p.id" :value="p.id">{{ optionLabel(p, 'profile') }}</option>
                 </select>
                 <select v-model="whatifScenario" style="min-width:200px;padding:6px 8px">
-                  <option v-for="s in whatifScenarios" :key="s.id" :value="s.id">{{ s.label || s.id }}</option>
+                  <option v-for="s in whatifScenarios" :key="s.id" :value="s.id">{{ optionLabel(s, 'scenario') }}</option>
                 </select>
-                <input v-model.number="whatifMaxC" type="number" min="0" placeholder="max柜(可选)"
+                <input v-model.number="whatifMaxC" type="number" min="0" :placeholder="t(&quot;max柜(可选)&quot;)"
                        style="width:110px;padding:6px 8px" />
                 <button type="button" class="primary" :disabled="whatifLoading || !sessionId" @click="runWhatIf">
-                  {{ whatifLoading ? '计算中…' : '跑 What-if' }}
+                  {{ t(whatifLoading ? t('计算中…') : t('跑 What-if')) }}
                 </button>
                 <button type="button" class="ghost" :disabled="!whatifResult || !whatifResult.result_session_id" @click="applyWhatIf">
-                  应用为当前方案
+                  {{ t("应用为当前方案") }}
                 </button>
-                <button type="button" class="ghost" @click="loadWhatIfScenarios(); loadProfiles()">刷新</button>
+                <button type="button" class="ghost" @click="loadWhatIfScenarios(); loadProfiles()">{{ t("刷新") }}</button>
               </div>
-              <p class="foot-note" v-if="!sessionId">先跑一遍流水线拿到 session，再做 What-if</p>
+              <p class="foot-note" v-if="!sessionId">{{ t("先跑一遍流水线拿到 session，再做 What-if") }}</p>
               <p class="foot-note" v-if="profileHint">{{ profileHint }}</p>
               <div v-if="whatifResult && whatifResult.ok" style="font-size:12px;line-height:1.55">
                 <p style="margin:0 0 6px"><strong>{{ whatifResult.scenario_label || whatifResult.scenario }}</strong>
-                  · 材料 {{ whatifResult.materials_before }}→{{ whatifResult.materials_after }}
+                  {{ t("· 材料") }} {{ whatifResult.materials_before }}→{{ whatifResult.materials_after }}
                   · max_c={{ whatifResult.max_containers }}
                   <span v-if="whatifResult.result_session_id"> · {{ whatifResult.result_session_id }}</span>
                 </p>
@@ -3235,7 +3237,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                     <div class="v" style="font-size:16px">{{ (whatifResult.before||{}).n0 }} → {{ (whatifResult.after||{}).n0 }}</div>
                   </div>
                   <div class="metric">
-                    <div class="k">3D 用柜</div>
+                    <div class="k">{{ t("3D 用柜") }}</div>
                     <div class="v" style="font-size:16px">{{ (whatifResult.before||{}).containers_used }} → {{ (whatifResult.after||{}).containers_used }}</div>
                   </div>
                   <div class="metric">
@@ -3254,17 +3256,17 @@ button.danger { background: var(--cb-red); box-shadow: none; }
 
             <div class="section" v-if="porManifest.by_part && porManifest.by_part.length">
               <div class="section-h">
-                <h3>POR 装柜单</h3>
-                <span class="pill">{{ porManifest.summary || (porManifest.n_containers + ' 柜') }}</span>
+                <h3>{{ t("POR 装柜单") }}</h3>
+                <span class="pill">{{ porManifest.summary || (porManifest.n_containers + t(' 柜')) }}</span>
               </div>
               <div style="overflow-x:auto;max-height:200px">
                 <table class="mini-table" style="width:100%;font-size:12px;border-collapse:collapse">
                   <thead>
                     <tr style="text-align:left;color:var(--muted)">
-                      <th style="padding:4px 6px">料号</th>
-                      <th style="padding:4px 6px">重量kg</th>
-                      <th style="padding:4px 6px">箱数</th>
-                      <th style="padding:4px 6px">柜号</th>
+                      <th style="padding:4px 6px">{{ t("料号") }}</th>
+                      <th style="padding:4px 6px">{{ t("重量kg") }}</th>
+                      <th style="padding:4px 6px">{{ t("箱数") }}</th>
+                      <th style="padding:4px 6px">{{ t("柜号") }}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -3282,29 +3284,29 @@ button.danger { background: var(--cb-red); box-shadow: none; }
             <div class="split-2">
               <div class="section" v-if="cogPrimary">
                 <div class="section-h">
-                  <h3>重心 COG</h3>
+                  <h3>{{ t("重心 COG") }}</h3>
                   <span class="pill" :class="cogBalanceClass">{{ cogPrimary.balance || '-' }}</span>
                 </div>
                 <div class="metrics">
                   <div class="metric">
-                    <div class="k">左右偏心</div>
+                    <div class="k">{{ t("左右偏心") }}</div>
                     <div class="v" :style="{ color: latEccColor, fontSize: '18px' }">{{ pct(cogPrimary.lateral_eccentricity) }}</div>
-                    <div class="h">宜 ≤5%</div>
+                    <div class="h">{{ t("宜 ≤5%") }}</div>
                   </div>
                   <div class="metric">
-                    <div class="k">前后位置</div>
+                    <div class="k">{{ t("前后位置") }}</div>
                     <div class="v" :style="{ color: longPosColor, fontSize: '18px' }">{{ pct(cogPrimary.longitudinal_position) }}</div>
-                    <div class="h">宜 40%–60%</div>
+                    <div class="h">{{ t("宜 40%–60%") }}</div>
                   </div>
                   <div class="metric">
-                    <div class="k">高度比</div>
+                    <div class="k">{{ t("高度比") }}</div>
                     <div class="v" style="font-size:18px">{{ pct(cogPrimary.height_ratio) }}</div>
-                    <div class="h">宜 ≤55%</div>
+                    <div class="h">{{ t("宜 ≤55%") }}</div>
                   </div>
                   <div class="metric">
-                    <div class="k">中段50%质量</div>
+                    <div class="k">{{ t("中段50%质量") }}</div>
                     <div class="v" :style="{ color: mid50Color, fontSize: '18px' }">{{ pct(cogPrimary.mass_in_mid50_ratio) }}</div>
-                    <div class="h">CTU 60/50 宜≥60%</div>
+                    <div class="h">{{ t("CTU 60/50 宜≥60%") }}</div>
                   </div>
                 </div>
                 <p class="foot-note" v-if="cogCaption">{{ cogCaption }}</p>
@@ -3312,47 +3314,47 @@ button.danger { background: var(--cb-red); box-shadow: none; }
 
               <div class="section" v-if="stackingInfo">
                 <div class="section-h">
-                  <h3>堆码 / 空隙</h3>
-                  <span class="pill" :class="stackPillClass">{{ stackingInfo.stacked_placements || 0 }} 件上二层+</span>
+                  <h3>{{ t("堆码 / 空隙") }}</h3>
+                  <span class="pill" :class="stackPillClass">{{ stackingInfo.stacked_placements || 0 }} {{ t("件上二层+") }}</span>
                 </div>
                 <div class="metrics">
                   <div class="metric">
-                    <div class="k">叠放件数</div>
+                    <div class="k">{{ t("叠放件数") }}</div>
                     <div class="v" style="font-size:18px">{{ stackingInfo.stacked_placements || 0 }}</div>
                     <div class="h">max_z {{ stackingInfo.max_z_mm || 0 }}mm</div>
                   </div>
                   <div class="metric">
-                    <div class="k">限层 / 间隙</div>
+                    <div class="k">{{ t("限层 / 间隙") }}</div>
                     <div class="v" style="font-size:18px">{{ stackingInfo.max_stack_layers || '—' }} / {{ stackingInfo.clearance_mm || 0 }}mm</div>
-                    <div class="h">支撑比 {{ stackingInfo.support_ratio_min != null ? stackingInfo.support_ratio_min : '—' }}</div>
+                    <div class="h">{{ t("支撑比") }} {{ stackingInfo.support_ratio_min != null ? stackingInfo.support_ratio_min : '—' }}</div>
                   </div>
                   <div class="metric" v-if="layoutQuality">
-                    <div class="k">最大水平空隙</div>
+                    <div class="k">{{ t("最大水平空隙") }}</div>
                     <div class="v" :style="{ color: voidGapColor, fontSize: '18px' }">{{ Math.round(layoutQuality.max_horizontal_gap_mm || 0) }}mm</div>
-                    <div class="h">CTU 宜≤150mm · 超限 {{ layoutQuality.gaps_over_limit || 0 }}</div>
+                    <div class="h">{{ t("CTU 宜≤150mm · 超限") }} {{ layoutQuality.gaps_over_limit || 0 }}</div>
                   </div>
                   <div class="metric" v-if="stackingInfo.multi_start_winner">
                     <div class="k">multi-start</div>
                     <div class="v" style="font-size:16px">{{ stackingInfo.multi_start_winner }}</div>
-                    <div class="h">n={{ stackingInfo.multi_start_n || '—' }} · CoG选优</div>
+                    <div class="h">n={{ stackingInfo.multi_start_n || '—' }} {{ t("· CoG选优") }}</div>
                   </div>
                 </div>
               </div>
 
               <div class="section" v-if="perCabinCog.length">
                 <div class="section-h">
-                  <h3>分柜 mid50</h3>
+                  <h3>{{ t("分柜 mid50") }}</h3>
                   <span class="pill">worst {{ pct(worstMid50) }}</span>
                 </div>
                 <div style="overflow-x:auto">
                   <table class="mini-table" style="width:100%;font-size:12px;border-collapse:collapse">
                     <thead>
                       <tr style="text-align:left;color:var(--muted)">
-                        <th style="padding:4px 6px">柜</th>
+                        <th style="padding:4px 6px">{{ t("柜") }}</th>
                         <th style="padding:4px 6px">mid50</th>
-                        <th style="padding:4px 6px">横偏</th>
-                        <th style="padding:4px 6px">前后</th>
-                        <th style="padding:4px 6px">平衡</th>
+                        <th style="padding:4px 6px">{{ t("横偏") }}</th>
+                        <th style="padding:4px 6px">{{ t("前后") }}</th>
+                        <th style="padding:4px 6px">{{ t("平衡") }}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -3367,12 +3369,12 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                     </tbody>
                   </table>
                 </div>
-                <p class="foot-note">绿≥60% · 黄 40–60% · 红&lt;40%（CTU 60/50）</p>
+                <p class="foot-note">{{ t("绿≥60% · 黄 40–60% · 红") }}&lt;40%（CTU 60/50）</p>
               </div>
 
               <div class="section" v-if="rPipeline.length">
                 <div class="section-h">
-                  <h3>CoG 修理管线 R0–R4</h3>
+                  <h3>{{ t("CoG 修理管线 R0–R4") }}</h3>
                   <span class="pill">before→after</span>
                 </div>
                 <div class="flow-strip" style="flex-wrap:wrap;gap:6px">
@@ -3380,7 +3382,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                        class="flow-chip" style="cursor:default;opacity:1"
                        :style="{ borderColor: r.applied ? 'var(--ok, #3d8)' : 'var(--muted)' }">
                     <span class="idx">{{ r.step }}</span>
-                    <span v-if="r.applied" style="color:var(--ok,#3d8)">已应用</span>
+                    <span v-if="r.applied" style="color:var(--ok,#3d8)">{{ t("已应用") }}</span>
                     <span v-else style="color:var(--muted)">–</span>
                     <span v-if="r.mid50_before != null || r.mid50_after != null" style="font-size:11px;margin-left:4px">
                       {{ pct(r.mid50_before) }}→{{ pct(r.mid50_after) }}
@@ -3390,20 +3392,20 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                     </span>
                   </div>
                 </div>
-                <p class="foot-note">R0校验 · R1平移/镜像 · R2条带 · R4 swap/滑入 · R3局部 · LNS最差柜 · LAT横偏</p>
+                <p class="foot-note">{{ t("R0校验 · R1平移/镜像 · R2条带 · R4 swap/滑入 · R3局部 · LNS最差柜 · LAT横偏") }}</p>
               </div>
 
               <div class="section" v-if="secureWorkOrder.items && secureWorkOrder.items.length">
                 <div class="section-h">
-                  <h3>绑扎 / 空隙工单</h3>
-                  <span class="pill" :class="secureSevClass">{{ secureWorkOrder.severity || 'WARN' }} · 不拦出运</span>
+                  <h3>{{ t("绑扎 / 空隙工单") }}</h3>
+                  <span class="pill" :class="secureSevClass">{{ secureWorkOrder.severity || 'WARN' }} {{ t("· 不拦出运") }}</span>
                 </div>
                 <p class="foot-note" style="margin-bottom:8px">{{ secureWorkOrder.summary }}</p>
                 <ul style="margin:0;padding-left:18px;font-size:12px;line-height:1.55;color:var(--text)">
                   <li v-for="it in secureWorkOrder.items.slice(0, 12)" :key="'sec'+it.seq">
                     <strong>[{{ it.severity }}]</strong>
                     {{ it.type }}
-                    <span v-if="it.container_no">柜{{ it.container_no }}</span>
+                    <span v-if="it.container_no">{{ t("柜") }}{{ it.container_no }}</span>
                     <span v-if="it.box_id">{{ it.box_id }}</span>
                     — {{ it.action }}
                     <span style="color:var(--muted)" v-if="it.material">（{{ it.material }}）</span>
@@ -3413,7 +3415,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
 
               <div class="section" v-if="result.risk_report">
                 <div class="section-h">
-                  <h3>风险裁决</h3>
+                  <h3>{{ t("风险裁决") }}</h3>
                   <span class="pill" :class="riskPillClass">{{ result.risk_report.decision }}</span>
                 </div>
                 <p style="margin:0 0 8px;font-size:13px;color:var(--muted);line-height:1.5;">
@@ -3427,18 +3429,18 @@ button.danger { background: var(--cb-red); box-shadow: none; }
             </div>
 
             <div class="section" v-if="result.final_response">
-              <div class="section-h"><h3>收口汇总</h3></div>
+              <div class="section-h"><h3>{{ t("收口汇总") }}</h3></div>
               <div class="md">{{ result.final_response }}</div>
             </div>
 
             <div class="section">
               <div class="section-h">
-                <h3>团队时间线</h3>
-                <button class="ghost" type="button" @click="mainTab = 'agents'; selectedAgent = 'ALL'">查看全部</button>
+                <h3>{{ t("团队时间线") }}</h3>
+                <button class="ghost" type="button" @click="mainTab = 'agents'; selectedAgent = 'ALL'">{{ t("查看全部") }}</button>
               </div>
               <div class="flow-strip">
                 <button type="button" class="flow-chip" :class="{ active: selectedAgent === 'ALL' }"
-                        @click="selectAgent('ALL')">全部</button>
+                        @click="selectAgent('ALL')">{{ t("全部") }}</button>
                 <button
                   type="button"
                   class="flow-chip"
@@ -3451,7 +3453,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                   {{ shortTitle(s) }}
                 </button>
               </div>
-              <p class="foot-note">点击芯片或左侧成员 → 进入 Agent 输出并筛选</p>
+              <p class="foot-note">{{ t("点击芯片或左侧成员 → 进入 Agent 输出并筛选") }}</p>
             </div>
           </template>
 
@@ -3459,38 +3461,38 @@ button.danger { background: var(--cb-red); box-shadow: none; }
           <template v-if="mainTab === 'boxes'">
             <div class="section" v-if="result.boxes && result.boxes.length">
               <div class="section-h">
-                <h3>装箱方案（团队 A）</h3>
+                <h3>{{ t("装箱方案（团队 A）") }}</h3>
                 <span class="pill" :class="designFactsOk ? 'ok' : 'warn'">
-                  {{ designFactsOk ? '已加载详设' : '待详设' }}
+                  {{ t(designFactsOk ? t('已加载详设') : t('待详设')) }}
                 </span>
-                <span class="pill ok" v-if="boxesTwoRowCount">两排对齐 {{ boxesTwoRowCount }}</span>
-                <span class="pill warn" v-if="boxesSingleRowCount">单排 {{ boxesSingleRowCount }}</span>
-                <span class="pill err" v-if="boxesSectionBigCount">截面过大 {{ boxesSectionBigCount }}</span>
+                <span class="pill ok" v-if="boxesTwoRowCount">{{ t("两排对齐") }} {{ boxesTwoRowCount }}</span>
+                <span class="pill warn" v-if="boxesSingleRowCount">{{ t("单排") }} {{ boxesSingleRowCount }}</span>
+                <span class="pill err" v-if="boxesSectionBigCount">{{ t("截面过大") }} {{ boxesSectionBigCount }}</span>
               </div>
               <!-- 柜数与成箱同屏：预估 N0* / 实装 used -->
               <div class="verdict-banner ok" style="margin-bottom:12px" v-if="boxSchemeCabinCard.show">
                 <div class="vt">{{ boxSchemeCabinCard.title }}</div>
                 <div class="vs">{{ boxSchemeCabinCard.summary }}</div>
                 <div class="row" style="margin-top:8px;flex-wrap:wrap;gap:6px">
-                  <span class="pill ok">建议 N0* {{ boxSchemeCabinCard.n0 }}</span>
+                  <span class="pill ok">{{ t("建议 N0*") }} {{ boxSchemeCabinCard.n0 }}</span>
                   <span class="pill" v-if="boxSchemeCabinCard.used != null"
                         :class="boxSchemeCabinCard.used === boxSchemeCabinCard.n0 ? 'ok' : 'warn'">
-                    3D 实装 {{ boxSchemeCabinCard.used }}
+                    {{ t("3D 实装") }} {{ boxSchemeCabinCard.used }}
                   </span>
-                  <span class="pill" v-if="boxSchemeCabinCard.used == null">确认后拼柜 → 实装柜数</span>
+                  <span class="pill" v-if="boxSchemeCabinCard.used == null">{{ t("确认后拼柜 → 实装柜数") }}</span>
                   <span class="pill" v-if="boxSchemeCabinCard.comps">{{ boxSchemeCabinCard.comps }}</span>
                 </div>
                 <div class="va" v-if="boxSchemeCabinCard.hint">{{ boxSchemeCabinCard.hint }}</div>
               </div>
               <div class="verdict-banner warn" v-if="result.materials_incomplete || (errorBanner && errorBanner.materials_incomplete)" style="margin-bottom:10px">
-                <div class="vt">缺尺寸 · 不可出运</div>
-                <div class="vs">有物料 L/W/H=0，成箱已阻断；请补全尺寸后重跑，勿当成可装方案。</div>
+                <div class="vt">{{ t("缺尺寸 · 不可出运") }}</div>
+                <div class="vs">{{ t("有物料 L/W/H=0，成箱已阻断；请补全尺寸后重跑，勿当成可装方案。") }}</div>
               </div>
               <div style="overflow:auto">
                 <table class="data">
                   <thead>
                     <tr>
-                      <th>箱号</th><th>箱型</th><th>外尺寸 mm</th><th>毛重 kg</th><th>结构</th><th>横排</th><th>属性</th><th>内容</th>
+                      <th>{{ t("箱号") }}</th><th>{{ t("箱型") }}</th><th>{{ t("外尺寸 mm") }}</th><th>{{ t("毛重 kg") }}</th><th>{{ t("结构") }}</th><th>{{ t("横排") }}</th><th>{{ t("属性") }}</th><th>{{ t("内容") }}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -3505,9 +3507,9 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                       <td>{{ b.gross_weight_kg }}</td>
                       <td>{{ b.structure_conclusion || '—' }}</td>
                       <td>
-                        <span class="pill ok" v-if="boxTwoRowOk(b)">两排</span>
-                        <span class="pill warn" v-else-if="b.two_row_ok === false || (b.special_attributes||[]).indexOf('单排宽箱')>=0">单排</span>
-                        <span class="pill err" v-if="b.section_too_large || (b.special_attributes||[]).indexOf('截面过大')>=0">截面大</span>
+                        <span class="pill ok" v-if="boxTwoRowOk(b)">{{ t("两排") }}</span>
+                        <span class="pill warn" v-else-if="b.two_row_ok === false || (b.special_attributes||[]).indexOf('单排宽箱')>=0">{{ t("单排") }}</span>
+                        <span class="pill err" v-if="b.section_too_large || (b.special_attributes||[]).indexOf('截面过大')>=0">{{ t("截面大") }}</span>
                         <span v-if="b.two_row_ok == null && !(b.special_attributes||[]).length">—</span>
                       </td>
                       <td>{{ (b.special_attributes || []).join(', ') }}</td>
@@ -3522,26 +3524,26 @@ button.danger { background: var(--cb-red); box-shadow: none; }
               </div>
 
               <div class="hitl-bar" style="margin-top:14px;margin-bottom:0" v-if="result.phase === 'await_user_confirm'">
-                <strong>确认后进入拼柜</strong>
+                <strong>{{ t("确认后进入拼柜") }}</strong>
                 <select v-model="containerType">
                   <option v-for="opt in containerOptions" :key="opt.value" :value="opt.value">
-                    {{ opt.label }}{{ opt.recommended ? '（推荐）' : '' }}
+                    {{ opt.label }}{{ t(opt.recommended ? t('（推荐）') : '') }}
                   </option>
                 </select>
-                <button @click="confirmPack" :class="{ busy: loading }">确认并拼柜</button>
-                <button class="danger" @click="cancel">取消</button>
+                <button @click="confirmPack" :class="{ busy: loading }">{{ t("确认并拼柜") }}</button>
+                <button class="danger" @click="cancel">{{ t("取消") }}</button>
               </div>
             </div>
             <div class="section nl-box" v-if="result.boxes && result.boxes.length">
               <div class="section-h">
-                <h3>自然语言改方案</h3>
-                <span class="sub">能改就改 · 不能改返回「无此功能」（不假装成功）</span>
+                <h3>{{ t("自然语言改方案") }}</h3>
+                <span class="sub">{{ t("能改就改 · 不能改返回「无此功能」（不假装成功）") }}</span>
               </div>
               <div class="row" style="align-items:stretch">
                 <textarea ref="nlBox" v-model="nlInstruction" @input="nlBoxInput" @keydown="nlBoxKeydown"
                   style="flex:1;min-height:56px;max-height:200px"
-                  placeholder="描述改方案指令，Enter 应用 / Shift+Enter 换行（例：要一排；柜型改 40GP；框架用槽钢16#，γ=2.0）"></textarea>
-                <button @click="reviseNl" :disabled="!nlInstruction.trim()" :class="{ busy: loading }">应用</button>
+                  :placeholder="t(&quot;描述改方案指令，Enter 应用 / Shift+Enter 换行（例：要一排；柜型改 40GP；框架用槽钢16#，γ=2.0）&quot;)"></textarea>
+                <button @click="reviseNl" :disabled="!nlInstruction.trim()" :class="{ busy: loading }">{{ t("应用") }}</button>
               </div>
               <div class="status-line" v-if="nlStatus"
                    :style="(nlStatus.startsWith('无此功能') || nlStatus.startsWith('失败')) ? 'color:var(--warn)' : (nlStatus.startsWith('已改') ? 'color:var(--ok)' : '')">
@@ -3552,24 +3554,24 @@ button.danger { background: var(--cb-red); box-shadow: none; }
               <div class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap" v-if="nlHints && nlHints.length">
                 <button type="button" class="ghost" style="padding:4px 10px;font-size:12px"
                         v-for="h in nlHints" :key="h"
-                        @click="nlInstruction = h; reviseNl()">支持：{{ h }}</button>
+                        @click="nlInstruction = h; reviseNl()">{{ t("支持：") }}{{ h }}</button>
               </div>
               <div class="foot-note" style="margin-top:8px" v-if="nlCaps && nlCaps.length">
-                当前支持：{{ nlCaps.join(' · ') }}
+                {{ t("当前支持：") }}{{ nlCaps.join(' · ') }}
               </div>
             </div>
             <div class="empty-hero" v-if="!(result.boxes && result.boxes.length)">
-              <h3>{{ (result.materials_incomplete || (result.errors||[]).length) ? '成箱已阻断' : '尚无装箱方案' }}</h3>
+              <h3>{{ t((result.materials_incomplete || (result.errors||[]).length) ? t('成箱已阻断') : t('尚无装箱方案')) }}</h3>
               <p v-if="result.materials_incomplete || (errorBanner && errorBanner.show)">
-                {{ (errorBanner && errorBanner.lines && errorBanner.lines[0]) || '缺尺寸或错误导致未生成箱。请看总览报错条。' }}
+                {{ (errorBanner && errorBanner.lines && errorBanner.lines[0]) || t('缺尺寸或错误导致未生成箱。请看总览报错条。') }}
               </p>
-              <p v-else>先运行「生成方案」或「一键演示」。</p>
+              <p v-else>{{ t("先运行「生成方案」或「一键演示」。") }}</p>
               <ul v-if="(result.errors||[]).length" style="text-align:left;max-width:480px;margin:8px auto;color:var(--muted)">
                 <li v-for="(e,i) in result.errors.slice(0,6)" :key="'be'+i">{{ e }}</li>
               </ul>
               <div class="actions">
-                <button @click="runTeamA" :class="{ busy: loading }">生成方案</button>
-                <button class="soft" @click="mainTab = 'overview'">回总览看报错</button>
+                <button @click="runTeamA" :class="{ busy: loading }">{{ t("生成方案") }}</button>
+                <button class="soft" @click="mainTab = 'overview'">{{ t("回总览看报错") }}</button>
               </div>
             </div>
           </template>
@@ -3578,7 +3580,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
           <template v-if="mainTab === 'visual'">
             <div class="section" v-if="result.container_plan && (result.container_plan.layout || result.container_plan.can_fit != null)">
               <div class="section-h">
-                <h3>拼柜结果</h3>
+                <h3>{{ t("拼柜结果") }}</h3>
                 <div class="row">
                   <span class="pill" :class="result.container_plan.can_fit ? 'ok' : 'err'">
                     can_fit {{ result.container_plan.can_fit }}
@@ -3589,15 +3591,15 @@ button.danger { background: var(--cb-red); box-shadow: none; }
               </div>
               <div class="metrics" style="margin-bottom:12px">
                 <div class="metric">
-                  <div class="k">订柜有效体积率</div>
+                  <div class="k">{{ t("订柜有效体积率") }}</div>
                   <div class="v" style="font-size:18px;color:var(--ok)">{{ pct(volMetrics.bookingVol) }}</div>
                 </div>
                 <div class="metric">
-                  <div class="k">外廓摆柜率</div>
+                  <div class="k">{{ t("外廓摆柜率") }}</div>
                   <div class="v" style="font-size:18px;color:var(--warn)">{{ pct(volMetrics.outerVol) }}</div>
                 </div>
                 <div class="metric">
-                  <div class="k">重量</div>
+                  <div class="k">{{ t("重量") }}</div>
                   <div class="v" style="font-size:18px">{{ pct(volMetrics.weight) }}</div>
                 </div>
               </div>
@@ -3611,11 +3613,11 @@ button.danger { background: var(--cb-red); box-shadow: none; }
 
             <div class="section" v-if="hasViews">
               <div class="section-h">
-                <h3>三视角 · COG</h3>
+                <h3>{{ t("三视角 · COG") }}</h3>
                 <div class="row">
-                  <span class="sub">默认单柜绘制 · 红点=重心 · 矮货侧视会扁属比例问题已拉高画布</span>
+                  <span class="sub">{{ t("默认单柜绘制 · 红点=重心 · 矮货侧视会扁属比例问题已拉高画布") }}</span>
                   <label style="font-size:12px;color:var(--muted)" v-if="viewContainerOptions.length > 1">
-                    柜号
+                    {{ t("柜号") }}
                     <select v-model.number="viewContainerNo" @change="onViewContainerChange" style="margin-left:6px">
                       <option v-for="n in viewContainerOptions" :key="n" :value="n">#{{ n }}</option>
                     </select>
@@ -3626,7 +3628,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                 <div class="view-card" v-for="key in viewKeys" :key="key">
                   <h4>
                     {{ viewTitle(key) }}
-                    <span style="color:#94a3b8;font-weight:400">· 柜#{{ viewContainerNo }}</span>
+                    <span style="color:#94a3b8;font-weight:400">{{ t("· 柜#") }}{{ viewContainerNo }}</span>
                     <span v-if="viewHasCog(key)" style="color:#f87171">· COG</span>
                   </h4>
                   <canvas
@@ -3640,8 +3642,8 @@ button.danger { background: var(--cb-red); box-shadow: none; }
 
             <div class="section" v-if="hasScene3d">
               <div class="section-h">
-                <h3>等轴测 3D</h3>
-                <span class="sub">拖拽旋转 · 滚轮缩放</span>
+                <h3>{{ t("等轴测 3D") }}</h3>
+                <span class="sub">{{ t("拖拽旋转 · 滚轮缩放") }}</span>
               </div>
               <canvas
                 ref="cv3d"
@@ -3657,11 +3659,11 @@ button.danger { background: var(--cb-red); box-shadow: none; }
 
             <div class="empty-hero" v-if="!hasViews && !hasScene3d">
               <div class="hero-icon" aria-hidden="true">CB</div>
-              <h3>暂无布局图</h3>
-              <p>完成拼柜后这里显示三视角与等轴测 3D（本地 canvas，不是纯黑屏）。先跑「满载演示」或上传材料表。</p>
+              <h3>{{ t("暂无布局图") }}</h3>
+              <p>{{ t("完成拼柜后这里显示三视角与等轴测 3D（本地 canvas，不是纯黑屏）。先跑「满载演示」或上传材料表。") }}</p>
               <div class="actions">
-                <button class="primary-lg" @click="runDemo" :class="{ busy: loading }">满载演示</button>
-                <button class="soft" @click="mainTab = 'overview'">回总览</button>
+                <button class="primary-lg" @click="runDemo" :class="{ busy: loading }">{{ t("满载演示") }}</button>
+                <button class="soft" @click="mainTab = 'overview'">{{ t("回总览") }}</button>
               </div>
             </div>
           </template>
@@ -3670,7 +3672,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
           <template v-if="mainTab === 'risk'">
             <div class="section" v-if="result.risk_report || (result.risks && result.risks.length)">
               <div class="section-h">
-                <h3>风险合规</h3>
+                <h3>{{ t("风险合规") }}</h3>
                 <span class="pill" :class="riskPillClass" v-if="result.risk_report">
                   {{ result.risk_report.decision }} · {{ result.risk_report.level }}
                 </span>
@@ -3684,15 +3686,15 @@ button.danger { background: var(--cb-red); box-shadow: none; }
               </ul>
               <div v-if="result.risk_report && result.risk_report.suggested_actions && result.risk_report.suggested_actions.length"
                    style="margin-top:12px">
-                <div class="section-h"><h3 style="font-size:13px">建议动作</h3></div>
+                <div class="section-h"><h3 style="font-size:13px">{{ t("建议动作") }}</h3></div>
                 <ul class="risks" style="color:#a5b4c8">
                   <li v-for="(a, i) in result.risk_report.suggested_actions" :key="'sa'+i">{{ a }}</li>
                 </ul>
               </div>
             </div>
             <div class="empty-hero" v-else>
-              <h3>暂无风险报告</h3>
-              <p>团队 B 评估与风险智能体运行后显示。</p>
+              <h3>{{ t("暂无风险报告") }}</h3>
+              <p>{{ t("团队 B 评估与风险智能体运行后显示。") }}</p>
             </div>
           </template>
 
@@ -3700,15 +3702,15 @@ button.danger { background: var(--cb-red); box-shadow: none; }
           <template v-if="mainTab === 'history'">
             <div class="section" v-if="pendingCheckpoints.length">
               <div class="section-h">
-                <h3>HITL 待恢复（磁盘 checkpoint）</h3>
-                <button class="ghost" type="button" @click="loadPendingCheckpoints">刷新</button>
+                <h3>{{ t("HITL 待恢复（磁盘 checkpoint）") }}</h3>
+                <button class="ghost" type="button" @click="loadPendingCheckpoints">{{ t("刷新") }}</button>
               </div>
               <p class="foot-note" style="margin-bottom:10px">
-                进程重启后仍可 resume · schema packing.checkpoint.v1
+                {{ t("进程重启后仍可 resume · schema packing.checkpoint.v1") }}
               </p>
               <table class="data">
                 <thead>
-                  <tr><th>thread</th><th>run</th><th>箱</th><th>柜型</th><th>saved</th><th></th></tr>
+                  <tr><th>thread</th><th>run</th><th>{{ t("箱") }}</th><th>{{ t("柜型") }}</th><th>saved</th><th></th></tr>
                 </thead>
                 <tbody>
                   <tr v-for="c in pendingCheckpoints" :key="c.thread_id + (c.run_id||'')">
@@ -3718,8 +3720,8 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                     <td>{{ c.container_type || '—' }}</td>
                     <td>{{ c.saved_at || '—' }}</td>
                     <td>
-                      <button type="button" @click="restoreCheckpoint(c.thread_id)">恢复并确认</button>
-                      <button class="ghost" type="button" @click="loadCheckpointPreview(c.thread_id)">预览</button>
+                      <button type="button" @click="restoreCheckpoint(c.thread_id)">{{ t("恢复并确认") }}</button>
+                      <button class="ghost" type="button" @click="loadCheckpointPreview(c.thread_id)">{{ t("预览") }}</button>
                     </td>
                   </tr>
                 </tbody>
@@ -3730,65 +3732,64 @@ button.danger { background: var(--cb-red); box-shadow: none; }
             <div class="section" data-cb-audit-panel="true">
               <div class="section-h">
                 <div>
-                  <h3>审计时间线</h3>
+                  <h3>{{ t("审计时间线") }}</h3>
                   <div class="sub" style="margin-top:4px">
-                    AI 做了什么、人批了什么，全留痕：工具执行=<span style="color:var(--cb-blue)">蓝</span> · 人工决策=<span style="color:var(--cb-red)">合规红边</span> · 错误/重试=<span style="color:var(--cb-orange)">橙</span> · 写盘=<span style="color:var(--cb-green)">绿</span> · 数据源 trace.jsonl + checkpoint
+                    {{ t("AI 做了什么、人批了什么，全留痕：工具执行=") }}<span style="color:var(--cb-blue)">{{ t("蓝") }}</span> {{ t("· 人工决策=") }}<span style="color:var(--cb-red)">{{ t("合规红边") }}</span> {{ t("· 错误/重试=") }}<span style="color:var(--cb-orange)">{{ t("橙") }}</span> {{ t("· 写盘=") }}<span style="color:var(--cb-green)">{{ t("绿") }}</span> {{ t("· 数据源 trace.jsonl + checkpoint") }}
                   </div>
                 </div>
                 <div class="row">
                   <input class="input" v-model.trim="auditSession" placeholder="session_id" style="max-width:220px" @keyup.enter="loadAudit()" aria-label="session id" />
-                  <button class="ghost" type="button" @click="loadAudit()">{{ auditLoading ? '加载中…' : '加载' }}</button>
-                  <button class="soft" type="button" @click="auditExport(true)" :disabled="!auditData">复制 JSON</button>
-                  <button class="soft" type="button" @click="auditExport(false)" :disabled="!auditData">下载 JSON</button>
+                  <button class="ghost" type="button" @click="loadAudit()">{{ t(auditLoading ? t('加载中…') : t('加载')) }}</button>
+                  <button class="soft" type="button" @click="auditExport(true)" :disabled="!auditData">{{ t("复制 JSON") }}</button>
+                  <button class="soft" type="button" @click="auditExport(false)" :disabled="!auditData">{{ t("下载 JSON") }}</button>
                 </div>
               </div>
               <p class="status-line" v-if="auditError" style="color:var(--cb-red)">{{ auditError }}</p>
               <template v-if="auditData">
                 <p class="foot-note">
                   session <span style="font-family:var(--cb-mono)">{{ auditData.session_id }}</span>
-                  · 匹配 {{ auditData.n_runs_matched }} 次 run · 展示 {{ auditData.runs.length }} 次
-                  · 节点 {{ auditData.counts.nodes }}（工具 {{ auditData.counts.tools }} · 写盘 {{ auditData.counts.writes }} · 错误/重试 {{ auditData.counts.errors }}）
+                  {{ t("· 匹配") }} {{ auditData.n_runs_matched }} {{ t("次 run · 展示") }} {{ auditData.runs.length }} {{ t("次\n                  · 节点") }} {{ auditData.counts.nodes }}{{ t("（工具") }} {{ auditData.counts.tools }} {{ t("· 写盘") }} {{ auditData.counts.writes }} {{ t("· 错误/重试") }} {{ auditData.counts.errors }}）
                 </p>
                 <div class="cb-audit-pinned" data-cb-audit-pinned="true">
-                  <div class="cb-audit-pinned-h">人工决策（永久置顶 · 不可折叠 · 以服务端 checkpoint user_action 为准）</div>
+                  <div class="cb-audit-pinned-h">{{ t("人工决策（永久置顶 · 不可折叠 · 以服务端 checkpoint user_action 为准）") }}</div>
                   <div class="cb-audit-node is-decision pinned" v-for="(d, di) in auditData.decisions" :key="'ad'+di">
                     <span class="cb-audit-dot" aria-hidden="true"></span>
-                    <span class="cb-audit-k">决策</span>
+                    <span class="cb-audit-k">{{ t("决策") }}</span>
                     <span class="cb-audit-t">{{ d.title }}<template v-if="d.detail"> · {{ d.detail }}</template></span>
                     <span class="cb-audit-time">{{ auditFmtTs(d.ts) }}</span>
                     <span class="cb-audit-runid" v-if="d.run_id">{{ d.run_id }}</span>
-                    <span class="cb-audit-op">{{ d.operator }} · 未静默放行</span>
+                    <span class="cb-audit-op">{{ d.operator }} {{ t("· 未静默放行") }}</span>
                   </div>
-                  <div class="cb-audit-none" v-if="!auditData.decisions.length">本会话无人工决策记录（未触发 HITL 闸门或未走到审批）</div>
+                  <div class="cb-audit-none" v-if="!auditData.decisions.length">{{ t("本会话无人工决策记录（未触发 HITL 闸门或未走到审批）") }}</div>
                 </div>
                 <div class="cb-audit-run" v-for="(r, ri) in auditRunsDesc" :key="'ar'+ri">
                   <div class="cb-audit-run-h">
                     <span class="cb-audit-runid">{{ r.run_id }}</span>
                     <span>{{ auditFmtTs(r.started_at) }}</span>
-                    <span class="cb-audit-badge" v-if="r.user_action === 'confirm' && r.auto_confirm">自动确认（非人工）</span>
-                    <span class="cb-audit-badge" v-else-if="r.user_action === 'confirm'">已确认</span>
-                    <span class="cb-audit-badge is-reject" v-else-if="r.user_action === 'cancel'">已驳回 · 未放行</span>
+                    <span class="cb-audit-badge" v-if="r.user_action === 'confirm' && r.auto_confirm">{{ t("自动确认（非人工）") }}</span>
+                    <span class="cb-audit-badge" v-else-if="r.user_action === 'confirm'">{{ t("已确认") }}</span>
+                    <span class="cb-audit-badge is-reject" v-else-if="r.user_action === 'cancel'">{{ t("已驳回 · 未放行") }}</span>
                     <span class="cb-audit-badge" v-if="r.checkpoint && r.checkpoint.status">{{ r.checkpoint.status }}</span>
-                    <span class="cb-audit-dur">{{ r.n_nodes }} 节点</span>
+                    <span class="cb-audit-dur">{{ r.n_nodes }} {{ t("节点") }}</span>
                   </div>
                   <div class="cb-audit-node" :class="'is-' + n.kind" v-for="(n, ni) in r.nodes" :key="'an'+ni">
                     <span class="cb-audit-dot" aria-hidden="true"></span>
                     <span class="cb-audit-k">{{ auditKindLabel(n.kind) }}</span>
                     <span class="cb-audit-t">{{ n.title }}<template v-if="n.detail"> · {{ n.detail }}</template></span>
                     <span class="cb-audit-dur" v-if="n.duration_ms != null">{{ n.duration_ms }}ms</span>
-                    <button type="button" class="cb-tl-more" @click="auditToggleRaw(ri, ni)">{{ n._open ? '收起' : '原始' }}</button>
+                    <button type="button" class="cb-tl-more" @click="auditToggleRaw(ri, ni)">{{ t(n._open ? t('收起') : t('原始')) }}</button>
                     <pre class="cb-audit-raw" v-if="n._open">{{ auditRawJson(n) }}</pre>
                   </div>
                 </div>
               </template>
-              <p class="foot-note" v-else-if="!auditError">输入 session_id 后加载跨运行审计时间线；决策记录永久置顶。</p>
+              <p class="foot-note" v-else-if="!auditError">{{ t("输入 session_id 后加载跨运行审计时间线；决策记录永久置顶。") }}</p>
             </div>
             <div class="section">
               <div class="section-h">
-                <h3>运行历史</h3>
+                <h3>{{ t("运行历史") }}</h3>
                 <div class="row">
-                  <button class="ghost" type="button" @click="loadRuns(); loadPendingCheckpoints()">刷新</button>
-                  <button class="soft" type="button" @click="compareSelectedRuns" :disabled="compareIds.length < 2">对比选中</button>
+                  <button class="ghost" type="button" @click="loadRuns(); loadPendingCheckpoints()">{{ t("刷新") }}</button>
+                  <button class="soft" type="button" @click="compareSelectedRuns" :disabled="compareIds.length < 2">{{ t("对比选中") }}</button>
                 </div>
               </div>
               <table class="data" v-if="runsList.length">
@@ -3805,12 +3806,12 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                     <td>{{ r.n0 }}</td>
                     <td>
                       <button class="ghost" type="button" @click="openRunTrace(r.run_id)">trace</button>
-                      <button class="soft" type="button" @click="replayRun(r.run_id)">回放</button>
+                      <button class="soft" type="button" @click="replayRun(r.run_id)">{{ t("回放") }}</button>
                     </td>
                   </tr>
                 </tbody>
               </table>
-              <p class="foot-note" v-else>暂无历史；跑演示后自动落盘 output/runs/</p>
+              <p class="foot-note" v-else>{{ t("暂无历史；跑演示后自动落盘 output/runs/") }}</p>
               <pre class="md" v-if="compareResult" style="margin-top:12px">{{ compareResult }}</pre>
               <pre class="md" v-if="tracePreview" style="margin-top:12px;max-height:240px">{{ tracePreview }}</pre>
             </div>
@@ -3820,28 +3821,28 @@ button.danger { background: var(--cb-red); box-shadow: none; }
             <div class="section" id="agent-console" ref="agentConsole">
               <div class="section-h">
                 <div>
-                  <h3>Agent 过程输出</h3>
+                  <h3>{{ t("Agent 过程输出") }}</h3>
                   <div class="sub" style="margin-top:4px">
-                    {{ selectedAgent === 'ALL' ? '全部成员' : ('聚焦 · ' + selectedAgentLabel) }}
+                    {{ t(selectedAgent === 'ALL' ? t('全部成员') : (t('聚焦 · ') + selectedAgentLabel)) }}
                   </div>
                 </div>
                 <div class="row">
-                  <button class="ghost" type="button" @click="selectedAgent = 'ALL'">全部</button>
-                  <span class="pill">{{ filteredSteps.length }} 条</span>
+                  <button class="ghost" type="button" @click="selectedAgent = 'ALL'">{{ t("全部") }}</button>
+                  <span class="pill">{{ filteredSteps.length }} {{ t("条") }}</span>
                 </div>
               </div>
 
               <div v-if="!agentSteps.length" class="empty-hero" style="margin:24px auto">
-                <h3>还没有 Agent 轨迹</h3>
-                <p>运行演示或全流程后，左侧成员会点亮，可在此筛选查看。</p>
+                <h3>{{ t("还没有 Agent 轨迹") }}</h3>
+                <p>{{ t("运行演示或全流程后，左侧成员会点亮，可在此筛选查看。") }}</p>
               </div>
 
               <template v-else>
                 <div class="agent-toolbar">
                   <label style="font-size:12px;color:var(--muted)">
-                    筛选
+                    {{ t("筛选") }}
                     <select v-model="selectedAgent" style="margin-left:6px">
-                      <option value="ALL">全部输出</option>
+                      <option value="ALL">{{ t("全部输出") }}</option>
                       <option v-for="opt in agentSelectOptions" :key="opt.node" :value="opt.node">
                         {{ opt.label }}
                       </option>
@@ -3852,7 +3853,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                 <div class="flow-strip">
                   <button type="button" class="flow-chip" :class="{ active: selectedAgent === 'ALL' }"
                           @click="selectedAgent = 'ALL'">
-                    <span class="idx">*</span> 全部
+                    <span class="idx">*</span> {{ t("全部") }}
                   </button>
                   <button
                     type="button"
@@ -3876,7 +3877,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                     :id="'agent-step-' + (s.node || i)"
                   >
                     <div class="agent-card-head">
-                      <span class="title">{{ s.title || s.node || ('步骤' + (i + 1)) }}</span>
+                      <span class="title">{{ s.title || s.node || (t('步骤') + (i + 1)) }}</span>
                       <span class="pill">{{ s.node }}</span>
                       <span class="pill" v-if="s.duration_ms != null">{{ s.duration_ms }} ms</span>
                       <span class="pill" :class="s.status === 'error' ? 'err' : 'ok'" v-if="s.status">{{ s.status }}</span>
@@ -3885,15 +3886,15 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                     <div v-if="s.tools_used && s.tools_used.length">
                       <span class="tool-tag" v-for="t in s.tools_used" :key="t">{{ t }}</span>
                     </div>
-                    <div class="body-text">{{ s.message || '（无文本输出）' }}</div>
+                    <div class="body-text">{{ s.message || t('（无文本输出）') }}</div>
                     <div class="meta-line" v-if="s.artifacts && Object.keys(s.artifacts).length">
                       artifacts: {{ formatArtifacts(s.artifacts) }}
                     </div>
                     <div class="meta-line" v-if="s.planning_reasons && s.planning_reasons.length">
-                      规划: {{ s.planning_reasons.join(' | ') }}
+                      {{ t("规划:") }} {{ s.planning_reasons.join(' | ') }}
                     </div>
                     <div class="meta-line" v-if="s.suggested_actions && s.suggested_actions.length">
-                      建议: {{ s.suggested_actions.join('；') }}
+                      {{ t("建议:") }} {{ s.suggested_actions.join('；') }}
                     </div>
                     <div class="meta-line" v-if="s.n0 != null">N0={{ s.n0 }} binding={{ s.binding }}</div>
                     <div class="meta-line" v-if="s.can_fit != null">
@@ -3902,7 +3903,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
                     <div class="meta-line" v-if="s.decision">decision={{ s.decision }}</div>
                   </div>
                 </div>
-                <p class="foot-note">数值由 tools 计算；此处为可观察分工，非聊天编造柜数。</p>
+                <p class="foot-note">{{ t("数值由 tools 计算；此处为可观察分工，非聊天编造柜数。") }}</p>
               </template>
             </div>
           </template>
@@ -3934,7 +3935,7 @@ button.danger { background: var(--cb-red); box-shadow: none; }
             <div class="meta-line" v-if="drawerStep.artifacts">{{ formatArtifacts(drawerStep.artifacts) }}</div>
           </div>
           <div class="drawer-empty" v-else>
-            点选左侧成员查看该 Agent 最近输出；运行中此处显示 live 节点。
+            {{ t("点选左侧成员查看该 Agent 最近输出；运行中此处显示 live 节点。") }}
           </div>
         </aside>
         </div>
@@ -4214,6 +4215,7 @@ window.CB_POSTS = [{"id":"bid-parse","name":"招标解析","aliases":["招标","
            分类 canonical=demo/static/fixcard.js（frontend/vendor/cb-fix.js 同构副本）。零 CDN、全 --cb-* token。 */
         'cb-fix-card': {
           props: { desc: { type: Object, required: true } },
+          methods: { t(source) { return this.$root.t(source); } },
           computed: {
             meta() {
               return (window.CB_FIX && CB_FIX.KIND_META && CB_FIX.KIND_META[this.desc.kind]) || {};
@@ -4236,7 +4238,7 @@ window.CB_POSTS = [{"id":"bid-parse","name":"招标解析","aliases":["招标","
                 </div>
                 <div class="cb-fix-meta" v-if="desc.meta">{{ desc.meta }}</div>
                 <div class="cb-fix-what" v-if="acts.length">
-                  <span class="cb-fix-what-label">现在能做什么</span>
+                  <span class="cb-fix-what-label">{{ t('现在能做什么') }}</span>
                   <template v-for="(a, ai) in acts">
                     <span class="cb-fix-note" v-if="a.kind === 'note'" :key="'n' + ai">{{ a.label }}</span>
                     <button type="button" class="cb-fix-btn" v-else
@@ -4245,7 +4247,7 @@ window.CB_POSTS = [{"id":"bid-parse","name":"招标解析","aliases":["招标","
                   </template>
                 </div>
                 <details class="cb-fix-raw" v-if="desc.raw">
-                  <summary>原始记录</summary>
+                  <summary>{{ t('原始记录') }}</summary>
                   <code>{{ desc.raw }}</code>
                 </details>
               </div>
@@ -4255,6 +4257,7 @@ window.CB_POSTS = [{"id":"bid-parse","name":"招标解析","aliases":["招标","
       },
       data() {
         return {
+          uiLocale: window.CBI18n?.locale || 'zh-CN',
           unifiedWorkbench: CB_UNIFIED_PACKING,
           userInput: '',
           /* ux(round2) 输入体验：@岗位补全浮层状态（数据源 /api/experts → 内嵌 CB_POSTS 兜底） */
@@ -4962,6 +4965,8 @@ window.CB_POSTS = [{"id":"bid-parse","name":"招标解析","aliases":["招标","
         },
       },
       mounted() {
+        this._cbLanguageChange = () => { this.uiLocale = window.CBI18n?.locale || 'zh-CN'; this.$forceUpdate(); this.$nextTick(() => window.cbThemeSync?.()); };
+        window.addEventListener('cb:languagechange', this._cbLanguageChange);
         this.refreshHealth();
         this.cbObLoad(); /* ux(round10)：首访 checklist（localStorage cb_onboarded_v1） */
         if (window.cbThemeSync) cbThemeSync(); /* ux(round11)：主题/大字按钮态同步（附录 J） */
@@ -5004,6 +5009,7 @@ window.CB_POSTS = [{"id":"bid-parse","name":"招标解析","aliases":["招标","
         window.addEventListener('keydown', this._cbAprEscHandler);
       },
       beforeDestroy() {
+        window.removeEventListener('cb:languagechange', this._cbLanguageChange);
         this.disconnectSessionWs();
         if (this._cbAprEscHandler) window.removeEventListener('keydown', this._cbAprEscHandler);
       },
@@ -5054,6 +5060,8 @@ window.CB_POSTS = [{"id":"bid-parse","name":"招标解析","aliases":["招标","
         },
       },
       methods: {
+        optionLabel(item, kind) { void this.uiLocale; return window.CBPackingI18n?.option(item, kind) || item.label || item.id; },
+        t(source, values) { void this.uiLocale; return window.CBPackingI18n ? window.CBPackingI18n.t(source, values) : window.CBI18n ? window.CBI18n.t(source, values) : source; },
         /* ===== ux(round3) 阶段时间线方法（事件→阶段→人话；映射表见 spec 附录 B）===== */
         cbTlReset(replay) {
           this.cbTl = {
