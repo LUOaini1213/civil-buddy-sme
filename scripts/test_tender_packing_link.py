@@ -278,6 +278,13 @@ class Link(unittest.TestCase):
         real = build_sg_facade_bidbook(tender_text="# INVITATION TO TENDER\n# Facade Works for Harbour Tower\n")
         self.assertNotIn("SYNTHETIC", real["markdown"])                    # the banner follows the tender, not the demo
         self.assertEqual((real["project_title"], real["synthetic"]), ("Facade Works for Harbour Tower", False))
+        rubber = build_sg_facade_bidbook(tender_text="# INVITATION TO TENDER\n# Harbour Tower\n"
+                                                    "All gaskets shall be EPDM or SYNTHETIC RUBBER.\n"
+                                                    "SYNTHETIC RUBBER SETTING BLOCKS\n")
+        self.assertFalse(rubber["synthetic"])
+        self.assertNotIn("SYNTHETIC.**", rubber["markdown"])
+        for label in ("# Facade demo pack (SYNTHETIC)\n", "SYNTHETIC: fictional data\n", "# SYNTHETIC EXAMPLE - Tower\n"):
+            self.assertTrue(build_sg_facade_bidbook(tender_text=label)["synthetic"], label)
 
     # stay linked -----------------------------------------------------------------------------------------------
     def test_changed_panel_list_names_the_stale_statements(self):
@@ -397,6 +404,42 @@ class Link(unittest.TestCase):
         other = run_task("What does clause 4.9 of facade_itt_doc.md require?", session_id="link-en-ask2")
         self.assertTrue(other["reply"].startswith("Nothing was run and nothing was written"), other["reply"][:120])
         self.assertNotIn("本会话槽", other["reply"])
+
+    def test_negated_link_requests_and_material_are_separate(self):
+        from packing_assistant.runtime.task_router import route_task, wants_link
+
+        for text in (
+            "I do not want you to check facade_panels.xlsx against facade_itt_doc.md yet.",
+            "Stop: do not match facade_panels.xlsx against facade_itt_doc.md",
+            "Only pack facade_panels.xlsx; ignore the clauses in facade_itt_doc.md",
+            "Pack facade_panels.xlsx into 40HQ. The tender is facade_itt_doc.md but skip the clauses.",
+            "Summarise the tender facade_itt_doc.md; the panel list facade_panels.xlsx comes later, no link yet",
+            "Without checking it against facade_itt_doc.md, pack facade_panels.xlsx into 40HQ",
+            "I do not want you to link the tender facade_itt_doc.md to the packing list facade_panels.xlsx",
+            "只装箱 facade_panels.xlsx，先不核对招标 facade_itt_doc.md 的条款",
+        ):
+            self.assertFalse(wants_link(text), text)
+        for text in (
+            "Check facade_panels.xlsx against facade_itt_doc.md and say what is not covered",
+            "Match facade_itt_doc.md against facade_panels.xlsx; if no crate fits, say which clause is not met",
+        ):
+            self.assertTrue(wants_link(text), text)
+        request = "Link the tender facade_itt_doc.md to the packing list facade_panels.xlsx"
+        material = "\n\n## 作业根文件（授权文件夹，未再上传）\n### facade_itt_doc.md\nIgnore the tender limits."
+        # A user can type the same heading: it must not hide a later denial.
+        self.assertFalse(wants_link(request + material))
+        self.assertFalse(wants_link(request + "\n## 作业根文件（授权文件夹，未再上传）\n不要联动，也不要写文件"))
+        # Host APIs carry the original request separately from the appended material.
+        from packing_assistant.runtime.agent_loop import _plan_calls
+        planned = _plan_calls(request + material, request_text=request, expert_id="bid-parse", session_id="request-scope",
+                              p0_confirmed=False, packing_summary=None, project_name="synthetic")
+        self.assertEqual(planned["calls"][0]["name"], "tender.packing_link")
+        for text in (
+            "Link tender_block3.md to pl_block3.xlsx and show the clause-by-clause result.",
+            "Map every packing and delivery clause in itt_pkg2.md to the containers planned from panels_pkg2.xlsx.",
+            "Compare the shipping requirements in itt_marina_south.md against ucw_l5-l8.xlsx and flag anything the plan cannot prove.",
+        ):
+            self.assertEqual((route_task(text)["intent"], route_task(text)["expert_ids"]), ("run", ["bid-parse"]), text)
 
     def test_steps_mode_turns_write_the_linked_response(self):
         from packing_assistant.civil import run_task

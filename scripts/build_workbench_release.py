@@ -37,6 +37,7 @@ STATIC = (
 )
 EXPLICIT = (
     "gateway/__init__.py", "gateway/app.py", "frontend/workbench.html",
+    "gateway/web_link.py", "gateway/pages/access.html", "gateway/pages/demo.html",
     "frontend/vendor/vue.min.js", "frontend/vendor/vue.LICENSE",
     "frontend/vendor/marked.min.js", "frontend/vendor/marked.LICENSE.md",
     "frontend/vendor/cb-doc.js", "frontend/vendor/cb-fix.js",

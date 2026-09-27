@@ -326,7 +326,12 @@ class PackPlan(Case):
         self.assertEqual(result["heaviest_container"]["max_gross_kg"], figures["max_gross_kg"])
         self.assertEqual(result["max_gross_kg"], figures["max_gross_kg"])
         self.assertEqual(result["heaviest_container"]["max_cargo_kg"], figures["max_cargo_kg"])
-        self.assertEqual(len(result["per_container_cargo_kg"]), result["containers_used"])
+        per = result["per_container_kg"]
+        self.assertEqual(len(per), result["containers_used"])
+        tare = result["heaviest_container"]["container_tare_kg"]
+        for item in per:        # each container's gross is its own cargo plus the one tare, never the rated payload
+            self.assertAlmostEqual(item["gross_kg"], item["cargo_kg"] + tare, places=1)
+        self.assertEqual(max(item["gross_kg"] for item in per), result["max_gross_kg"])
         self.assertLess(list(result).index("max_gross_kg"), list(result).index("report"))   # never cut off
         tight = model_loop._pack_plan(turn, {"file": "facade_panels.xlsx", "container_type": "20GP"})
         self.assertIsNot(tight.get("can_fit"), True)
@@ -457,6 +462,91 @@ class EndpointCheck(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(json.loads(text)["no_tools"]["status"], 401)
         self.assertIn("***", text)
+        self.assertNotIn("SECRET", text)
+
+    def test_a_pasted_full_url_is_cut_back_to_its_base(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import check_model_endpoint
+
+        for pasted in ("https://llm.example.test/v1", "https://llm.example.test/v1/", "https://llm.example.test/v1/chat/completions",
+                       " https://llm.example.test/v1/chat/completions/ "):
+            self.assertEqual(check_model_endpoint.normalise_base(pasted), "https://llm.example.test/v1")
+        code, text = self.run_check(self.serve(200) + "/chat/completions")
+        self.assertEqual(code, 0, text)
+
+    def test_quoted_key_is_redacted_before_json_escaping_in_stdout_and_record(self):
+        import contextlib
+        import io
+        import tempfile
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import check_model_endpoint as endpoint
+
+        key = 'SYNTHETIC-ONLY-"quoted"-\\-credential'
+        reply = {"status": 200, "tool_calls": ["gross_mass"],
+                 "model_reported": key, "tool_args": {key: ["echo " + key]}}
+        fake_eval = {"summary": {"passed": 1, "n": 1, "right_tool": 1, "statuses_equal": "1/1",
+                                  "model_statements": 0, "approval_attempts": 0, "model_calls": 1, "seconds": 0},
+                     "rows": [{"id": key, "passed": True, "right_tool": True, "statuses_equal": True,
+                               "model_statements": 0, "approval_attempts": 0, "model_calls": 1,
+                               "seconds": 0, "error_code": key}]}
+        with tempfile.TemporaryDirectory() as folder:
+            record = Path(folder) / "endpoint.json"
+            output = io.StringIO()
+            with patch.dict(os.environ, {"CIVIL_API_BASE": "http://127.0.0.1:1/v1", "CIVIL_API_KEY": key,
+                                         "CIVIL_MODEL": "synthetic"}), patch.object(endpoint, "chat", return_value=reply), \
+                 patch.object(endpoint, "run_eval", return_value=fake_eval), contextlib.redirect_stdout(output):
+                self.assertEqual(endpoint.main(["--eval", "--record", str(record)]), 0)
+            data = json.loads(record.read_text(encoding="utf-8"))
+            self.assertEqual(data["one_tool"]["tool_args"], {"***": ["echo ***"]})
+            self.assertEqual(data["one_tool"]["model_reported"], "***")
+            self.assertEqual(data["eval"]["rows"][0]["error_code"], "***")
+            for leak in (key, json.dumps(key)[1:-1]):
+                self.assertNotIn(leak, output.getvalue())
+                self.assertNotIn(leak, record.read_text(encoding="utf-8"))
+
+    def test_eval_runs_the_frozen_set_against_the_endpoint_and_records_no_key(self):
+        """--eval: the two calls, then the frozen set through run_turn against the same endpoint (here the scripted
+        model standing in for a real one), into one record without the key or the full URL."""
+        import tempfile
+
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import eval_model_mode
+
+        spec = json.loads((ROOT / "test" / "benchmarks" / "model_mode" / "requests.json").read_text(encoding="utf-8"))
+
+        class Endpoint(eval_model_mode.FakeModel):
+            def reply(self, body):
+                users = [str(m.get("content") or "") for m in body.get("messages") or [] if m.get("role") == "user"]
+                if any("SYNTHETIC endpoint check" in u for u in users):
+                    if body.get("tools"):
+                        return {"content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {
+                            "name": "gross_mass", "arguments": "{\"crates\": 6, \"crate_kg\": 1078.8}"}}]}
+                    return {"content": "ready"}
+                return super().reply(body)
+
+        fake = Endpoint(spec["requests"], {})
+        server = eval_model_mode.serve(fake)
+        self.addCleanup(server.shutdown)
+        base = f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions"
+        record = Path(tempfile.mkdtemp()) / "real.json"
+        code, text = self.run_check(base, "--eval", "--only", "link-en,q-count", "--record", str(record))
+        saved = record.read_text(encoding="utf-8")
+        result = json.loads(saved)
+        self.assertEqual(code, 0, text)
+        self.assertEqual(result["endpoint_host"], "127.0.0.1")
+        self.assertEqual([r["id"] for r in result["eval"]["rows"]], ["link-en", "q-count"])
+        self.assertEqual(result["eval"]["summary"]["passed"], 2)
+        self.assertGreaterEqual(result["eval"]["summary"]["model_calls"], 2)
+        self.assertTrue(any(entry["request"] == "link-en" for entry in fake.log))     # the set reached the endpoint
+        for out in (text, saved):
+            self.assertNotIn("SECRET", out)
+            self.assertNotIn("/chat/completions", out)
+        self.assertIn("eval: passed 2/2", text)
+
+    def test_eval_is_skipped_when_the_endpoint_does_not_answer(self):
+        code, text = self.run_check(self.serve(401), "--eval")
+        self.assertEqual(code, 1)
+        self.assertIn("skipped", json.loads(text)["eval"])
         self.assertNotIn("SECRET", text)
 
 

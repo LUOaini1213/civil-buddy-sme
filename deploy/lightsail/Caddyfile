@@ -1,0 +1,47 @@
+# Civil Buddy behind Caddy 2. Automatic HTTPS for {$SITE_ADDRESS} (Let's Encrypt over HTTP-01 on port 80;
+# "localhost" gets Caddy's internal CA, "http://..." stays plain HTTP for a local test).
+{
+	# Caddy's admin API stays on localhost inside its container
+	admin localhost:2019
+}
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# the upload route accepts at most 10 MB + 5 MB (gateway/web_link.py); refuse bigger bodies here already
+	request_body {
+		max_size 16MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# WebSocket (/ws/session/...): Caddy passes the Upgrade / Connection headers through by itself, and the
+	# gateway sees X-Forwarded-For / -Proto, so its access guard treats every request as remote (token required).
+	# flush_interval -1: server-sent events (/api/runs/{id}/events) reach the browser as they are written.
+	reverse_proxy gateway:8000 {
+		flush_interval -1
+	}
+
+	# Access log without the token: the one-time ?token= link, the cookie it sets and a Bearer header must not end
+	# up in `docker compose logs` (the gateway runs uvicorn with --no-access-log for the same reason).
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					delete token
+				}
+				request>headers>Cookie delete
+				request>headers>Authorization delete
+				resp_headers>Set-Cookie delete
+			}
+		}
+	}
+}

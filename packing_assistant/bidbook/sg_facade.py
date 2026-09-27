@@ -42,7 +42,9 @@ _DEV = {
 _GENERIC_HEADING = re.compile(
     r"(?i)^(?:(?:invitation|instructions?)\s+to\s+tender(?:ers?)?|tender\s+documents?|conditions\s+of\s+(?:tender|contract)"
     r"|form\s+of\s+tender|(?:table\s+of\s+)?contents|(?:section|part|appendix|annex|schedule|volume)\b)")
-_SYNTHETIC = re.compile(r"\bSYNTHETIC\b")
+# A document label, not material specifications such as SYNTHETIC RUBBER.
+_SYNTHETIC = re.compile(r"^[#>*_\s]*(?:SYNTHETIC(?:\s+(?:EXAMPLE|DATA|TENDER|DOCUMENT|FIXTURE|SAMPLE|TEST|ITT)\b|\s*[-–—:.]|\s*$))"
+                        r"|[(\[]SYNTHETIC[)\]]")
 
 
 def infer_project_title(text: str) -> str:
@@ -64,8 +66,8 @@ def infer_project_title(text: str) -> str:
 
 
 def is_synthetic(text: str) -> bool:
-    """The tender marks itself SYNTHETIC (the demo fixtures do, in capitals)."""
-    return bool(_SYNTHETIC.search(text or ""))
+    """The tender marks itself SYNTHETIC in a label near its top."""
+    return any(_SYNTHETIC.search(line) for line in (text or "").splitlines()[:40])
 
 
 def _fmt_mid50(mid: Any) -> str:

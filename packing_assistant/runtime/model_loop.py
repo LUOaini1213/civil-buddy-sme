@@ -350,7 +350,7 @@ def _run_skill(turn: _Turn, args: Dict[str, Any]) -> Dict[str, Any]:
     supplied = turn.material or turn.user_text
     text = f"{supplied}\n\n{material}".strip() if material else supplied
     out = run_agent(text, session_id=turn.session_id, expert_id=exp.id, p0_confirmed=turn.confirmed,
-                    force_intent="run", cancel_event=turn.cancel_event)
+                    force_intent="run", cancel_event=turn.cancel_event, request_text=turn.user_text)
     if out.get("hitl_pending"):
         turn.hitl_pending = True
         return {"ok": False, "error_code": "approval_required", "skill_id": exp.id, "reason": str(out.get("reply") or "")}
@@ -370,9 +370,10 @@ _PLAN_KEYS = ("ok", "source", "error", "detail", "needs_human", "n_rows", "can_f
 def plan_masses(result: Dict[str, Any]) -> Dict[str, Any]:
     """Per-container masses for the model, each under a name it cannot misread: the heaviest loaded container's cargo
     and gross mass (tender_packing_link.heaviest_container, the same computation as the link's mass statement) and each
-    container's cargo. Measured 2026-09-26: qwen2.5:3b reported the 40HQ rated payload as the heaviest container's
-    mass; tools/record_guard now strikes a reply whose "heaviest container ... kg" is not max_gross_kg or max_cargo_kg.
-    A plan that does not fit (can_fit is not true) evidences no mass, so none is given."""
+    container's cargo and gross mass (cargo + the same tare). Measured 2026-09-26: qwen2.5:3b reported the 40HQ rated
+    payload as the heaviest container's mass; tools/record_guard now strikes a reply whose "heaviest container ... kg"
+    is not max_gross_kg or max_cargo_kg. A plan that does not fit (can_fit is not true) evidences no mass, so none is
+    given."""
     from packing_assistant.tender_packing_link import heaviest_container
 
     per = result.get("per_container") or []
@@ -380,9 +381,14 @@ def plan_masses(result: Dict[str, Any]) -> Dict[str, Any]:
         return {"heaviest_container": None, "max_gross_kg": None,
                 "mass_note": "no per-container mass: the plan did not run or does not fit (can_fit is not true)"}
     mass = heaviest_container(per, str(result.get("container_type") or ""))
+    tare = mass["container_tare_kg"]
+
+    def gross(item: Dict[str, Any]) -> Optional[float]:
+        return round(float(item.get("cargo_kg") or 0) + tare, 1) if tare is not None else None
+
     return {"heaviest_container": mass, "max_gross_kg": mass["max_gross_kg"],
-            "per_container_cargo_kg": [{"container_no": item.get("container_no"), "cargo_kg": item.get("cargo_kg")}
-                                       for item in per[:40]],
+            "per_container_kg": [{"container_no": item.get("container_no"), "cargo_kg": item.get("cargo_kg"),
+                                  "gross_kg": gross(item)} for item in per[:40]],
             "mass_note": ("max_gross_kg = gross mass of the heaviest LOADED container (its cargo_kg + container tare, tare from "
                           "the knowledge base, approximate; the CSC plate governs). It is not the container's rated payload "
                           "or rated maximum gross.")}

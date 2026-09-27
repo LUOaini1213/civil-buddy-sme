@@ -12,8 +12,10 @@ import html
 import json
 import os
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 from zipfile import BadZipFile
 from packing_assistant.document_text import csv_text, docx_document_text, table_markdown
 
@@ -39,7 +41,27 @@ def is_forbidden_layout(path: Path) -> bool:
     return n == "d:\\layout" or n.startswith("d:\\layout\\")
 
 
+#: A job folder for the current request only (the gateway's upload route, gateway/web_link.py). A context
+#: variable, not CIVIL_JOB_ROOT: two uploads at once each see their own folder, and nothing is added to the
+#: sandbox roots — every read still goes through sandbox.assert_open, so a folder outside them stays closed.
+_JOB_ROOT_SCOPE: ContextVar[Optional[Path]] = ContextVar("civil_job_root_scope", default=None)
+
+
+@contextmanager
+def job_root_scope(folder: Path) -> Iterator[Path]:
+    """Within the block, job_root() is ``folder`` for this thread / task and the threads it starts with
+    contextvars.copy_context() (as ToolEngine.execute does)."""
+    token = _JOB_ROOT_SCOPE.set(Path(folder))
+    try:
+        yield Path(folder)
+    finally:
+        _JOB_ROOT_SCOPE.reset(token)
+
+
 def job_root() -> Path:
+    scoped = _JOB_ROOT_SCOPE.get()
+    if scoped is not None:
+        return scoped
     raw = (os.getenv("CIVIL_JOB_ROOT") or "").strip()
     if raw:
         p = Path(raw).expanduser()
@@ -323,6 +345,9 @@ def export_md_to_docx(md_path: Path) -> Path | None:
 
 
 def job_root_granted() -> bool:
+    scoped = _JOB_ROOT_SCOPE.get()
+    if scoped is not None:
+        return scoped.is_dir() and not is_forbidden_layout(scoped)
     raw = (os.getenv("CIVIL_JOB_ROOT") or "").strip()
     if not raw:
         return False

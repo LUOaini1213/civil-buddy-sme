@@ -26,7 +26,8 @@ model mode also runs the link first (tested in `scripts/test_model_mode_link.py`
 - A question about the clauses, the statements or the plan must read before it answers. If the model answers without
   reading anything, the loop reads the record for it and asks again (the event is marked `forced`).
 - `pack_plan` now returns `heaviest_container` (`max_cargo_kg`, `container_tare_kg`, `max_gross_kg`, computed by the
-  same function as the link's mass statement, `tender_packing_link.heaviest_container`) and each container's cargo.
+  same function as the link's mass statement, `tender_packing_link.heaviest_container`) and, per container
+  (`per_container_kg`), its cargo and its gross mass (cargo + the same tare; never the rated payload).
   A plan that does not fit returns none.
 - `tools/record_guard.py` checks every checked reply, next to the number guard and the verdict guard: a sentence that
   gives a statement another status, the plan another container type, the heaviest container a mass that is not the
@@ -90,9 +91,35 @@ probe, not reproducible from the repository).
 
 Two calls, one with no tools and one with one tool. It prints the HTTP status, the latency, the finish reason, whether
 `tool_calls` came back and, on an error, the first 200 characters of the body with the key masked. It never prints the
-key and sends only one SYNTHETIC sentence.
+key, records the endpoint's host name only (not the full URL), and sends only one SYNTHETIC sentence.
 
-Use a **short-term** Bedrock API key in the environment only, never in a file, and let it expire.
+The settings are read from the environment only (`CIVIL_API_BASE`, `CIVIL_API_KEY`, `CIVIL_MODEL`); nothing in this
+repository stores a key. Set them in the shell you run the check from, and close it afterwards.
+
+### An API URL and key handed out by the hackathon platform
+
+The format of the URL is not known in advance. The check handles the two usual shapes of an OpenAI-compatible
+endpoint: a base URL (`https://<host>/v1`), and the full endpoint (`https://<host>/v1/chat/completions`), which it cuts
+back to the base, as `runtime/model_client.py` appends `/chat/completions` itself. The key goes out as
+`Authorization: Bearer <key>`; a gateway that expects another header answers 401 or 403, and the check prints the
+start of that answer.
+
+```
+set CIVIL_API_BASE=<the API URL>
+set CIVIL_MODEL=<a model name the platform lists>
+set CIVIL_API_KEY=<the key>
+python scripts/check_model_endpoint.py --record endpoint-check.json            # 2 calls
+python scripts/check_model_endpoint.py --eval --record model-mode-real.json    # + the frozen 12-request set, once
+```
+
+`--eval` runs `scripts/eval_model_mode.py`'s 12 requests against the same endpoint (steps-mode references first, which
+call no model), after the two calls and only when the no-tools call returned 200. It puts the per-request rows, the
+replies and the summary in the record, with the key masked. It is about 20 to 30 model calls: the credits are shared
+with the hosting, so run it once, and `--only link-en,q-count` first if in doubt. On a real model the scripted wrong
+sentences (`must_not_survive`) do not apply; right tool, statuses = steps, model-written statements in files and
+approval attempts do. A result from it is one run of one model: quote it with its date, model and n.
+
+### Amazon Bedrock
 
 ```
 # Bedrock, OpenAI-compatible Chat Completions (what civil's model loop speaks), gpt-oss in Sydney
@@ -100,14 +127,16 @@ set CIVIL_API_BASE=https://bedrock-runtime.ap-southeast-2.amazonaws.com/openai/v
 set CIVIL_MODEL=openai.gpt-oss-120b-1:0
 set CIVIL_API_KEY=<short-term Bedrock API key>
 python scripts/check_model_endpoint.py --reasoning-effort low --record bedrock-check.json
+python scripts/check_model_endpoint.py --eval --record bedrock-model-mode.json
 
-# Bedrock Converse (Claude or Nova)
+# Bedrock Converse (Claude or Nova): the two calls only; --eval refuses, as civil's loop speaks Chat Completions
 set CIVIL_API_BASE=https://bedrock-runtime.<region>.amazonaws.com
 set CIVIL_MODEL=<model or inference-profile id>
 python scripts/check_model_endpoint.py --api converse --record bedrock-converse-check.json
 ```
 
-`--max-tokens` defaults to 1024: a reasoning model given 200 can spend them all thinking and return no text.
+Use a **short-term** Bedrock API key and let it expire. `--max-tokens` defaults to 1024: a reasoning model given 200
+can spend them all thinking and return no text.
 
 ### Region facts, as recorded in the technical document §6.3 (AWS documentation checked 2026-09-26; not re-checked here)
 
@@ -117,4 +146,5 @@ python scripts/check_model_endpoint.py --api converse --record bedrock-converse-
   request and the job text in it leave Singapore. Say so to the company before using it on real documents.
 - Claude and Nova models are reached through Converse, not Chat Completions. civil's model loop speaks Chat
   Completions only, so a Converse check shows that the account and the model answer, not that model mode runs on them.
-- **Never run from this repository.** Nothing here claims that Bedrock works for civil until a check record exists.
+- **Not run yet.** No Bedrock or platform endpoint has been called from this repository; nothing here claims that one
+  works for civil until a check record exists.

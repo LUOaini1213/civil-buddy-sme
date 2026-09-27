@@ -249,6 +249,7 @@ def _plan_calls(
     packing_summary: Optional[Dict[str, Any]],
     project_name: str,
     packing_list: str = "",
+    request_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     from packing_assistant.expert_roster import get_expert
 
@@ -265,11 +266,12 @@ def _plan_calls(
     sid = _safe_sid(session_id)
     out_dir = _out_root() / sid / (exp.id if exp else "ops")
     calls: List[Dict[str, Any]] = []
+    requested = text if request_text is None else request_text
 
     if exp and exp.id == "pack-ship" and packing_list:
         # 任务点名了文件夹里的装箱单：真算。柜数与利用率出自装箱引擎，不再只抄快照。
         # 柜型照任务里写的算（「柜型 20GP」以前被丢掉，一律按 40HQ）；没写才是 40HQ，写了两种就问。
-        codes = _named_container_type(text, packing_list)
+        codes = _named_container_type(requested, packing_list)
         if len(codes) > 1:
             return {"hitl": False, "calls": [], "stop_code": "ambiguous_container_type",
                     "stop": f"任务里写了不止一种柜型（{'、'.join(codes)}）；装箱引擎一次只算一种柜型 × N：请只写一种。本轮未出方案。"}
@@ -299,7 +301,7 @@ def _plan_calls(
         return {"hitl": False, "calls": calls, "connected": connected, "snap": snap}
 
     if exp is not None and exp.id == "bid-parse":
-        linked = _link_inputs(text)
+        linked = _link_inputs(requested)
         if isinstance(linked, str):
             return {"hitl": False, "calls": [], "stop": linked, "stop_code": "link_inputs"}
         if linked is not None:
@@ -308,7 +310,7 @@ def _plan_calls(
 
             tender, table = linked
             # a type typed in the request is a person's choice (the ITT names none, several, or a size only)
-            codes = _named_container_type(text, tender, table)
+            codes = _named_container_type(requested, tender, table)
             if len(codes) > 1:
                 return {"hitl": False, "calls": [], "stop_code": "ambiguous_container_type",
                         "stop": f"The request names more than one container type ({', '.join(codes)}); the planner plans one "
@@ -417,17 +419,19 @@ def run_agent(
     max_steps: int = 8,
     scheduler: Optional[Scheduler] = None,
     cancel_event: Any = None,
+    request_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     from packing_assistant.expert_roster import get_expert, list_experts
     from packing_assistant.otel_hooks import span
 
-    intent = force_intent if force_intent in {"chat", "run", "both"} else understand(text)
+    requested = text if request_text is None else request_text
+    intent = force_intent if force_intent in {"chat", "run", "both"} else understand(requested)
     eid = (expert_id or "").strip()
     skill_source = "given" if eid else ""
     route = None
     if not eid:
         from packing_assistant.runtime.task_router import route_task
-        route = route_task(text)
+        route = route_task(requested)
         if force_intent not in {"chat", "run", "both"}:
             intent = route["intent"]
         if route["ambiguous"]:
@@ -440,7 +444,7 @@ def run_agent(
                 child = run_agent(text, session_id=sequence_sid, expert_id=selected,
                     p0_confirmed=p0_confirmed, force_intent=intent, packing_summary=packing_summary,
                     project_name=project_name, tools=tools, max_steps=max_steps,
-                    scheduler=scheduler, cancel_event=cancel_event)
+                    scheduler=scheduler, cancel_event=cancel_event, request_text=requested)
                 children.append(child)
                 if not child.get("ok") or child.get("hitl_pending") or child.get("cancelled"):
                     break
@@ -474,7 +478,7 @@ def run_agent(
     from packing_assistant.runtime.civil_config import CONFIRM, CONFIRM_EN, decide_gate, load_config
     from packing_assistant.runtime.reply_language import english_request
 
-    packing_list = _named_packing_list(text) if exp and exp.id == "pack-ship" else ""
+    packing_list = _named_packing_list(requested) if exp and exp.id == "pack-ship" else ""
     if packing_list and intent == "chat" and force_intent not in {"chat", "run", "both"}:
         intent = "run"      # 「packing.csv 要几个柜」点名了装箱单，是要算，不是要聊
     cfg = load_config()
@@ -741,6 +745,7 @@ def run_agent(
                 packing_summary=packing_summary,
                 project_name=project_name,
                 packing_list=packing_list,
+                request_text=requested,
             )
             if _cancel_requested():
                 return _finish_cancelled()

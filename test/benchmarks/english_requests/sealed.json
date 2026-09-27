@@ -1,0 +1,380 @@
+{
+  "set": "english_requests",
+  "synthetic": true,
+  "notice": "SYNTHETIC held-out evaluation data for civil-buddy. Fictional project, companies, people and figures. Not a real tender, shipment or record.",
+  "count": 30,
+  "routes": {
+    "link": "tender<->packing link (needs a tender AND a panel list)",
+    "pack": "packing only",
+    "tender": "tender review only",
+    "chat": "answer in chat, run nothing"
+  },
+  "counts": {
+    "link": 12,
+    "pack": 8,
+    "tender": 4,
+    "chat": 6
+  },
+  "requests": [
+    {
+      "id": "R01",
+      "text": "Check my panel list tower_b_panels.xlsx against the shipping clauses in synthetic_itt_ocean_view.md.",
+      "gold": {
+        "route": "link",
+        "files_named": true,
+        "named_files": [
+          "tower_b_panels.xlsx",
+          "synthetic_itt_ocean_view.md"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R02",
+      "text": "Draft the logistics section for tender SYN-ITT-2027-03.md using packing list pl_east_elev.xlsx.",
+      "gold": {
+        "route": "link",
+        "files_named": true,
+        "named_files": [
+          "SYN-ITT-2027-03.md",
+          "pl_east_elev.xlsx"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R03",
+      "text": "Do the panels in east_panels_rev2.xlsx meet the ITT's container requirements? The ITT is itt_facade_pkg4.md.",
+      "gold": {
+        "route": "link",
+        "files_named": true,
+        "named_files": [
+          "east_panels_rev2.xlsx",
+          "itt_facade_pkg4.md"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R04",
+      "text": "Using itt_facade_pkg4.md and east_panels_rev2.xlsx, tell me which delivery clauses the packing plan covers and which still need someone.",
+      "gold": {
+        "route": "link",
+        "files_named": true,
+        "named_files": [
+          "itt_facade_pkg4.md",
+          "east_panels_rev2.xlsx"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R05",
+      "text": "Cross-check pl_block3.xlsx with the tender logistics requirements in tender_block3.md",
+      "gold": {
+        "route": "link",
+        "files_named": true,
+        "named_files": [
+          "pl_block3.xlsx",
+          "tender_block3.md"
+        ],
+        "notes": "no trailing punctuation"
+      }
+    },
+    {
+      "id": "R06",
+      "text": "Here are the tender (ocean_view_tender.md) and our panel schedule (ov_panels.xlsx) - does the load plan respect the 26 t container limit in the tender?",
+      "gold": {
+        "route": "link",
+        "files_named": true,
+        "named_files": [
+          "ocean_view_tender.md",
+          "ov_panels.xlsx"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R07",
+      "text": "Link tender_block3.md to pl_block3.xlsx and show the clause-by-clause result.",
+      "gold": {
+        "route": "link",
+        "files_named": true,
+        "named_files": [
+          "tender_block3.md",
+          "pl_block3.xlsx"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R08",
+      "text": "Map every packing and delivery clause in itt_pkg2.md to the containers planned from panels_pkg2.xlsx.",
+      "gold": {
+        "route": "link",
+        "files_named": true,
+        "named_files": [
+          "itt_pkg2.md",
+          "panels_pkg2.xlsx"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R09",
+      "text": "Will panels_pkg2.xlsx fit the container type and weight limits that itt_pkg2.md asks for?",
+      "gold": {
+        "route": "link",
+        "files_named": true,
+        "named_files": [
+          "panels_pkg2.xlsx",
+          "itt_pkg2.md"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R10",
+      "text": "Prepare a tender logistics compliance table: ITT = SYN-ITT-2027-03.md, panel list = pl_east_elev.xlsx.",
+      "gold": {
+        "route": "link",
+        "files_named": true,
+        "named_files": [
+          "SYN-ITT-2027-03.md",
+          "pl_east_elev.xlsx"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R11",
+      "text": "My packing list is ucw_l5-l8.xlsx and the tender is itt_marina_south.md. Please pack it the way the tender wants and say which clauses are met.",
+      "gold": {
+        "route": "link",
+        "files_named": true,
+        "named_files": [
+          "ucw_l5-l8.xlsx",
+          "itt_marina_south.md"
+        ],
+        "notes": "contains 'pack' but names both files: link, not pack"
+      }
+    },
+    {
+      "id": "R12",
+      "text": "Compare the shipping requirements in itt_marina_south.md against ucw_l5-l8.xlsx and flag anything the plan cannot prove.",
+      "gold": {
+        "route": "link",
+        "files_named": true,
+        "named_files": [
+          "itt_marina_south.md",
+          "ucw_l5-l8.xlsx"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R13",
+      "text": "Pack tower_b_panels.xlsx into 40HQ containers.",
+      "gold": {
+        "route": "pack",
+        "files_named": true,
+        "named_files": [
+          "tower_b_panels.xlsx"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R14",
+      "text": "How many 20GP containers do I need for pl_east_elev.xlsx?",
+      "gold": {
+        "route": "pack",
+        "files_named": true,
+        "named_files": [
+          "pl_east_elev.xlsx"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R15",
+      "text": "Make a container loading plan for ucw_l5-l8.xlsx, max 3 containers.",
+      "gold": {
+        "route": "pack",
+        "files_named": true,
+        "named_files": [
+          "ucw_l5-l8.xlsx"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R16",
+      "text": "Crate and load the panels in east_panels_rev2.xlsx.",
+      "gold": {
+        "route": "pack",
+        "files_named": true,
+        "named_files": [
+          "east_panels_rev2.xlsx"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R17",
+      "text": "Plan the shipment for panels_pkg2.xlsx in 40' HC.",
+      "gold": {
+        "route": "pack",
+        "files_named": true,
+        "named_files": [
+          "panels_pkg2.xlsx"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R18",
+      "text": "Load pl_block3.xlsx into 40HQ and show me the centre of gravity.",
+      "gold": {
+        "route": "pack",
+        "files_named": true,
+        "named_files": [
+          "pl_block3.xlsx"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R19",
+      "text": "Work out a packing plan for ov_panels.xlsx - the ITT says 40HQ but I only have the panel list here.",
+      "gold": {
+        "route": "pack",
+        "files_named": true,
+        "named_files": [
+          "ov_panels.xlsx"
+        ],
+        "notes": "mentions the ITT but names no tender file: pack with the user-stated 40HQ"
+      }
+    },
+    {
+      "id": "R20",
+      "text": "Pack my panel list into containers.",
+      "gold": {
+        "route": "pack",
+        "files_named": false,
+        "named_files": [],
+        "notes": "no file named: pack route, file must be asked for"
+      }
+    },
+    {
+      "id": "R21",
+      "text": "Parse the tender itt_marina_south.md.",
+      "gold": {
+        "route": "tender",
+        "files_named": true,
+        "named_files": [
+          "itt_marina_south.md"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R22",
+      "text": "List the packing and delivery clauses in SYN-ITT-2027-03.md.",
+      "gold": {
+        "route": "tender",
+        "files_named": true,
+        "named_files": [
+          "SYN-ITT-2027-03.md"
+        ],
+        "notes": "logistics words but only the tender is named: tender review, not link"
+      }
+    },
+    {
+      "id": "R23",
+      "text": "Review itt_pkg2.md and give me a checklist of the rejection risks.",
+      "gold": {
+        "route": "tender",
+        "files_named": true,
+        "named_files": [
+          "itt_pkg2.md"
+        ],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R24",
+      "text": "What container type does tender_block3.md require?",
+      "gold": {
+        "route": "tender",
+        "files_named": true,
+        "named_files": [
+          "tender_block3.md"
+        ],
+        "notes": "a question, but it asks to extract from a named tender file"
+      }
+    },
+    {
+      "id": "R25",
+      "text": "What does the link do?",
+      "gold": {
+        "route": "chat",
+        "files_named": false,
+        "named_files": [],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R26",
+      "text": "Can you link the tender later?",
+      "gold": {
+        "route": "chat",
+        "files_named": false,
+        "named_files": [],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R27",
+      "text": "If I gave you an ITT and a panel list, what would the tender-packing check look at?",
+      "gold": {
+        "route": "chat",
+        "files_named": false,
+        "named_files": [],
+        "notes": "hypothetical; nothing to run"
+      }
+    },
+    {
+      "id": "R28",
+      "text": "What's the difference between 40HQ and 20GP?",
+      "gold": {
+        "route": "chat",
+        "files_named": false,
+        "named_files": [],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R29",
+      "text": "What does 'person decides' mean in the link result?",
+      "gold": {
+        "route": "chat",
+        "files_named": false,
+        "named_files": [],
+        "notes": ""
+      }
+    },
+    {
+      "id": "R30",
+      "text": "Before I upload tower_b_panels.xlsx, what columns should it have?",
+      "gold": {
+        "route": "chat",
+        "files_named": true,
+        "named_files": [
+          "tower_b_panels.xlsx"
+        ],
+        "notes": "names a file that is not uploaded yet and asks a question: chat"
+      }
+    }
+  ]
+}

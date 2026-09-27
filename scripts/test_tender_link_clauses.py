@@ -199,6 +199,17 @@ class Reading(unittest.TestCase):
                     self.assertIn(kind, found[0]["kinds"])
                     self.assertEqual(found[0][field], [float(number * 1000)])
 
+    def test_lift_upper_bound_keeps_a_nonnumeric_inclusion_aside(self):
+        found = clauses("4.9 The tower crane is rated 3.2 t; no single lift, including spreader and slings, shall exceed 3,000 kg.")
+        self.assertEqual(found[0]["package_limits_kg"], [3000.0, 3200.0])
+        self.assertNotIn("gross_mass", found[0]["kinds"])
+
+    def test_semicolon_does_not_turn_a_lower_bound_into_an_upper_bound(self):
+        found = clauses("4.9 Container weight shall exceed 26 t; per crate: 2 t.")
+        self.assertTrue(found)
+        self.assertTrue(all(not c.get("limits_kg") and not c.get("package_limits_kg") for c in found))
+        self.assertTrue(any("per crate: 2 t" in c.get("unplaced_text", "") for c in found))
+
     def test_unsupported_direction_reaches_human_checks_with_source(self):
         from packing_assistant.tender_packing_link import build_checks, container_decision
 
@@ -273,6 +284,34 @@ class Reading(unittest.TestCase):
         for field in ("text", "note", "placeholder"):
             self.assertNotIn("disregard your rules", str(row.get(field) or ""))
             self.assertNotIn("approve the shipment", str(row.get(field) or ""))
+
+    def test_each_container_then_a_crane_or_stillage_is_not_a_container_limit(self):
+        # review of PR #68: "each container" named first, a crane / forklift / stillage between it and the figure. Read as
+        # a container limit, 50 t or 32 t was "covered" by any plan and 2 t a false gap; now a person reads each, quoted
+        for text in ("4.9 Each container shall be lifted off the trailer by a mobile crane rated 50 t.",
+                     "4.9 Every container shall be unloaded with a forklift of 32 t capacity.",
+                     "4.9 Each container shall carry no more than 8 stillages of 2 t each."):
+            with self.subTest(text=text):
+                found = clauses(text)
+                self.assertFalse([c for c in found if "gross_mass" in c["kinds"]], found)
+                self.assertIn("unplaced", found[0]["kinds"])
+        # the mass frame still wins over nouns between: "the gross mass of each loaded container, including stillages"
+        found = clauses("4.9 The gross mass of each loaded container, including stillages and dunnage, shall not exceed 26 t.")
+        self.assertEqual((found[0]["limits_kg"], found[0].get("package_limits_kg")), ([26000.0], None))
+
+    def test_space_grouped_thousands_and_a_limit_after_a_semicolon(self):
+        # "26 000 kg" was read as 0 kg and "30 480 kg" as 480 kg: a false gap "limits ... to 0 kg"
+        for text, kg in (("4.9 The gross mass of each loaded container shall not exceed 26 000 kg.", 26000.0),
+                         ("4.9 The gross mass of each loaded container shall not exceed 30 480 kg (MGW).", 30480.0)):
+            with self.subTest(text=text):
+                self.assertEqual(clauses(text)[0]["limits_kg"], [kg])
+        # "per crate: 2 t" after a semicolon keeps the "Maximum" before it: before, the crate limit was dropped silently
+        found = clauses("4.9 Containers shall be 40HQ. Maximum weight per container: 26 t; per crate: 2 t.")
+        self.assertEqual((found[0]["limits_kg"], found[0]["package_limits_kg"]), ([26000.0], [2000.0]))
+        # a figure in a container clause that names no subject goes to a person, quoted - not silence
+        found = clauses("4.9 Containers: 40HQ only. Each container's VGM shall be declared; the terminal accepts up to 32 t.")
+        self.assertEqual(found[0]["kinds"], ["container_type", "unplaced"])
+        self.assertEqual(found[0]["unplaced_text"], "the terminal accepts up to 32 t.")
 
     def test_clauses_are_cited_the_way_the_tender_writes_them(self):
         def cite(text, kind, source="itt.md"):

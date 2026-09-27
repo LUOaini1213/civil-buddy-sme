@@ -115,6 +115,11 @@ pub fn probe() -> Value {
 
 /// Bid-parse extract via the same Python transform as packing tender-handoff.
 pub fn tender_extract(tender_text: &str, project_name: &str) -> Result<Value, String> {
+    tender_extract_files(tender_text, project_name, &[])
+}
+
+/// Files are selected by the host from validated current-session originals, never model paths.
+pub fn tender_extract_files(tender_text: &str, project_name: &str, files: &[(PathBuf, String)]) -> Result<Value, String> {
     let root = root_configured().ok_or_else(|| "no packing_assistant root".to_string())?;
     let script = {
         if let Ok(m) = env::var("CARGO_MANIFEST_DIR") {
@@ -135,7 +140,9 @@ pub fn tender_extract(tender_text: &str, project_name: &str) -> Result<Value, St
     if !script.is_file() {
         return Err("run_tender_extract.py missing".into());
     }
-    let mut child = Command::new("python")
+    let python = env::var_os("CIVIL_PYTHON").or_else(|| env::var_os("PYTHON"))
+        .unwrap_or_else(|| crate::product::worker::WorkerHost::detect(root.clone()).python.into_os_string());
+    let mut child = Command::new(python)
         .arg(&script)
         .env("PACKING_AGENT_ROOT", &root)
         .stdin(Stdio::piped())
@@ -143,7 +150,11 @@ pub fn tender_extract(tender_text: &str, project_name: &str) -> Result<Value, St
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("python: {e}"))?;
-    let payload = json!({"tender_text": tender_text, "project_name": project_name});
+    let listed: Vec<Value> = files.iter()
+        .map(|(path, name)| json!({"path": path, "name": name})).collect();
+    let upload_dir = files.first().and_then(|(path, _)| path.parent());
+    let payload = json!({"tender_text": tender_text, "project_name": project_name,
+                         "files": listed, "upload_dir": upload_dir});
     if let Some(stdin) = child.stdin.as_mut() {
         use std::io::Write;
         stdin
@@ -152,6 +163,11 @@ pub fn tender_extract(tender_text: &str, project_name: &str) -> Result<Value, St
     }
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if !out.status.success() {
+        if let Ok(value) = serde_json::from_slice::<Value>(&out.stdout) {
+            if let Some(reason) = value.get("error").and_then(Value::as_str) {
+                return Err(reason.to_string());
+            }
+        }
         return Err(format!(
             "extract exit {:?} {}",
             out.status.code(),

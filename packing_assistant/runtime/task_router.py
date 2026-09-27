@@ -140,7 +140,7 @@ _FILE = re.compile(r"[\w.-]+\.(?:xlsx|xlsm|xls|csv|md|docx|pdf|txt)\b", re.I)
 # (a DEV set: written before this rule and used to build it) by scripts/eval_link_routing.py.
 _TABLE_FILE = re.compile(r"[\w.-]+\.(?:xlsx|xlsm|xls|csv)\b", re.I)
 _DOC_FILE = re.compile(r"[\w.-]+\.(?:md|docx|pdf|txt)\b", re.I)
-_PACKING_WORD = re.compile(r"(?i)pack(?:ing)?|panel|loading|crate|container|shipping|shipment|logistic|cargo|stillage"
+_PACKING_WORD = re.compile(r"(?i)pack(?:ing)?|panel|loading|crate|container|shipping|shipment|logistic|cargo|stillage|(?<![a-z])pl[_-]"
                            r"|装箱|装柜|箱单|板块|面板|货物")
 _TENDER_WORD = re.compile(r"(?i)(?<![a-z])(?:tender|itt|bid|rfp|invitation)|招标|标书|投标")
 _LINK_CUE = re.compile(
@@ -150,10 +150,16 @@ _LINK_CUE = re.compile(
 # A link request put as "how do I ... / why is ... / what does ..." asks about the link; "does X meet Y?", "check
 # whether X meets Y" and "which statements does the plan support?" ask for it to be run.
 _ASKS_ABOUT = re.compile(r"(?i)(?:^|[.?!]\s+)\W*(?:how|why|what|when|where|who)\b|怎么|怎样|如何|为什么|为何|什么|是啥")
+_LINK_REFUSED = re.compile(
+    r"(?i)(?:\b(?:not|never|without|no)|n[’']t)\b(?:\W+\w+){0,5}?\W+(?:link(?:ing)?|check(?:ing)?|cross-check(?:ing)?"
+    r"|match(?:ing)?|compar(?:e|ing)|map(?:ping)?)\b"
+    r"|\b(?:ignor(?:e|ing)|skip(?:ping)?|disregard(?:ing)?|leave\s+out|hold\s+off(?:\s+on)?)\b(?:\W+\w+){0,3}?\W+"
+    r"(?:clauses?|tender|itt|link|linking|check|requirements?)\b"
+    r"|(?:不要|别|无需|不用|暂不|先不|不想|跳过|忽略)\S{0,6}?(?:核对|对照|联动|比对|匹配|条款)")
 _LINK_ACTION = re.compile(
     r"(?i)(?:^|[，,:;.!?]\s*)\s*" + _EN_LEAD
     + r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?"
-    r"(?:link|match|(?:cross-)?check|verify|answer)\b"
+    r"(?:link|match|map|compare|(?:cross-)?check|verify|answer)\b"
     r"|^" + _PREFIX + r"(?:核对|对照|比对|匹配|把|用|按招标|招标装柜联动|投标装柜联动|标书装柜联动)")
 _LINK_CHECK_QUESTION = re.compile(
     r"(?i)^\s*(?:do|does)\b.{0,500}\b(?:comply|meet|satisfy)\b"
@@ -182,7 +188,10 @@ def _names_tender_and_list(text: str) -> bool:
 
 def wants_link(message: str) -> bool:
     """The request asks for the tender and the packing to be done as one linked run."""
-    text = _positive_text(_QUOTED.sub("〔引用〕", message or ""))
+    text = _QUOTED.sub("〔引用〕", message or "")
+    if _LINK_REFUSED.search(_FILE.sub(" ", text)):
+        return False
+    text = _positive_text(text)
     if any(phrase in text for phrase in _LINK_ZH) or _LINK_EN.search(text):
         return True
     return _names_tender_and_list(text) and bool(_LINK_CUE.search(_FILE.sub(" ", text)))

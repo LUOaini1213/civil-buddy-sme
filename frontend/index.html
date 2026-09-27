@@ -468,16 +468,26 @@
         <p>提问只解释、不写盘。成稿才进矩阵。内部讨论草稿，不可递交。</p>
       </div>
       <div class="links">
+        <a href="/demo" title="English one-click page: the tender-packing link on the synthetic files, or your own two files">Tender-packing link (EN)</a>
         <a href="/workbench">工程装柜台</a>
-        <a href="http://127.0.0.1:8765">Civil Buddy 工作台</a>
+        <a href="http://127.0.0.1:8765" v-if="isLocalHost">Civil Buddy 工作台</a>
         <a href="/docs" target="_blank">API</a>
         <button type="button" id="cbThemeBtn" class="cb-top-ctl" title="切换深色/浅色主题（默认跟随系统）" onclick="cbThemeToggle()">明</button>
         <button type="button" id="cbLargeBtn" class="cb-top-ctl" title="大字模式：全站字号放大一档" aria-pressed="false" onclick="cbLargeToggle()">大</button>
       </div>
     </header>
 
+    <!-- 401: the server is up and needs the token. Not the gateway-down card, which told a judge to run uvicorn. -->
+    <section class="card" style="margin-bottom:18px" v-if="needToken" data-cb-need-token="true" role="alert">
+      <div class="card-b" style="background:var(--err-bg)">
+        <strong style="color:var(--err)">Access token needed</strong>
+        <p style="margin:6px 0 4px;font-size:13px;color:var(--ink)">This server is private. Open the link you were given (it ends in <code>?token=...</code>); the browser then keeps the token in a cookie.</p>
+        <p style="margin:0;font-size:13px;color:var(--ink)" lang="zh">需要访问口令：请打开发给你的带 <code>?token=...</code> 的链接。</p>
+      </div>
+    </section>
+
     <!-- ux(round10) 网关兜底空态：/api 探测失败时显示（附录 I）；命令一键复制 -->
-    <section class="card" style="margin-bottom:18px" v-if="gatewayDown" data-cb-down="true">
+    <section class="card" style="margin-bottom:18px" v-if="gatewayDown && !needToken" data-cb-down="true">
       <div class="card-b" style="background:var(--err-bg)">
         <strong style="color:var(--err)">网关未启动或不可达</strong>
         <p style="margin:6px 0 10px;font-size:13px;color:var(--ink)">界面在，但解析/交付跑不起来。在仓库根目录启动网关，然后重试：</p>
@@ -788,7 +798,7 @@
     </section>
 
     <footer class="foot">
-      主线 C · 投标应答 + 交付链路 · 装柜工程台 <a href="/workbench">/workbench</a> · 专家工作台 <a href="http://127.0.0.1:8765">:8765</a>
+      主线 C · 投标应答 + 交付链路 · 装柜工程台 <a href="/workbench">/workbench</a> · <a href="/demo">Tender-packing link (EN)</a><span v-if="isLocalHost"> · 专家工作台 <a href="http://127.0.0.1:8765">:8765</a></span>
     </footer>
   </div>
 
@@ -889,6 +899,10 @@
         /* ux(round10) 网关兜底空态（附录 I） */
         gatewayDown: false,
         copiedGatewayCmd: false,
+        /* 401 from the probe: the gateway is up, the token is missing or expired */
+        needToken: false,
+        /* the :8765 workbench runs only on the operator's own machine; on a server that link is dead */
+        isLocalHost: ['localhost', '127.0.0.1', '[::1]', '::1'].indexOf(location.hostname) >= 0,
       },
       computed: {
         mid50Label() {
@@ -1055,6 +1069,8 @@
         async loadExperts() {
           try {
             const res = await fetch('/api/experts');
+            this.needToken = res.status === 401;
+            if (this.needToken) { this.gatewayDown = false; return; }
             if (!res.ok) throw new Error('HTTP ' + res.status);
             const dat = await res.json().catch(() => ({}));
             this.experts = dat.experts || [];
@@ -1136,6 +1152,7 @@
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(body),
             });
+            if (res.status === 401) this.needToken = true;
             const data = await res.json();
             if (!res.ok || data.ok === false && !(data.matrix && data.matrix.rows)) {
               throw new Error(data.detail || data.message || ('HTTP ' + res.status));

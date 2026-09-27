@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Tender-packing link</title>
+<style>
+  :root { --ink:#1d2530; --muted:#556070; --line:#d9dee5; --bg:#ffffff; --panel:#f5f7fa; --accent:#1f5fae;
+          --ok:#1d6b3a; --ok-bg:#e3f3e8; --warn:#8a5a00; --warn-bg:#fdf1d8; --err:#a12a2a; --err-bg:#fbe5e5;
+          --who:#3d4a8c; --who-bg:#e7eafa; --stale:#fff4c2; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink:#e6eaf0; --muted:#a3adba; --line:#2f3844; --bg:#12161c; --panel:#1a2029; --accent:#7fb0ef;
+            --ok:#8fd6a6; --ok-bg:#16301f; --warn:#f0c46a; --warn-bg:#3a2d10; --err:#f19a9a; --err-bg:#3a1717;
+            --who:#b3bdf2; --who-bg:#1f2447; --stale:#3b3410; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:72rem; margin:0 auto; padding:28px 16px 64px; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  h2 { font-size:1.15rem; margin:32px 0 8px; }
+  h3 { font-size:1rem; margin:20px 0 6px; }
+  p { margin:6px 0; }
+  .muted { color:var(--muted); }
+  .banner { background:var(--warn-bg); color:var(--warn); border-radius:8px; padding:8px 12px; margin:12px 0; font-weight:600; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:12px 0; }
+  button, input[type=submit] { font:inherit; padding:8px 14px; border-radius:8px; border:1px solid var(--accent);
+          background:var(--accent); color:#fff; cursor:pointer; }
+  button[disabled] { opacity:.55; cursor:progress; }
+  label { display:block; margin:8px 0 2px; font-weight:600; }
+  input[type=file], input[type=text] { font:inherit; max-width:100%; }
+  input[type=text] { padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); }
+  .table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:8px; }
+  table { border-collapse:collapse; width:100%; min-width:720px; }
+  th, td { text-align:left; vertical-align:top; padding:7px 9px; border-bottom:1px solid var(--line); font-size:.93em; }
+  th { background:var(--panel); font-weight:600; }
+  tr.stale td { background:var(--stale); }
+  .badge { display:inline-block; padding:1px 7px; border-radius:999px; font-size:.85em; font-weight:600; white-space:nowrap; }
+  .covered { background:var(--ok-bg); color:var(--ok); }
+  .partial { background:var(--warn-bg); color:var(--warn); }
+  .gap { background:var(--err-bg); color:var(--err); }
+  .human_required { background:var(--who-bg); color:var(--who); }
+  code, .mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.9em; overflow-wrap:anywhere; }
+  .err { background:var(--err-bg); color:var(--err); border-radius:8px; padding:10px 12px; margin:10px 0; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(15rem,1fr)); gap:10px; }
+  ul.tight { margin:4px 0; padding-left:20px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Tender &harr; packing link</h1>
+  <p class="muted">The tender's logistics clauses, a loading plan made under them, and one statement per clause tied
+    to a plan figure and to the sha256 of the tender, the panel list and the plan. Change the panel list and the
+    statements that went stale are named. Qualifications and price stay with people; every record here is an internal
+    draft (<code>submit_blocked = true</code>, <code>confirmed_by_person = false</code>).</p>
+
+  <div id="auth" class="err" hidden>Access token needed: open the link you were given (it ends in
+    <code>?token=...</code>), then come back to <a href="/demo">/demo</a>.</div>
+
+  <h2>1. One click: the synthetic demo, revision A then revision B</h2>
+  <div class="banner">SYNTHETIC: a fictional tender (SYN-ITT-2026-07, Synthetic Main Contractor Pte Ltd, Synthetic
+    Office Tower) and fictional panel lists from <code>examples/facade-demo</code>. Not a real tender or shipment.</div>
+  <p>The server copies <code>facade_itt_doc.md</code>, <code>facade_panels.xlsx</code> (rev A, 24 panels) and
+    <code>facade_panels_rev_b.xlsx</code> (rev B, 30 panels, L8 re-weighed) into a fresh job folder, runs the link on
+    rev A, then on rev B against rev A's record. Nothing is replayed: both runs are computed now.</p>
+  <button id="runDemo" type="button">Run the linked demo</button>
+  <span id="demoStatus" class="muted" role="status" aria-live="polite"></span>
+  <div id="demoOut"></div>
+
+  <h2>2. Your own files</h2>
+  <form id="upload" class="card">
+    <div class="grid">
+      <div>
+        <label for="tender">Tender (.md, .docx or .pdf with a text layer, up to 10 MB)</label>
+        <input id="tender" name="tender" type="file" accept=".md,.docx,.pdf" required>
+      </div>
+      <div>
+        <label for="panel_list">Panel list (.xlsx or .csv, up to 5 MB)</label>
+        <input id="panel_list" name="panel_list" type="file" accept=".xlsx,.csv" required>
+      </div>
+      <div>
+        <label for="container_type">Container type (optional)</label>
+        <input id="container_type" name="container_type" type="text" placeholder="from the tender, e.g. 40HQ" maxlength="8">
+      </div>
+    </div>
+    <p class="muted">Upload a second panel list with the same tender and the statements it made stale are named
+      (compared with your previous upload from this page). Use synthetic or cleared documents only.</p>
+    <input type="submit" id="uploadBtn" value="Link these two files">
+    <span id="uploadStatus" class="muted" role="status" aria-live="polite"></span>
+  </form>
+  <div id="uploadOut"></div>
+</main>
+<script>
+(function () {
+  "use strict";
+  var session = null;
+  try { session = sessionStorage.getItem("cbLinkSession"); } catch (e) { session = null; }
+  if (!session) {
+    session = "web-" + Math.random().toString(16).slice(2, 10);
+    try { sessionStorage.setItem("cbLinkSession", session); } catch (e) { /* private window: one session per load */ }
+  }
+
+  function el(tag, attrs, children) {
+    var n = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (k) {
+      if (k === "text") { n.textContent = attrs[k]; } else if (k === "cls") { n.className = attrs[k]; } else { n.setAttribute(k, attrs[k]); }
+    });
+    (children || []).forEach(function (c) { if (c) { n.appendChild(typeof c === "string" ? document.createTextNode(c) : c); } });
+    return n;
+  }
+  function short(sha) { return sha ? String(sha).slice(0, 12) : "none"; }
+
+  function shaList(inputs) {
+    var ul = el("ul", { cls: "tight" });
+    [["tender", "Tender"], ["panel_list", "Panel list"], ["plan", "Plan"]].forEach(function (pair) {
+      var item = inputs[pair[0]] || {};
+      var li = el("li", {}, [pair[1] + ": " + (item.name || "none") + " ", el("code", { title: item.sha256 || "", text: "sha256 " + short(item.sha256) })]);
+      if (item.uploaded_as && item.sha256) {
+        li.appendChild(document.createTextNode(item.uploaded_as === item.sha256 ? " (matches the bytes sent)" : " (DIFFERS from the bytes sent)"));
+      }
+      ul.appendChild(li);
+    });
+    return ul;
+  }
+
+  function statementsTable(run) {
+    var stale = {};
+    (run.stale_statements || []).forEach(function (id) { stale[id] = true; });
+    var head = el("tr", {}, ["Stmt", "Clause", "Check", "Status", "Owner", "Plan figure", "Statement"].map(function (h) { return el("th", { scope: "col", text: h }); }));
+    var body = el("tbody");
+    (run.statements || []).forEach(function (s) {
+      var tr = el("tr", stale[s.id] ? { cls: "stale", title: "stale: re-confirm" } : {}, [
+        el("td", {}, [el("strong", { text: s.id }), stale[s.id] ? el("div", { cls: "muted", text: "stale" }) : null]),
+        el("td", { text: s.clause ? "Clause " + s.clause : "none" }),
+        el("td", { text: s.title }),
+        el("td", {}, [el("span", { cls: "badge " + s.status, text: s.status })]),
+        el("td", { text: s.owner }),
+        el("td", { cls: "mono", text: s.figure }),
+        el("td", { text: s.text })
+      ]);
+      body.appendChild(tr);
+    });
+    return el("div", { cls: "table-wrap" }, [el("table", {}, [el("thead", {}, [head]), body])]);
+  }
+
+  function runBlock(title, run) {
+    var c = run.counts || {};
+    var plan = run.plan;
+    var box = el("div", { cls: "card" }, [
+      el("h3", { text: title }),
+      el("p", { text: run.reply || "" }),
+      el("p", {}, ["Container type: ", el("span", { text: (run.container || {}).reason || "" })]),
+      el("p", { text: "Plan: " + (plan ? plan.containers_used + " x " + plan.container_type + (plan.can_fit === true ? "" : " (DOES NOT FIT)") : "none") +
+                      " | covered " + (c.covered || 0) + ", partial " + (c.partial || 0) + ", gap " + (c.gap || 0) + ", for a person " + (c.human_required || 0) }),
+      shaList(run.inputs || {}),
+      statementsTable(run)
+    ]);
+    var ch = run.changes_since_previous;
+    if (ch) {
+      box.appendChild(el("p", {}, [el("strong", { text: "Since the previous run: " }), ch.summary || ""]));
+      if ((run.stale_statements || []).length) {
+        box.appendChild(el("p", {}, [el("strong", { text: "Stale statements (re-confirm): " }), run.stale_statements.join(", ")]));
+      }
+      if ((run.withdrawn || []).length) {
+        box.appendChild(el("p", {}, [el("strong", { text: "Withdrawn (remove from the bid): " }), run.withdrawn.join("; ")]));
+      }
+    } else {
+      box.appendChild(el("p", { cls: "muted", text: "First run in this session: nothing to compare with yet." }));
+    }
+    var links = el("p", {}, ["Deliverables: "]);
+    (run.files || []).forEach(function (f, i) {
+      if (i) { links.appendChild(document.createTextNode(" · ")); }
+      links.appendChild(el("a", { href: f.url, target: "_blank", rel: "noopener", text: f.name }));
+    });
+    box.appendChild(links);
+    box.appendChild(el("p", { cls: "muted", text: "Job " + run.job_id + " · " + run.duration_ms + " ms · submit_blocked = " + run.submit_blocked }));
+    return box;
+  }
+
+  function failure(out, status, body) {
+    if (status === 401) { document.getElementById("auth").hidden = false; }
+    out.appendChild(el("div", { cls: "err", text: "HTTP " + status + ": " + ((body && (body.detail || body.error_code)) || "request failed") }));
+  }
+
+  function call(url, options, out, statusEl, button, render) {
+    out.textContent = "";
+    statusEl.textContent = "running...";
+    button.disabled = true;
+    var t0 = Date.now();
+    fetch(url, options).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (body) { return { status: r.status, body: body }; });
+    }).then(function (res) {
+      statusEl.textContent = "";
+      if (res.status !== 200 || !res.body.ok) { failure(out, res.status, res.body); return; }
+      statusEl.textContent = "done in " + ((Date.now() - t0) / 1000).toFixed(1) + " s";
+      render(res.body);
+    }).catch(function (e) {
+      statusEl.textContent = "";
+      out.appendChild(el("div", { cls: "err", text: "The server could not be reached: " + e }));
+    }).then(function () { button.disabled = false; });
+  }
+
+  document.getElementById("runDemo").addEventListener("click", function () {
+    var out = document.getElementById("demoOut");
+    call("/api/tender/link/demo", { method: "POST" }, out, document.getElementById("demoStatus"), this, function (body) {
+      out.appendChild(runBlock("Revision A: facade_panels.xlsx", body.rev_a));
+      out.appendChild(runBlock("Revision B: facade_panels_rev_b.xlsx, compared with revision A", body.rev_b));
+    });
+  });
+
+  document.getElementById("upload").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var form = new FormData(this);
+    form.append("session_id", session);
+    var out = document.getElementById("uploadOut");
+    call("/api/tender/link", { method: "POST", body: form }, out, document.getElementById("uploadStatus"),
+         document.getElementById("uploadBtn"), function (body) {
+      out.appendChild(runBlock("Your files: " + body.inputs.tender.name + " + " + body.inputs.panel_list.name, body));
+    });
+  });
+}());
+</script>
+</body>
+</html>

@@ -22,5 +22,7 @@ COPY . .
 RUN mkdir -p /app/output/runs /app/output/traces /app/output/db
 
 EXPOSE 8000
-# Cloud platforms inject $PORT — bind 0.0.0.0 so public URL works; without CIVIL_TOKEN the gateway refuses to start
-CMD ["sh", "-c", "python -m uvicorn gateway.app:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Cloud platforms inject $PORT — bind 0.0.0.0 so public URL works; without CIVIL_TOKEN the gateway refuses to start.
+# --no-access-log: uvicorn logs the path with its query string, so the one-time ?token= link would sit in
+# `docker logs`; a proxy in front (deploy/lightsail/Caddyfile) keeps an access log with the token filtered out.
+CMD ["sh", "-c", "python -m uvicorn gateway.app:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log"]

@@ -5,7 +5,20 @@ Call 1 sends one SYNTHETIC sentence with no tools; call 2 the same kind of sente
 the HTTP status, the latency, the finish reason, whether tool_calls came back (and their names) and, on an error, the
 first 200 characters of the response body with the key masked. It never prints the key, and it sends no job data.
 
-Settings, the same ones civil uses: CIVIL_API_BASE, CIVIL_API_KEY, CIVIL_MODEL. Use a SHORT-TERM key and let it expire.
+Settings, the same ones civil uses, read from the environment only: CIVIL_API_BASE, CIVIL_API_KEY, CIVIL_MODEL. Use a
+SHORT-TERM key where the provider offers one and let it expire.
+
+  Any OpenAI-compatible Chat Completions endpoint (for example an API URL and key a hackathon platform hands out):
+    CIVIL_API_BASE=<the base URL; a URL that already ends in /chat/completions is accepted and cut back to its base>
+    CIVIL_MODEL=<the model name the platform lists>   CIVIL_API_KEY=<the key>
+    python scripts/check_model_endpoint.py --record endpoint-check.json
+    civil sends the key as "Authorization: Bearer <key>". A gateway that wants another header answers 401 or 403; the
+    first 200 characters of its answer are printed, key masked.
+
+  --eval then runs the frozen 12-request model-mode set (test/benchmarks/model_mode/requests.json, scripts/
+  eval_model_mode.py) against the same endpoint, once, and puts the result in the record: roughly 20-30 model calls.
+    python scripts/check_model_endpoint.py --eval --record model-mode-real.json
+    python scripts/check_model_endpoint.py --eval --only link-en,q-count --record model-mode-real.json
 
   Amazon Bedrock, OpenAI-compatible Chat Completions (openai.gpt-oss models), in ap-southeast-2 (Sydney):
     CIVIL_API_BASE=https://bedrock-runtime.ap-southeast-2.amazonaws.com/openai/v1
@@ -22,7 +35,8 @@ Settings, the same ones civil uses: CIVIL_API_BASE, CIVIL_API_KEY, CIVIL_MODEL. 
   Local Ollama:  CIVIL_API_BASE=http://127.0.0.1:11434/v1  CIVIL_API_KEY=ollama  CIVIL_MODEL=qwen2.5:3b-16k
 
 What the region and model facts are, and where they come from: docs/model-mode.md. Exit 0 when both calls return
-200 and the tool call comes back as the one tool; 1 otherwise; 2 when a setting is missing.
+200 and the tool call comes back as the one tool (and, with --eval, every request of the set passes); 1 otherwise;
+2 when a setting is missing. The record holds the endpoint's host name, never its full URL, and never the key.
 """
 from __future__ import annotations
 
@@ -50,6 +64,41 @@ def _masked(text: str, key: str) -> str:
     if key:
         text = text.replace(key, "***")
     return text[:_ERROR_CHARS]
+
+
+def _redact(value, key: str):
+    """Mask values before JSON escaping, including provider-returned object keys."""
+    if isinstance(value, str):
+        return value.replace(key, "***") if key else value
+    if isinstance(value, dict):
+        return {_redact(k, key): _redact(v, key) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact(item, key) for item in value]
+    return value
+
+
+def normalise_base(base: str) -> str:
+    """The base URL civil appends /chat/completions to. A pasted full endpoint URL is cut back to its base, so
+    .../v1/chat/completions and .../v1 reach the same place (runtime/model_client.py appends the path itself)."""
+    base = (base or "").strip().rstrip("/")
+    if base.endswith("/chat/completions"):
+        base = base[: -len("/chat/completions")].rstrip("/")
+    return base
+
+
+def run_eval(only: str) -> dict:
+    """The frozen model-mode set against the endpoint now in CIVIL_API_*, through run_turn and the real client."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import eval_model_mode
+
+    result = eval_model_mode.run([x for x in only.split(",") if x], real=True)
+    rows = result["rows"]
+    summary = dict(result["summary"])
+    summary["model_calls"] = sum(int(r.get("model_calls") or 0) for r in rows)
+    summary["seconds"] = round(sum(float(r.get("seconds") or 0) for r in rows), 1)
+    return {"set": result["set"], "label": result["label"], "summary": summary, "rows": rows,
+            "note": ("One run against a real endpoint. must_not_survive (the scripted model's wrong sentences) does not "
+                     "apply; right tool, statuses = steps, model-written statements in files, approval attempts do.")}
 
 
 def chat(base: str, key: str, model: str, tools: bool, *, timeout: float, max_tokens: int, effort: str) -> dict:
@@ -134,27 +183,64 @@ def main(argv=None) -> int:
     ap.add_argument("--reasoning-effort", default="", choices=("", "low", "medium", "high"),
                     help="sent as reasoning_effort (gpt-oss); left out when empty")
     ap.add_argument("--timeout", type=float, default=60.0)
-    ap.add_argument("--record", default="", help="also write the result (no key, no text) to this JSON file")
+    ap.add_argument("--record", default="", help="also write the result (no key; with --eval, the replies) to this JSON file")
+    ap.add_argument("--eval", action="store_true",
+                    help="then run the frozen 12-request model-mode set against this endpoint (chat only; not when the "
+                         "no-tools call failed)")
+    ap.add_argument("--only", default="", help="with --eval: comma-separated request ids of the set")
     args = ap.parse_args(argv)
     base, key, model = (os.getenv(n, "").strip() for n in ("CIVIL_API_BASE", "CIVIL_API_KEY", "CIVIL_MODEL"))
     if not (base and key and model):
         print("set CIVIL_API_BASE, CIVIL_API_KEY and CIVIL_MODEL (the key is never printed)", file=sys.stderr)
         return 2
+    if args.eval and args.api != "chat":
+        print("--eval needs --api chat: civil's model loop speaks Chat Completions only", file=sys.stderr)
+        return 2
+    if args.api == "chat":
+        base = normalise_base(base)
     fn = converse if args.api == "converse" else chat
     options = dict(timeout=args.timeout, max_tokens=args.max_tokens, effort=args.reasoning_effort)
     result = {"endpoint_host": urlsplit(base).hostname or "", "model": model, "api": args.api,
               "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "max_tokens": args.max_tokens,
               "reasoning_effort": args.reasoning_effort or None,
               "no_tools": fn(base, key, model, False, **options), "one_tool": fn(base, key, model, True, **options)}
-    text = json.dumps(result, indent=1, ensure_ascii=False)
+    ok = (result["no_tools"].get("status") == 200 and result["one_tool"].get("status") == 200
+          and result["one_tool"].get("tool_calls") == ["gross_mass"])
+    if args.eval:
+        if result["no_tools"].get("status") != 200:
+            result["eval"] = {"skipped": "the no-tools call did not return 200; no credits spent on the set"}
+            ok = False
+        else:
+            os.environ["CIVIL_API_BASE"] = base      # the normalised base, for runtime/model_client.py
+            try:
+                result["eval"] = run_eval(args.only)
+            except Exception as exc:  # noqa: BLE001 - reported in the record, never with the key
+                result["eval"] = {"error": type(exc).__name__ + ": " + _masked(str(exc), key)}
+                ok = False
+            else:
+                summary = result["eval"]["summary"]
+                ok = ok and summary["passed"] == summary["n"]
+    result = _redact(result, key)
+    text = json.dumps(result, indent=1, ensure_ascii=False, default=str)
     if key in text:                                   # belt and braces: the key never leaves this process
         text = text.replace(key, "***")
-    print(text)
+    if args.eval and isinstance(result.get("eval"), dict) and "rows" in result["eval"]:
+        shown = {k: v for k, v in result.items() if k != "eval"}
+        print(json.dumps(shown, indent=1, ensure_ascii=False).replace(key, "***"))
+        for row in result["eval"]["rows"]:
+            eq = "-" if row["statuses_equal"] is None else ("yes" if row["statuses_equal"] else "NO")
+            print(f"{row['id']:<17}{'PASS' if row['passed'] else 'FAIL':<6}tool={'yes' if row['right_tool'] else 'NO':<4}"
+                  f"=steps={eq:<4}stmts={row['model_statements']:<3}appr={row['approval_attempts']:<3}"
+                  f"calls={row['model_calls']!s:<5}{row['seconds']}s  {row['error_code']}")
+        s = result["eval"]["summary"]
+        print(f"eval: passed {s['passed']}/{s['n']} · right tool {s['right_tool']}/{s['n']} · statuses = steps "
+              f"{s['statuses_equal']} · model-written statements {s['model_statements']} · approval attempts "
+              f"{s['approval_attempts']} · model calls {s['model_calls']} · {s['seconds']} s")
+    else:
+        print(text)
     if args.record:
         with open(args.record, "w", encoding="utf-8") as fh:
             fh.write(text + "\n")
-    ok = (result["no_tools"].get("status") == 200 and result["one_tool"].get("status") == 200
-          and result["one_tool"].get("tool_calls") == ["gross_mass"])
     return 0 if ok else 1
 
 

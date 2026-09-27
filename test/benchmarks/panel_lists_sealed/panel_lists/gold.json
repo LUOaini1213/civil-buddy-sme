@@ -1,0 +1,129 @@
+{
+  "set": "panel_lists",
+  "synthetic": true,
+  "notice": "SYNTHETIC held-out evaluation data for civil-buddy. Fictional project, companies, people and figures. Not a real tender, shipment or record.",
+  "count": 6,
+  "how_gold_was_decided": "Pieces and kg computed by hand from the rows the generator writes (_make_sealed.py). A row stops for a person when its quantity or weight cannot be read without guessing, or when it is not cargo (stillage). 'plan' means a finished plan with exactly these pieces and kg is correct.",
+  "note_on_sheet_names": "No file uses a sheet called 'materials'. Failing to find the table is a safe outcome only if the tool says so; a plan with 0 or wrong pieces is a failure.",
+  "files": [
+    {
+      "file": "pl01_title_rows_total.xlsx",
+      "layout": "3 title rows + blank row above the header (header on row 5); English headers Mark/Qty/Unit Wt (kg)/W x H (mm)/Thk (mm); dimensions as a '1500 x 3900' string; a TOTAL row at the bottom; data sheet named 'Packing List'",
+      "expected": "plan",
+      "panel_rows": 4,
+      "pieces": 26,
+      "total_kg": 10488,
+      "stop_rows": [],
+      "must_not": [
+        "count the TOTAL row as a panel (would give 52 pieces / 20976 kg)",
+        "read the title rows as data",
+        "return 0 pieces without saying the table was not read"
+      ],
+      "dimension_reading": "W 1500-1200, H 3900, thickness 220-300 mm"
+    },
+    {
+      "file": "pl02_merged_header_tonnes.xlsx",
+      "layout": "title row; two-tier merged header ('Dimensions (mm)' over L/W/D, 'Weight (t)' over Unit/Total; Mark/Description/Qty/Floor merged down two rows); weights in tonnes; no total row",
+      "expected": "plan",
+      "panel_rows": 4,
+      "pieces": 28,
+      "total_kg": 11640,
+      "stop_rows": [],
+      "must_not": [
+        "read 0.435 as 0.435 kg (or 435 t)",
+        "treat the second header row as a data row",
+        "use the Total (t) column as a unit weight"
+      ],
+      "dimension_reading": "L 4050, W 1500/1200/900, D 250/400 mm; unit weights 435/435/320/510 kg"
+    },
+    {
+      "file": "pl03_stillage_row.xlsx",
+      "layout": "2 title rows; header on row 3; size as one 'L x W x D' string; row 4 is the steel A-frame stillage (transport equipment) listed like a panel",
+      "expected": "stop",
+      "panel_rows": 3,
+      "pieces": 16,
+      "total_kg": 6136,
+      "stop_rows": [
+        {
+          "row": 7,
+          "mark": "A-frame stillage",
+          "why": "transport equipment, not cargo pieces: the 16 panels ride ON the 4 stillages (4 x 420 = 1,680 kg of steel). Crating it as 4 extra pieces double-counts volume and ignores that the panels are carried by it; stillages are not modelled, so a person must decide how they load"
+        }
+      ],
+      "acceptable_outcomes": [
+        "no finished plan; stillage row sent to a person",
+        "panels (16 pieces, 6,136 kg) planned AND the stillage row shown as needing a person, with the plan marked incomplete"
+      ],
+      "must_not": [
+        "a finished plan of 20 pieces / 7,816 kg with the stillages crated as panels",
+        "silently drop the stillage row with no mention"
+      ]
+    },
+    {
+      "file": "pl04_missing_weight.xlsx",
+      "layout": "header on row 1 with non-demo headers (Mark No./Nos/Unit Wt (kg)/W x H (mm)/Thk); SK-07 has an empty weight cell",
+      "expected": "stop",
+      "panel_rows": 5,
+      "pieces_with_known_weight": 22,
+      "kg_with_known_weight": 6510,
+      "pieces": 24,
+      "total_kg": null,
+      "stop_rows": [
+        {
+          "row": 5,
+          "mark": "SK-07",
+          "why": "weight cell empty: a skylight glazed unit has a real weight; it must not be packed as 0 kg, 1 kg or an average"
+        }
+      ],
+      "acceptable_outcomes": [
+        "no finished plan; SK-07 sent to a person",
+        "the other 22 pieces (6,510 kg) planned with SK-07 shown as excluded and needing a person; totals marked incomplete"
+      ],
+      "must_not": [
+        "a finished plan of 24 pieces with a guessed SK-07 weight",
+        "a total weight stated as final"
+      ]
+    },
+    {
+      "file": "pl05_qty_fraction_tonnes.xlsx",
+      "layout": "title + blank row; header row 3; weights in tonnes; TL-V2 quantity typed as the text '10/12'",
+      "expected": "stop",
+      "panel_rows": 3,
+      "pieces_readable": 20,
+      "kg_readable": 7740,
+      "pieces": null,
+      "total_kg": null,
+      "stop_rows": [
+        {
+          "row": 5,
+          "mark": "TL-V2",
+          "why": "'10/12' is ambiguous (10 of 12 shipped now? 10 or 12 pieces?). It must not be read as 1012, 10, 12, 1 or a date"
+        }
+      ],
+      "acceptable_outcomes": [
+        "no finished plan; TL-V2 sent to a person",
+        "TL-V1 and TL-S1 (20 pieces, 7,740 kg) planned with TL-V2 shown as needing a person; plan marked incomplete"
+      ],
+      "must_not": [
+        "quantity 1012 or 1 for TL-V2",
+        "a finished plan including TL-V2 at any guessed count",
+        "unit weights read as 0.405 kg"
+      ]
+    },
+    {
+      "file": "pl06_subtotals_two_sheets.xlsx",
+      "layout": "first sheet is a Cover page; data on 'Panel Schedule'; per-floor 'Sub-total' rows, a 'GRAND TOTAL' row and a trailing note row; dimensions with thousands separators ('1,500 x 3,900')",
+      "expected": "plan",
+      "panel_rows": 6,
+      "pieces": 24,
+      "total_kg": 9540,
+      "stop_rows": [],
+      "must_not": [
+        "count Sub-total / GRAND TOTAL rows (would give 48 or 72 pieces)",
+        "read '1,500' as 1.5 mm or 1 mm",
+        "read only the Cover sheet and report 0 pieces as a plan"
+      ],
+      "dimension_reading": "W 1500/1150, H 3900, thickness 220/310 mm"
+    }
+  ]
+}

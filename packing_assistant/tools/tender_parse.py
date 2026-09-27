@@ -341,6 +341,8 @@ def _document_summary(doc: Any) -> Dict[str, Any]:
             "candidates": [{"text": p.text[:300], "locator": p.ref} for p in tender_document.rejection_candidates(doc)],
             "cut": any(p.text.startswith("（未读完）") for p in doc.pieces),
             "forms": [{"name": name, "locator": piece.ref} for name, piece in tender_document.forms(doc)],
+            "remainder": [{"name": row.name, "text": row.content, "locator": row.piece.ref}
+                          for row in tender_document.front_remainder(doc)],
             "review": [{"group": group, "factor": factor, "standard": standard[:300], "locator": piece.ref}
                        for group, factor, standard, piece in tender_document.review_standards(doc)]}
 

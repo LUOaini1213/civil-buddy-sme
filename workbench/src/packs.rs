@@ -1524,11 +1524,28 @@ fn gather_tender_source(ctx: &ToolCtx, args: &Value) -> String {
 }
 
 fn parse_tender(ctx: &mut ToolCtx, args: &Value) -> String {
+    let project = nonempty(&s(args, "project_name"), "未命名招标");
+    let originals = match crate::attach::upload_originals(&ctx.paths, &ctx.session_id) {
+        Ok(files) => files,
+        Err(err) => return format!("拒绝写盘：招标原附件读取失败：{err}"),
+    };
+    if !originals.is_empty() {
+        let typed: Vec<String> = ["tender_text", "text", "excerpt", "source", "body"].iter()
+            .map(|key| s(args, key)).filter(|text| !text.is_empty()).collect();
+        let result = crate::packing_bridge::tender_extract_files(&typed.join("\n"), &project, &originals);
+        return match result {
+            Ok(value) if value["ok"] == true => match value["extract_table_markdown"].as_str().filter(|s| !s.trim().is_empty()) {
+                Some(md) => ctx.write_md("招标解析表.md", md).unwrap_or_else(|err| err),
+                None => "拒绝写盘：全文解析没有返回可用表格".into(),
+            },
+            Ok(_) => "拒绝写盘：招标全文解析失败，请检查原附件".into(),
+            Err(err) => format!("拒绝写盘：招标原附件读取失败：{err}。请检查 Python 引擎和附件；未回退为截断正文。"),
+        };
+    }
     let text = gather_tender_source(ctx, args);
     if text.trim().is_empty() {
         return "拒绝写盘：没有招标正文。请粘贴 ITT 或上传 pdf/docx/xlsx/txt 后再抽。".into();
     }
-    let project = nonempty(&s(args, "project_name"), "未命名招标");
     let (jur, banner) = zone_banner(args);
     let facts = crate::extract::facts_from_text(&text);
     let portal = if jur == "SG" || jur == "DUAL" {

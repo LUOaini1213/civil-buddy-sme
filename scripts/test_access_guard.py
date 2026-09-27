@@ -110,6 +110,27 @@ class GatewayTests(Case):
             self.assertEqual(200, client.get("/api/tools", headers={"Authorization": "bearer " + TOKEN}).status_code)
             self.assertEqual(200, client.get("/api/health").status_code)
 
+    def test_browser_page_without_token_gets_an_html_401_and_no_app(self) -> None:
+        # A browser opening a gated page (/demo) or a bad ?token= link gets a short page saying how to get access,
+        # still 401 and with nothing of the app; API and socket paths keep their JSON / close codes.
+        os.environ["CIVIL_TOKEN"] = TOKEN
+        html = {"Accept": "text/html,application/xhtml+xml"}
+        for client in (TestClient(gateway.app), TestClient(gateway.app, **REMOTE)):
+            page = client.get("/demo", headers=html)
+            self.assertEqual(401, page.status_code)
+            self.assertTrue(page.headers["content-type"].startswith("text/html"))
+            self.assertIn("Access token required", page.text)
+            self.assertNotIn("/api/tender/link", page.text)
+            api = client.get("/api/tools", headers=html)
+            self.assertEqual(401, api.status_code)
+            self.assertIn("CIVIL_TOKEN", self.detail(api))
+            self.assertEqual(401, client.post("/demo", headers=html).status_code)
+            bad = TestClient(gateway.app, follow_redirects=False).get("/", params={"token": "wrong"}, headers=html)
+            self.assertEqual(401, bad.status_code)
+            self.assertNotIn("set-cookie", bad.headers)
+            self.assertIn("Access token required", bad.text)
+            self.assertEqual(200, client.get("/demo", headers={**html, **BEARER}).status_code)
+
     def test_gateway_websocket_refused_for_remote(self) -> None:
         real = HUB.subscribe
 
