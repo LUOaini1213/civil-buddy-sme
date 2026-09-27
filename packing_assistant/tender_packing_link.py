@@ -32,9 +32,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 SCHEMA = "tender.packing_link.v1"
 LINK_FILE = "tender-packing-link.json"
@@ -452,6 +454,21 @@ def _clause_units(text: str, source: Optional[str] = None) -> List[Dict[str, Any
     return [u for u in units if u.get("text")]
 
 
+# A sentence the reader does not take apart figure by figure: more mass figures, or more characters, than any limit
+# sentence a tender carries (the repo's tenders, dev and sealed sets: at most 5 figures and 265 characters). Reading
+# each figure against the words before it costs figures x length, so an upload of one run-on sentence with thousands
+# of figures held a server slot for minutes. Such a sentence goes to a person whole: never read, never dropped.
+MAX_FIGURES_PER_SENTENCE = 12
+MAX_SENTENCE_CHARS = 2000
+
+
+def _checkpoint() -> None:
+    """Cooperative stop: a timed-out or cancelled tool run stops here and releases its slot (runtime/cancel.py)."""
+    from packing_assistant.runtime import cancel
+
+    cancel.check()
+
+
 def _mass_figures(text: str) -> List[Tuple[float, int, int]]:
     """Every mass figure in ``text`` as (kg, start, end). Pounds and short / long tons are converted
     (1 lb = 0.45359237 kg); ``text[start:end]`` is the figure as written."""
@@ -643,16 +660,18 @@ def _mass_limits(body: str, context: str = "") -> Dict[str, Any]:
     """The mass limits a clause sets, sorted by what they limit. A limit on a stillage, a crate, a piece or a crane
     lift is a per-package limit and a truck's is a vehicle limit: neither is ever compared with a container's gross
     mass. A figure in a sentence that reads like a transport limit but names none of these is returned as not placed,
-    for a person - it never disappears."""
+    for a person - it never disappears. So does a sentence too dense to read figure by figure ("dense": its figure
+    count and length; MAX_FIGURES_PER_SENTENCE, MAX_SENTENCE_CHARS)."""
     import bisect
 
     out: Dict[str, Any] = {"container": [], "basis": [], "written": {}, "package": [], "package_subjects": [], "vehicle": [],
-                           "unplaced": [], "implausible": [], "pending": []}
+                           "unplaced": [], "implausible": [], "pending": [], "dense": []}
     # the clause as a whole is about transport or packing ("Containers: 40HQ only. ... the terminal accepts up to 32 t")
     clause_transport = bool(_TRANSPORT_RE.search(_STRUCTURAL_LOAD_RE.sub(" ", body)) or _names_container(body)
                             or (context and _TRANSPORT_RE.search(context)))
     carried = (False, False, True)
     for sentence in (s for s in _SENTENCE_RE.split(body) if s and s.strip()):
+        _checkpoint()
         plain = _STRUCTURAL_LOAD_RE.sub(" ", sentence)
         figures = _mass_figures(plain)
         own = (bool(_LIMIT_RE.search(plain)), bool(_MASS_WORD_RE.search(plain)), _upper_bound(plain))
@@ -664,6 +683,11 @@ def _mass_limits(body: str, context: str = "") -> Dict[str, Any]:
             continue
         # "Each 40HQ shall not exceed 26 t": a container type code is a container term too
         transport = bool(clause_transport or _TRANSPORT_RE.search(plain) or _names_container(plain))
+        if len(figures) > MAX_FIGURES_PER_SENTENCE or len(sentence.strip()) > MAX_SENTENCE_CHARS:
+            # only a sentence whose figures could be read as a limit (placed or not placed below) goes to a person
+            if (limit and (massy or transport)) or (transport and massy):
+                out["dense"].append((len(figures), len(sentence.strip())))
+            continue
         if limit and transport and not (upper and _upper_bound(plain)):
             # "shall be more than 20 t", "at least 2 t": not an upper bound - a person reads it, it is never "covered"
             out["unplaced"].append(sentence.strip())
@@ -776,6 +800,7 @@ def logistics_clauses(text: str, source: Optional[str] = None) -> List[Dict[str,
     # every row of a table shares its caption and header: what they say is read once per table, not once per row
     arounds: Dict[str, Tuple[bool, bool]] = {}
     for unit in _clause_units(text, source):
+        _checkpoint()
         # a table row is read with its column's unit ("5" under "Max gross mass (t)" is 5 t); the row is quoted as written
         body = unit.get("read") or unit["text"]
         around = unit.get("context") or ""
@@ -843,8 +868,14 @@ def logistics_clauses(text: str, source: Optional[str] = None) -> List[Dict[str,
         transport = bool(around_transport or _TRANSPORT_RE.search(_CONTAINER_TERM_RE.sub(" ", plain))
                          or _CONTAINER_RE.search(plain) or _GP_RE.search(plain))
         mixed_requirement = _mixed_processor_requirement(body, around)
-        if limits["unplaced"] or mixed_requirement:
+        if limits["dense"]:
+            # too many figures in one sentence to read them one by one: the clause goes to a person as a whole
             kinds.append("unplaced")
+            detail["dense"] = {"sentences": len(limits["dense"]), "mass_figures": max(n for n, _ in limits["dense"]),
+                               "chars": max(c for _, c in limits["dense"])}
+        if limits["unplaced"] or mixed_requirement:
+            if "unplaced" not in kinds:
+                kinds.append("unplaced")
             if mixed_requirement or any(_processor_text(part) for part in limits["unplaced"]):
                 # keep the unresolved constraint as a stop, without promoting an instruction from the source into
                 # our statement
@@ -1172,8 +1203,10 @@ def build_checks(clauses: Sequence[Dict[str, Any]], decision: Dict[str, Any], pl
         heaviest = {"container_no": mass["heaviest_container_no"]}
         cargo, tare, gross = mass["max_cargo_kg"], mass["container_tare_kg"], mass["max_gross_kg"]
         figures = {"limit_kg": limits[0] if len(limits) == 1 else limits, "limit_basis": basis, **mass}
-        if len(limits) != 1 or tare is None:
-            why = ("several mass figures in one clause: " + ", ".join(_kg(x) for x in limits)) if len(limits) != 1 else f"no tare for {ctype}"
+        if len(limits) != 1 or tare is None or clause.get("dense"):
+            why = (("several mass figures in one clause: " + ", ".join(_kg(x) for x in limits)) if len(limits) != 1 else
+                   f"no tare for {ctype}" if tare is None else
+                   "another sentence of the clause has too many figures to read one by one; a person reads it first")
             checks.append(_check("gross_mass", clause, "human_required",
                                  _placeholder("logistics", f"gross mass per container ({_ref(clause)}): {why}"), figures, why, True))
             continue
@@ -1307,6 +1340,21 @@ def build_checks(clauses: Sequence[Dict[str, Any]], decision: Dict[str, Any], pl
                                  {"plan_file": None}, why, True))
     # the safety net: what the reader found but could not place goes to a person, quoted - it never disappears
     for clause in by_kind["unplaced"]:
+        dense = clause.get("dense")
+        if dense:
+            # one row for the clause, never read figure by figure and never quoted (it may be the whole upload)
+            checks.append(_check("unplaced", clause, "human_required",
+                                 _placeholder("logistics", ("too many figures in one sentence" if dense["mass_figures"] >
+                                                            MAX_FIGURES_PER_SENTENCE else "a sentence too long")
+                                                           + " for a reliable reading — "
+                                                           f"{_ref(clause)} has a sentence with {dense['mass_figures']} mass "
+                                                           f"figure(s) ({dense['chars']} characters). The tool did not read its "
+                                                           f"limits one by one; a person reads {_ref(clause)} and says which "
+                                                           "limits apply to the plan"),
+                                 {"quoted": None, "mass_figures": dense["mass_figures"], "sentence_chars": dense["chars"],
+                                  "dense_sentences": dense["sentences"]},
+                                 "a sentence too dense to read figure by figure", True))
+            continue
         if clause.get("unplaced_instruction"):
             checks.append(_check("unplaced", clause, "human_required",
                                  _placeholder("logistics", f"unresolved mass/transport requirement at {_ref(clause)}. "
@@ -1495,6 +1543,8 @@ _FIGURE_LABEL = {
     "mid50": "CTU mid-length mass share {}", "asks_for": "the clause asks for {}", "n_boxes": "{} crates checked",
     "pass": "{} pass", "needs_reinforcement": "{} need reinforcement", "fail": "{} fail",
     "pending_design": "{} pending detailed design", "rows_per_container": "rows by container: {}",
+    "mass_figures": "{} mass figures in one sentence", "sentence_chars": "sentence of {} characters",
+    "dense_sentences": "{} such sentence(s)",
 }
 
 
@@ -1613,12 +1663,36 @@ def report_markdown(record: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------------------------------------
 # the run
 
+#: the most tender text (UTF-8 bytes) run_link reads in this context; None: no limit (the CLI, an agent turn). The web
+#: upload sets one (gateway/web_link.py) and turns "too_large" into a 413 - known only once a .docx / .pdf is read.
+_TEXT_LIMIT: ContextVar[Optional[Dict[str, int]]] = ContextVar("tender_text_limit", default=None)
+
+
+@contextmanager
+def tender_text_limit(max_bytes: int) -> Iterator[Dict[str, int]]:
+    """Within the block run_link refuses tender text over ``max_bytes``; the yielded dict then holds "too_large"
+    (the text's size). The tool's worker thread sees it through contextvars.copy_context(), as ToolEngine runs it."""
+    seen = {"max_bytes": int(max_bytes)}
+    token = _TEXT_LIMIT.set(seen)
+    try:
+        yield seen
+    finally:
+        _TEXT_LIMIT.reset(token)
+
+
 def _read_tender(path: Path) -> str:
     from packing_assistant.office_job import DOCUMENT_FILE_CHARS, read_material_checked
 
     body, why = read_material_checked(path, DOCUMENT_FILE_CHARS)
     if why:
         raise ValueError(f"the tender {path.name} could not be read: {why}")
+    limit = _TEXT_LIMIT.get()
+    if limit is not None:
+        size = len(body.encode("utf-8"))
+        if size > limit["max_bytes"]:
+            limit["too_large"] = size
+            raise ValueError(f"the tender {path.name} has {size // 1024} kB of text; at most {limit['max_bytes'] // 1024} kB "
+                             "is read here")
     return body
 
 
@@ -1649,6 +1723,7 @@ def run_link(tender_path: str, packing_list: str, *, previous: Optional[Dict[str
     tender, table = _resolve_job_file(Path(tender_path)), _resolve_job_file(Path(packing_list))
     text = _read_tender(tender)
     clauses = logistics_clauses(text, source=tender.name)
+    _checkpoint()           # between phases too: a run past its deadline stops before the next one
     decision = container_decision(clauses, requested=container_type)
     plan: Optional[Dict[str, Any]] = None
     if decision["type"]:
@@ -1689,7 +1764,9 @@ def run_link(tender_path: str, packing_list: str, *, previous: Optional[Dict[str
             "unmapped_columns": reading.get("unmapped_columns") or []}
     record["changes_since_previous"] = compare(previous, record, exports)
 
+    _checkpoint()
     parsed = parse_tender_text(text, source="tender-packing-link")
+    _checkpoint()
     reqs = list(parsed.get("requirements") or [])
     base = build_response_matrix(reqs, packing_summary=None)
     rows = [r for r in base["rows"] if r.get("category") not in ("transport", "packaging")] + matrix_rows(checks)
