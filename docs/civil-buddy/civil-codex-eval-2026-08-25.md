@@ -53,7 +53,7 @@ GitHub **openai/codex**：★ **117,225** · Apache-2.0 · Rust · `pushed_at` *
 ## 3. 土木版 Codex 对位（本机闸 + GitHub 现网同一棵树）
 
 本机：`python scripts/test_civil_codex.py` **PASS**；`live_eval()` **offline_gate_pass**。  
-远程 [LUOaini1213/civil-buddy](https://github.com/LUOaini1213/civil-buddy)：★ **0** · `pushed_at` **2026-08-25T02:48:03Z** · HEAD **`f467e9c`**（与本机 `git rev-parse HEAD` 一致）。  
+远程开发仓库：★ **0** · `pushed_at` **2026-08-25T02:48:03Z** · HEAD **`f467e9c`**（与本机 `git rev-parse HEAD` 一致）。  
 raw `demo/static/index.html` 已是简化工作台（`v=ui2`，聊天优先、岗位搜索）。`.agents/skills/` 现网 **67** 个目录（66 岗 + `civil-buddy` 路由器）。外人 `git clone` **看得到** 本日 TUI / skills / 简化 UI。
 
 相对 08-24：**GitHub 落后本机 → 已关闭。**

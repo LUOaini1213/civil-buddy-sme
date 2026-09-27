@@ -92,7 +92,8 @@ The script computes these from the drafts instead of claiming them; on 2026-09-2
 
 - tender.parse.md shows 0 of the 12 façade specification clauses (PMU, VMU, heat soak, water test,
   PE endorsement, warranty, A-frame delivery, 40HQ containers, gross mass, CTU Code, delivery sequence,
-  insurance), and no LDs or retention row (the linked run reads the five logistics ones itself);
+  insurance) (the linked run reads the five logistics ones itself); on `main` after v0.7.0 the LDs and
+  retention rows are kept as unclassified rows for a person to check;
 - the plan was 6 × 40HQ, one panel per crate, and the same with Chinese notes, English notes and no
   notes at all (the script packs a copy with the notes removed as the control): the notes (glass,
   upright, no stacking) do not change it, and A-frame stillages are not modelled — that needs the

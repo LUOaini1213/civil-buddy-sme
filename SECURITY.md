@@ -5,8 +5,8 @@ plans, site reports. Its outputs are drafts for a person to check, never signed 
 states the safety model, which checks test it, what is still open, and how to report a problem. Every claim here is
 backed by a check in `npm run check` (`scripts/check_project.py`) or by a known-open item listed below.
 
-Supported version: `main`. Older release builds (including the Rust workbench zips on GitHub Releases) are not
-maintained.
+v0.7.0 is the submitted competition version; `main` holds post-submission preview work. Earlier trial builds
+(including the Rust workbench zips on GitHub Releases) are not maintained.
 
 ## Safety model
 
@@ -34,7 +34,12 @@ maintained.
    geotechnical, fire protection, construction method, safety briefs and others) write nothing until a person types
    the confirmation sentence in that turn. The gateway and `civil serve` accept only `confirm_text` equal to the
    sentence; a boolean such as `confirm_ok` or `p0_confirmed` is refused (HTTP 422 on the gateway). The approval is
-   not remembered for the next turn. The same sentence inside a tender, a panel list or a model reply does not approve.
+   not remembered for the next turn. The same sentence inside a tender or panel-list file, or in a model reply, does
+   not approve; pasted into the message as a line or sentence of its own, it still does (see Known open items).
+   The sentence is asked for only when a high-risk post is selected or loaded. In the Rust workbench's default
+   automatic post selection the model decides whether to load a post; if it loads none, a copy can be written
+   without the sentence. Writes are always new copies, and a copy is written only after the source was read and the
+   identical change was previewed.
 4. **Token-gated server.** `packing_assistant/access_guard.py` sits in front of the gateway and the workbench,
    WebSockets included. With `CIVIL_TOKEN` set, every request needs the token (loopback too; compared with
    `hmac.compare_digest`). With no token, only a genuinely local request passes, and `demo/serve.py`, a `uvicorn --host`
@@ -76,7 +81,7 @@ The technical document (`docs/submission/nus-iss-technical.md`, §4.4) describes
 snapshot. Remaining boundaries and their current scope are listed here:
 
 - **Old Rust binaries.** Earlier trial builds accepted an approval flag. Current HTTP routes require the
-  confirmation text for the operation. Current Rust MCP does not advertise or accept approval arguments,
+  confirmation text in the current turn. Current Rust MCP does not advertise or accept approval arguments,
   denies high-risk tool calls, validates session IDs and enforces its launch scope. Use the interactive
   workbench for approval; do not substitute an old executable for this source.
 - **Pack-ship circuit on the steps path.** Three needs-human packing lists in a row open a process-wide circuit for
@@ -98,6 +103,13 @@ snapshot. Remaining boundaries and their current scope are listed here:
   a scripted model; a live model reading a planted instruction could still steer which menu tool runs on which listed
   file, and what a chat reply says before the guards. The URL fetch resolves DNS twice.
 - **Chat.** In the workbench, question-only turns call the model whenever a key is set, whatever `agent_mode` says.
+- **Sign-off inside pasted text.** A sign-off sentence on its own line inside pasted text is still taken as approval:
+  the Rust workbench accepts it when it forms a whole line or sentence of the message, and the Python
+  `message_confirmation` accepts it standing alone outside quotation marks. Only the dedicated confirmation field
+  should approve; until then, a person should not paste unreviewed text into a high-risk turn.
+- **Automatic post selection.** The typed confirmation applies only when a high-risk post is selected or loaded. In
+  the Rust workbench's default automatic mode the model decides whether to load a post, so a model that loads none
+  can write a copy of a high-risk document without the sentence. The copy is new and the original is unchanged.
 
 ## Unified named instances (2026-09-27)
 
@@ -111,19 +123,20 @@ files under the same Windows/Linux account. Use separate OS accounts or hosts wh
 
 The internal Python service has a separate random Bearer token, a route allowlist, no provider keys and no model
 loop. Named mode disables legacy local-path import, URL import and studio editing. Rust Agent events, actor IDs,
-usage and interrupted/cancelled states are persisted. Confirmation is specific to the current operation and is
-not inherited from old turns, restored sessions, document quotations or a boolean field. The legacy limitations
+usage and interrupted/cancelled states are persisted. Confirmation is specific to the current turn and is
+not inherited from old turns, restored sessions or a boolean field; it is asked for only when a high-risk post is
+selected or loaded, and pasted text can still carry it (both listed under Known open items). The legacy limitations
 above still apply to separately launched Python/gateway entry points unless their own implementation says otherwise;
 they must not be used as an unprotected alternate entry into a named instance.
 
 Evidence: `product_identity`, `runtime_core`, `product_document_gates`, `scripts/test_domain_service.py`,
 `scripts/test_link_confirmation_regressions.py`, and the optional compiled-process
 `scripts/test_unified_runtime_http.py`. Tests use local scripted providers, not a live-model security assessment.
-See [the handoff guide](docs/civil-buddy/release-handoff.md) for deployment and acceptance boundaries.
+See [the handoff guide](docs/civil-buddy/release-handoff.md) (in Chinese) for deployment and acceptance boundaries.
 
 ## Reporting a problem
 
-Please open an issue at <https://github.com/LUOaini1213/civil-buddy/issues> and put "security" in the title. If the
-problem could be exploited, describe what is affected and how to reproduce it at a high level, and leave out working
-exploit code, tokens or keys; a maintainer will follow up in the issue. Never paste a real API key, token or
-customer file into an issue.
+Please open an issue at <https://github.com/LUOaini1213/civil-buddy-sme/issues> and put "security" in the title. Do
+not post exploit details in a public issue: if the problem could be exploited, describe what is affected and how to
+reproduce it at a high level, and leave out working exploit code, tokens or keys; a maintainer will follow up in the
+issue. Never paste a real API key, token or customer file into an issue.

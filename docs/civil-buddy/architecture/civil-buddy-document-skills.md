@@ -22,13 +22,13 @@
 
 关键源码证据：
 
-- [model_loop.py:53](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/runtime/model_loop.py#L53)：`read_job_file / run_skill` 等模型工具；`run_skill` 没有正文或编辑 patch 参数。
-- [office_job.py:441](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/office_job.py#L441)：PDF/DOCX/Excel 阅读入口。通用 Excel 预览最多每 sheet 80 行 × 16 列，`data_only=True` 读已有缓存值，不计算公式；专项解析覆盖范围另计。
-- [office_job.py:132](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/office_job.py#L132)：现有工作簿修改仅为重建草稿 sheets。测试证明指定原 sheet 值保留，不代表复杂图表/外链/宏全面保真。
-- [document_text.py:51](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/document_text.py#L51)：DOCX 顺序与表格文字抽取，没有完整节点、合并格、样式和布局 IR。
-- [word_export.py:256](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/word_export.py#L256)：生成新 OOXML，不能当成修改原 DOCX 并保留原版式。
-- [paths.py:62](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/skills/civil-buddy/scripts/paths.py#L62)：施工模板工具依赖仓外 `GROK_HOME`/`.grok` 脚本，不能算仓内完整通用 Word 引擎。
-- [parse.rs:103](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/workbench/src/parse.rs#L103)：Rust 可选重型 PDF 解析。存在适配代码不证明本机依赖就绪、扫描件或表格准确。
+- [model_loop.py:53](../../../packing_assistant/runtime/model_loop.py)：`read_job_file / run_skill` 等模型工具；`run_skill` 没有正文或编辑 patch 参数。
+- [office_job.py:441](../../../packing_assistant/office_job.py)：PDF/DOCX/Excel 阅读入口。通用 Excel 预览最多每 sheet 80 行 × 16 列，`data_only=True` 读已有缓存值，不计算公式；专项解析覆盖范围另计。
+- [office_job.py:132](../../../packing_assistant/office_job.py)：现有工作簿修改仅为重建草稿 sheets。测试证明指定原 sheet 值保留，不代表复杂图表/外链/宏全面保真。
+- [document_text.py:51](../../../packing_assistant/document_text.py)：DOCX 顺序与表格文字抽取，没有完整节点、合并格、样式和布局 IR。
+- [word_export.py:256](../../../packing_assistant/word_export.py)：生成新 OOXML，不能当成修改原 DOCX 并保留原版式。
+- [paths.py:62](../../../skills/civil-buddy/scripts/paths.py)：施工模板工具依赖仓外 `GROK_HOME`/`.grok` 脚本，不能算仓内完整通用 Word 引擎。
+- [parse.rs:103](../../../workbench/src/parse.rs)：Rust 可选重型 PDF 解析。存在适配代码不证明本机依赖就绪、扫描件或表格准确。
 
 `admin-office` 是会务后勤岗位，并非 Office 编辑器。当前 Codex 的 PDF/Word/Excel 技能也不会自动安装进 Civil Buddy。项目内 Skill、工具注册、依赖检测、权限、UI 和验证链需要共同接通。
 

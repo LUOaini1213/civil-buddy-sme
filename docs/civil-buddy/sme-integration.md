@@ -1,12 +1,14 @@
 # SME competition integration
 
 The competition repository is [LUOaini1213/civil-buddy-sme](https://github.com/LUOaini1213/civil-buddy-sme).
-Its SME introduction (`0c0e803`) is retained. The unified workbench work from the original repository
-(`718c61b`) was merged into this repository at `3667813`; subsequent fixes and release records belong here.
-The original repository's draft PR #70 is not a release of this competition entry.
+The version submitted for NUS-ISS shortlisting is release v0.7.0 (`0c0e803`); its SME introduction is retained.
+After v0.7.0, the unified workbench from earlier development work (`718c61b`) was merged into this repository at
+`3667813` (PR #1), and a `/demo` page and a Lightsail guide followed in PR #2; none of this is in the submitted
+PDFs. Subsequent fixes and release records belong here. Draft work in the earlier development repository is not a
+release of this competition entry.
 
-The [submission-time local audit](submission-sync-20260927.md) records additional branch and working-directory
-features recovered after this first integration, their entry points and remaining acceptance limits.
+Features recovered after this first integration, and their remaining acceptance limits, are listed in the notes
+of the v0.8.0 preview releases.
 
 ## What is being integrated
 
@@ -14,8 +16,9 @@ features recovered after this first integration, their entry points and remainin
 - Persistent Agent events, actor IDs, usage, errors, cancellation and interrupted-task recovery.
 - A fixed Python service for deterministic CAD, planning, packing and specialist workflows; no model
   credentials are passed to that service.
-- A typed high-risk confirmation for the current operation, without inheriting approval from old
-  messages, attachments or imported packages.
+- A typed high-risk confirmation for the current turn, without inheriting approval from old
+  messages, attachments or imported packages; it applies when a high-risk post is selected or loaded (see
+  [SECURITY.md](../../SECURITY.md) for the open items).
 - Business project packages and full specialist-session bundles; raw attachments and generated
   deliverables survive transfer, while approval is reset.
 - English tender/packing linkage, wider clause handling, evidence-bound explanations and synthetic
@@ -26,7 +29,7 @@ packing → clause-linked English draft. CAD, planning and logistics pages are s
 The existing technical document explicitly describes commit `a161251`: its test counts, file line numbers
 and statements about missing Rust identity are historical, not a description of the integrated source.
 Current behavior is described in [the unified workbench guide](unified-workbench.md),
-[SECURITY.md](../../SECURITY.md) and [the handoff guide](release-handoff.md).
+[SECURITY.md](../../SECURITY.md) and [the handoff guide](release-handoff.md) (in Chinese).
 
 ## Verification and limits
 
