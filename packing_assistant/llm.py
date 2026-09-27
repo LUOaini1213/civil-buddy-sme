@@ -75,6 +75,18 @@ def llm_available() -> bool:
     return bool(llm_config().get("api_key"))
 
 
+def _refused(exc: BaseException) -> bool:
+    """True when an httpx.ConnectError (refused, DNS, TLS) is anywhere in the cause chain. langchain-openai 1.x
+    re-raises the SDK's APIConnectionError as its own OpenAIConnectionError, so the httpx error is two causes
+    down, not one."""
+    seen = 0
+    while exc is not None and seen < 8:
+        if type(exc).__name__ == "ConnectError":
+            return True
+        exc, seen = exc.__cause__ or (None if exc.__suppress_context__ else exc.__context__), seen + 1
+    return False
+
+
 def chat(
     system: str,
     user: str,
@@ -82,32 +94,53 @@ def chat(
     temperature: float = 0.2,
     max_tokens: int = 2000,
 ) -> Optional[str]:
-    """调用 Chat Completions；失败返回 None。"""
+    """调用 Chat Completions；失败返回 None。
+
+    429 / 5xx / 超时 / 连接被重置时最多重试 2 次（packing_assistant/model_retry.py），全部尝试和等待都在
+    LLM_TIMEOUT 之内；SDK 自带的重试保持关闭（max_retries=0），因为它也会重试 408/409 这类 4xx。"""
     cfg = llm_config()
     if not cfg["api_key"]:
         return None
+    from packing_assistant import model_retry
+
     try:
+        import openai
         from langchain_openai import ChatOpenAI
         from langchain_core.messages import HumanMessage, SystemMessage
 
         # 短超时：避免 UI/pipeline 被远端 API 挂死（默认 8s，可用 LLM_TIMEOUT 覆盖）
         _to = float(os.getenv("LLM_TIMEOUT") or 8)
-        llm = ChatOpenAI(
-            model=cfg["model"],
-            api_key=cfg["api_key"],
-            base_url=cfg["base_url"],
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout=_to,
-            max_retries=0,
-        )
-        resp = llm.invoke(
-            [SystemMessage(content=system), HumanMessage(content=user)]
-        )
+
+        def attempt(remaining: float) -> Any:
+            llm = ChatOpenAI(
+                model=cfg["model"],
+                api_key=cfg["api_key"],
+                base_url=cfg["base_url"],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=min(_to, remaining),
+                max_retries=0,
+            )
+            try:
+                return llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+            except openai.APIStatusError as exc:
+                if not model_retry.retryable_status(exc.status_code):
+                    raise
+                raise model_retry.Transient(
+                    exc, reason=f"HTTP {exc.status_code}",
+                    retry_after=model_retry.parse_retry_after(exc.response.headers.get("retry-after")),
+                    excerpt=model_retry.safe_excerpt(exc.body if exc.body is not None else "", (cfg["api_key"],)),
+                ) from None
+            except openai.APIConnectionError as exc:   # includes APITimeoutError
+                if _refused(exc):
+                    raise                               # refused: a dead endpoint, not a blip
+                raise model_retry.Transient(exc, reason=type(exc).__name__) from None
+
+        resp = model_retry.run(attempt, budget_s=_to, label="llm.chat(langchain)")
         text = str(resp.content or "").strip()
         return text or None
     except Exception as e:
-        return f"[LLM_ERROR] {type(e).__name__}: {e}"
+        return f"[LLM_ERROR] {type(e).__name__}: {model_retry.safe_excerpt(e, (cfg['api_key'],))}"
 
 
 def chat_json_array(system: str, user: str) -> Optional[List[Dict[str, Any]]]:

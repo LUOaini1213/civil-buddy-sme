@@ -286,7 +286,9 @@ def test_a_model_429_is_reported_as_rate_limiting() -> None:
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Throttled)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    env = {"CIVIL_API_BASE": f"http://127.0.0.1:{server.server_port}/v1", "CIVIL_API_KEY": "local-fake", "CIVIL_MODEL": "m"}
+    # main's model_retry (PR #6) retries a 429 and words it; no retry here, only the wording is checked
+    env = {"CIVIL_API_BASE": f"http://127.0.0.1:{server.server_port}/v1", "CIVIL_API_KEY": "local-fake", "CIVIL_MODEL": "m",
+           "CIVIL_MODEL_RETRIES": "0"}
     try:
         with patch.dict(os.environ, env):
             model_client.complete([{"role": "user", "content": "hi"}])
@@ -297,8 +299,8 @@ def test_a_model_429_is_reported_as_rate_limiting() -> None:
     finally:
         server.shutdown()
         server.server_close()
-    assert "rate-limiting (429); retry later" in message and "限流" in message and "5 秒" in message, message
-    assert "Key" not in message, message
+    assert "429" in message and "限流" in message and "稍后重试" in message, message
+    assert "Key" not in message and "local-fake" not in message, message
 
 
 def test_restart_marks_running_sessions_interrupted() -> None:

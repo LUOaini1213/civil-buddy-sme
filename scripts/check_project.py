@@ -125,12 +125,17 @@ CHECKS = (
     Check("middleware", ("scripts/test_agent_middleware.py",)),
     Check("deadlock", ("scripts/test_deadlock.py",)),
     Check("runtime-cancel-isolation", ("scripts/test_runtime_cancel_isolation.py",)),
+    # the shared ToolEngine's fault circuit: open after 3 faults, half-open trial after the cool-down
+    Check("tool-circuit", ("scripts/test_tool_circuit.py",)),
+    Check("lg-checkpoint-errors", ("scripts/test_lg_checkpoint_errors.py",)),
     Check("sandbox", ("scripts/test_sandbox.py",)),
     Check("pack-ship-read-sandbox", ("scripts/test_pack_ship_read_sandbox.py",), timeout=300),
     Check("civil-cli", ("scripts/test_civil_codex.py",)),
     Check("civil-config", ("scripts/test_civil_config.py",)),
     Check("civil-workspace", ("scripts/test_civil_workspace.py",)),
     Check("model-loop", ("scripts/test_model_loop.py",)),
+    # bounded retry of one model request (429/5xx/timeouts/resets) against a fake endpoint on 127.0.0.1
+    Check("model-retry", ("scripts/test_model_retry.py",), timeout=300),
     # model mode on the link: deterministic first, the model only explains; its claims checked against the record
     Check("model-mode-link", ("scripts/test_model_mode_link.py",), timeout=300),
     # 12 frozen requests against a scripted OpenAI-compatible server on 127.0.0.1 (no network, no key)
