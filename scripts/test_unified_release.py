@@ -138,6 +138,8 @@ class UnifiedReleaseTests(unittest.TestCase):
         variants = [
             {**original, "README.md": b"tampered"},
             {**original, "demo/.env": b"synthetic-private"},
+            {**original, "demo/kb/general/login-token.txt": b"synthetic-private"},
+            {**original, "demo/kb/general/identity.sqlite-wal": b"synthetic-private"},
             {**original, "readme.md": original["README.md"]},
             {**original, "../outside": b"bad path"},
             {**original, "extra.txt": b"not in manifest"},

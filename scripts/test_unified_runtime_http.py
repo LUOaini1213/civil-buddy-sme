@@ -10,7 +10,9 @@ This is same-machine process/restart verification, not real-project or cross-com
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from hashlib import sha256
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -25,6 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from uuid import uuid4
+from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "scripts")]
@@ -47,13 +50,13 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def request(base, path, body=None, *, token=None, cookie=None, form=False, timeout=30):
-    headers = {"Origin": base, "Content-Type": "application/x-www-form-urlencoded" if form else "application/json"}
+def request(base, path, body=None, *, token=None, cookie=None, form=False, content_type=None, timeout=30):
+    headers = {"Origin": base, "Content-Type": content_type or ("application/x-www-form-urlencoded" if form else "application/json")}
     if token:
         headers["Authorization"] = "Bearer " + token
     if cookie:
         headers["Cookie"] = cookie
-    raw = None if body is None else (urllib.parse.urlencode(body) if form else json.dumps(body)).encode("utf-8")
+    raw = body if isinstance(body, bytes) else None if body is None else (urllib.parse.urlencode(body) if form else json.dumps(body)).encode("utf-8")
     message = urllib.request.Request(base + path, data=raw, headers=headers)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     try:
@@ -76,6 +79,128 @@ def port_closed(port):
     with socket.socket() as connection:
         connection.settimeout(0.25)
         return connection.connect_ex(("127.0.0.1", port)) != 0
+
+
+def legacy_chat(instance, cookie, payload, output):
+    status, headers, raw = request(instance.base, "/api/chat", payload, cookie=cookie, timeout=120)
+    output.write_bytes(raw)
+    require(status == 200 and "text/event-stream" in headers.get("Content-Type", ""),
+            f"Legacy draft returned HTTP {status}: {raw[:300]!r}")
+    events = []
+    for block in raw.decode("utf-8").replace("\r\n", "\n").split("\n\n"):
+        kind, data = "", []
+        for line in block.splitlines():
+            if line.startswith("event:"):
+                kind = line[6:].strip()
+            elif line.startswith("data:"):
+                data.append(line[5:].lstrip())
+        if kind and data:
+            events.append({"event": kind, "data": json.loads("\n".join(data))})
+    require(not any(row["event"] == "error" for row in events), f"Legacy draft emitted an error; inspect {output}")
+    done = [row["data"] for row in events if row["event"] == "done"]
+    require(len(done) == 1, f"Legacy draft has no single completion; inspect {output}")
+    return done[0]
+
+
+def legacy_session_handoff(first, first_cookie, second, second_cookie, directory):
+    """Legacy business sessions are portable ZIPs; /api/agent workspace turns are separate."""
+    directory.mkdir()
+    sid = "bundle-http-" + uuid4().hex[:16]
+    filename = "site-record.txt"
+    original = "合成验收资料，不代表真实工程。\n项目名称：HTTP交接试验\n部位：东侧试验段\n天气：多云\n".encode("utf-8")
+    boundary = "civil-acceptance-" + uuid4().hex
+    multipart = (f'--{boundary}\r\nContent-Disposition: form-data; name="session_id"\r\n\r\n{sid}\r\n'
+                 f'--{boundary}\r\nContent-Disposition: form-data; name="files"; filename="{filename}"\r\n'
+                 'Content-Type: text/plain; charset=utf-8\r\n\r\n').encode() + original + f"\r\n--{boundary}--\r\n".encode()
+    status, _, raw = request(first.base, "/api/upload", multipart, cookie=first_cookie,
+                             content_type="multipart/form-data; boundary=" + boundary)
+    require(status == 200, f"Legacy attachment upload returned HTTP {status}: {raw[:300]!r}")
+    upload = json.loads(raw)["files"][0]
+    # Reference role deliberately selects the shared deterministic Python draft path.
+    # A current confirmation in the original history must not authorize imported future work.
+    message = "根据附件写一份项目日报模板，未提供的数据保留 UNSPECIFIED。\n我明白，将由持证人员签认"
+    done = legacy_chat(first, first_cookie, {"session_id": sid, "message": message,
+                       "expert_ids": ["pm-daily"], "attachments": [upload["id"]],
+                       "attachment_roles": {upload["id"]: "reference"}}, directory / "source-draft.sse")
+    require(done.get("wrote") is True and done.get("deliverables"), "Deterministic legacy draft did not produce artifacts")
+    require(done.get("submit_blocked") is True, "Draft was incorrectly represented as releasable")
+    before = json_request(first.base, "/api/sessions/" + sid, cookie=first_cookie)
+    require(before.get("deliverables") and len(before.get("attachments", [])) == 1,
+            "Legacy session details do not restore artifacts and selected attachments")
+
+    def downloads(instance, cookie, session, attachments, deliverables):
+        attachment_bytes, artifact_bytes = [], []
+        for row in attachments:
+            path = "/api/file?" + urllib.parse.urlencode({"session": session, "upload": row["id"]})
+            code, _, body = request(instance.base, path, cookie=cookie)
+            require(code == 200 and body, f"Attachment download failed with HTTP {code}")
+            attachment_bytes.append((row["name"], body))
+        for row in deliverables:
+            path = "/api/file?" + urllib.parse.urlencode({"path": row["path"]})
+            code, _, body = request(instance.base, path, cookie=cookie)
+            require(code == 200 and body, f"Artifact download failed with HTTP {code}")
+            artifact_bytes.append((row["name"], body))
+        return Counter(attachment_bytes), Counter(artifact_bytes)
+
+    originals = downloads(first, first_cookie, sid, before["attachments"], before["deliverables"])
+    require(originals[0] == Counter([(filename, original)]), "Uploaded attachment bytes changed before export")
+    foreign_file = "/api/file?" + urllib.parse.urlencode({"path": before["deliverables"][0]["path"]})
+    require(request(second.base, foreign_file, cookie=second_cookie)[0] in (400, 403, 404),
+            "Another named instance could read source artifacts without importing a package")
+    status, headers, archive = request(first.base, f"/api/sessions/{sid}/export", cookie=first_cookie, timeout=120)
+    require(status == 200 and "zip" in headers.get("Content-Type", ""), f"Session export failed with HTTP {status}")
+    (directory / "legacy-session.zip").write_bytes(archive)
+    with ZipFile(BytesIO(archive)) as zipped:
+        require(zipped.testzip() is None, "Session export ZIP is corrupt")
+        manifest = json.loads(zipped.read("bundle.json"))
+        require(manifest["schema"] == "civil.session.bundle.v1" and manifest["source_session"] == sid,
+                "Host returned an incomplete or unexpected session archive")
+        for row in manifest["files"]:
+            content = zipped.read(row["path"])
+            require(len(content) == row["bytes"] and sha256(content).hexdigest() == row["sha256"], "Export descriptor checksum mismatch")
+        bundled_uploads = Counter((row["name"], zipped.read(row["blob"])) for row in manifest["attachments"])
+        bundled_artifacts = Counter((row["name"], zipped.read(row["blob"]))
+                                    for run in manifest["runs"] for row in run.get("deliverables", []))
+        require((bundled_uploads, bundled_artifacts) == originals, "Export archive omitted or changed original files")
+    status, _, raw = request(second.base, "/api/session-import", archive, cookie=second_cookie,
+                             content_type="application/zip", timeout=120)
+    require(status == 200, f"Session import returned HTTP {status}: {raw[:300]!r}")
+    imported = json.loads(raw)
+    copied_sid = imported["session_id"]
+    require(imported.get("ok") is True and imported.get("confirmation_reset") is True and copied_sid != sid,
+            "Import did not create a new task with confirmation reset")
+    restored = json_request(second.base, "/api/sessions/" + copied_sid, cookie=second_cookie)
+    require(restored["transcript"] == before["transcript"], "Imported original conversation changed")
+    require(restored["expert_ids"] == before["expert_ids"], "Imported selected expert changed")
+    copied_uploads = restored["attachments"]
+    require({row["id"] for row in copied_uploads}.isdisjoint({upload["id"]}), "Imported attachment identity was reused")
+    require(restored["attachment_roles"] == {row["id"]: "reference" for row in copied_uploads}, "Attachment role mapping changed")
+    require(downloads(second, second_cookie, copied_sid, copied_uploads, restored["deliverables"]) == originals,
+            "Imported attachment or deliverable bytes changed")
+    require(imported["attachments"] == len(copied_uploads) and imported["deliverables"] == len(restored["deliverables"]),
+            "Import counts do not match restored files")
+    # Inspect the actual persisted approval slot in addition to exercising the HTTP gate.
+    summary = json.loads((second.private_root / "domains" / copied_sid / "session.summary.json").read_text(encoding="utf-8"))
+    require(summary.get("p0_confirmed") is False, "Imported session retained source approval")
+    denied = legacy_chat(second, second_cookie, {"session_id": copied_sid,
+                         "message": "写一份消防专篇，缺失内容待填", "expert_ids": ["fire-protect"],
+                         "attachments": [copied_uploads[0]["id"]],
+                         "attachment_roles": {copied_uploads[0]["id"]: "reference"}}, directory / "imported-approval-gate.sse")
+    require(denied.get("wrote") is False and denied.get("hitl_pending") is True and not denied.get("deliverables"),
+            "Imported historical confirmation authorized a new high-risk draft")
+    source_after = json_request(first.base, "/api/sessions/" + sid, cookie=first_cookie)
+    require(source_after["transcript"] == before["transcript"] and
+            downloads(first, first_cookie, sid, source_after["attachments"], source_after["deliverables"]) == originals,
+            "Session handoff changed the source session")
+    result = {"passed": True, "scope": "legacy_business_session_bundle", "synthetic": True,
+              "source_session": sid, "imported_session": copied_sid, "different_named_instances": True,
+              "attachments": len(copied_uploads), "deliverables": len(restored["deliverables"]),
+              "archive_sha256": sha256(archive).hexdigest(), "attachment_and_artifact_bytes_equal": True,
+              "source_artifact_cross_instance_access_blocked": True,
+              "original_conversation_preserved": True, "source_unchanged": True, "confirmation_reset": True,
+              "new_high_risk_operation_blocked": True, "rust_workspace_turns_included": False}
+    (directory / "report.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return result
 
 
 class Instance:
@@ -161,7 +286,9 @@ class Instance:
 def run(binary, output):
     output.mkdir(parents=True, exist_ok=False)
     report = {"passed": False, "synthetic": True, "cross_computer": False, "real_provider_calls": False,
-              "binary": str(binary), "checks": {}, "logs_root": str(output)}
+              "binary": str(binary), "checks": {}, "logs_root": str(output),
+              "session_scopes": {"document_agent": "Rust /api/agent workspace turns and new document copies",
+                                 "legacy_bundle": "Legacy /api/sessions ZIP transfers sources, artifacts and history; not Rust Agent workspace turns"}}
     provider = document_acceptance.model_server(0)
     worker = threading.Thread(target=provider.serve_forever, daemon=True)
     worker.start()
@@ -204,6 +331,8 @@ def run(binary, output):
         workspaces = json_request(second.base, "/api/agent/workspaces", cookie=second_cookie)["workspaces"]
         require(not any(row.get("root") == str(first.workspace) for row in workspaces), "Disallowed workspace was persisted")
         report["checks"]["named_instance_isolation"] = True
+        report["legacy_session_bundle"] = legacy_session_handoff(first, cookie, second, second_cookie, output / "legacy-bundle")
+        report["checks"]["legacy_session_bundle_handoff"] = True
         second.stop()
         original_http = document_acceptance.http
         def authenticated_http(base, path, body=None, *, binary=False, timeout=30):

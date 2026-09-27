@@ -108,6 +108,9 @@ def main():
         if not args.workspace.is_dir():
             parser.error("Workspace must be an existing private directory")
         workspace = args.workspace.resolve()
+        base_state = args.state_root.resolve()
+        if workspace.is_relative_to(base_state) or base_state.is_relative_to(workspace):
+            parser.error("State storage and the workspace must be separate, non-nested directories")
         if args.token_file.resolve().is_relative_to(workspace):
             parser.error("Keep --token-file outside the workspace so it cannot become project material")
         token = args.token_file.read_text(encoding="utf-8-sig").strip()

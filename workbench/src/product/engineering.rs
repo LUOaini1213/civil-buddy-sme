@@ -93,8 +93,12 @@ impl EngineeringHost {
     pub fn from_env(worker: WorkerHost) -> Result<Self> {
         let base = std::env::var("CIVIL_DOMAIN_URL").map_err(|_| "工程领域服务未启动")?;
         let mut host = Self::new(worker, &base)?;
-        host.token = Some(std::env::var("CIVIL_DOMAIN_TOKEN")
-            .ok().filter(|v| v.len() >= 32).ok_or("领域服务认证未配置")?);
+        host.token = Some(
+            std::env::var("CIVIL_DOMAIN_TOKEN")
+                .ok()
+                .filter(|v| v.len() >= 32)
+                .ok_or("领域服务认证未配置")?,
+        );
         Ok(host)
     }
 
@@ -128,11 +132,10 @@ impl EngineeringHost {
         cancel.check().map_err(|e| e.to_string())?;
         let request = async {
             let mut request = self.client.get(format!("{}{path}", self.base));
-            if let Some(token) = &self.token { request = request.bearer_auth(token); }
-            let mut response = request
-                .send()
-                .await
-                .map_err(|_| "领域项目读取失败")?;
+            if let Some(token) = &self.token {
+                request = request.bearer_auth(token);
+            }
+            let mut response = request.send().await.map_err(|_| "领域项目读取失败")?;
             if !response.status().is_success() {
                 return Err(format!(
                     "领域项目读取失败（HTTP {}）",

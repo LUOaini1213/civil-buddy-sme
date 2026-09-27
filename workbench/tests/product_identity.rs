@@ -292,6 +292,19 @@ fn state_is_bound_to_one_owner_and_one_exact_workspace() {
     assert_eq!(alice.capabilities()["multi_tenant"], false);
 }
 
+#[test]
+fn workspace_ownership_rejects_nested_roots_in_both_registration_orders() {
+    let temp = Temp::new();
+    let parent = temp.dir("parent-first");
+    let child = temp.dir("parent-first/child");
+    identity("alice", ALICE_TOKEN, parent).claim_state(&temp.dir("state-parent")).unwrap();
+    assert!(identity("bob", BOB_TOKEN, child).claim_state(&temp.dir("state-child")).unwrap_err().contains("nested inside"));
+    let parent = temp.dir("child-first");
+    let child = temp.dir("child-first/child");
+    identity("bob", BOB_TOKEN, child).claim_state(&temp.dir("state-child2")).unwrap();
+    assert!(identity("alice", ALICE_TOKEN, parent).claim_state(&temp.dir("state-parent2")).unwrap_err().contains("contains an owned"));
+}
+
 #[tokio::test]
 async fn unconfigured_local_mode_rejects_proxy_forwarding() {
     let app = auth::protect(fake(), InstanceAuth::local());
@@ -575,6 +588,7 @@ async fn full_session_bundle_proxy_preserves_binary_sources_artifacts_and_conten
     let seen = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
     let captured = seen.clone();
     let sidecar = Router::new()
+        .route("/api/sessions/import-copy", get(|| async { axum::Json(json!({"session_id":"import-copy","attachments":[{"id":"source"}],"deliverables":[{"file":"result.bin"}]})) }))
         .route("/api/sessions/bundle01/export", get(move |headers: axum::http::HeaderMap| {
             let output = output.clone();
             async move {
@@ -616,7 +630,12 @@ async fn full_session_bundle_proxy_preserves_binary_sources_artifacts_and_conten
     assert_eq!(captured[0], ("application/zip".to_owned(), bundle.clone()));
     assert_eq!(captured[1], ("multipart/form-data; boundary=literal-boundary".to_owned(), bundle));
     drop(captured);
-    let (flag, _) = civil_workbench::turns::begin("bundle01");
+    let (status, _, body) = request(&app, "GET", "/api/sessions/import-copy", None, None, &[], "").await;
+    assert_eq!(status, StatusCode::OK);
+    let detail: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(detail["attachments"][0]["id"], "source");
+    assert_eq!(detail["deliverables"][0]["file"], "result.bin");
+    let (flag, _) = civil_workbench::turns::try_begin("bundle01").unwrap();
     assert_eq!(request(&app, "GET", "/api/sessions/bundle01/export", None, None, &[], "").await.0, StatusCode::CONFLICT);
     assert!(civil_workbench::turns::request("bundle01"));
     assert_eq!(request(&app, "GET", "/api/sessions/bundle01/export", None, None, &[], "").await.0, StatusCode::CONFLICT);
@@ -630,4 +649,111 @@ async fn no_engine_refuses_incomplete_session_backup_instead_of_silently_losing_
     let app = civil_workbench::api::app(civil_workbench::api::AppState::live(Paths::from_demo(temp.dir("no-engine-demo"))));
     assert_eq!(request(&app, "GET", "/api/sessions/bundle02/export", None, None, &[], "").await.0, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(request(&app, "POST", "/api/session-import", None, None, &[("content-type", "application/zip")], "old transcript-only archive").await.0, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[test]
+fn legacy_session_reservation_is_atomic_and_cannot_replace_a_cancelled_slot() {
+    let sid = format!("atomic-{}", uuid::Uuid::new_v4().simple());
+    let barrier = Arc::new(std::sync::Barrier::new(16));
+    let threads: Vec<_> = (0..16).map(|_| {
+        let barrier = barrier.clone(); let sid = sid.clone();
+        std::thread::spawn(move || { barrier.wait(); civil_workbench::turns::try_begin(&sid).ok() })
+    }).collect();
+    let winners: Vec<_> = threads.into_iter().filter_map(|t| t.join().unwrap()).collect();
+    assert_eq!(winners.len(), 1);
+    assert!(civil_workbench::turns::request(&sid));
+    assert!(civil_workbench::turns::try_begin(&sid).is_err());
+    civil_workbench::turns::end(&sid, &winners[0].0);
+    let (fresh, _) = civil_workbench::turns::try_begin(&sid).unwrap();
+    assert!(!fresh.load(std::sync::atomic::Ordering::SeqCst));
+    civil_workbench::turns::end(&sid, &fresh);
+}
+
+async fn wait_for_legacy_turn(sid: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !civil_workbench::turns::is_active(sid) { tokio::task::yield_now().await; }
+    }).await.expect("legacy task did not acquire the session");
+}
+
+#[tokio::test]
+async fn legacy_native_cancel_keeps_other_sessions_and_allows_a_fresh_turn_only_after_finish() {
+    let temp = Temp::new();
+    let mut state = civil_workbench::api::AppState::live(Paths::from_demo(temp.dir("native-cancel-demo")));
+    state.llm = civil_workbench::agent::LlmMode::Hold;
+    state.force_has_key = Some(true);
+    let app = civil_workbench::api::app(state);
+    let start = |sid: &'static str| {
+        let app = app.clone();
+        tokio::spawn(async move {
+            request(&app, "POST", "/api/chat", None, None, &[("content-type", "application/json")],
+                &json!({"session_id":sid,"message":"hello"}).to_string()).await
+        })
+    };
+    let old = start("native-old");
+    let other = start("native-other");
+    wait_for_legacy_turn("native-old").await;
+    wait_for_legacy_turn("native-other").await;
+    let payload = json!({"session_id":"native-old","message":"hello"}).to_string();
+    assert_eq!(request(&app, "POST", "/api/chat", None, None, &[("content-type", "application/json")], &payload).await.0, StatusCode::CONFLICT);
+    assert_eq!(request(&app, "GET", "/api/sessions/native-old/export", None, None, &[], "").await.0, StatusCode::CONFLICT);
+    assert_eq!(request(&app, "POST", "/api/sessions/native-old/cancel", None, None, &[], "").await.0, StatusCode::OK);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), old).await.unwrap().unwrap();
+    assert!(result.2.contains("\"cancelled\":true"));
+    assert!(civil_workbench::turns::is_active("native-other"));
+    let fresh = start("native-old");
+    wait_for_legacy_turn("native-old").await;
+    request(&app, "POST", "/api/sessions/native-old/cancel", None, None, &[], "").await;
+    assert!(tokio::time::timeout(std::time::Duration::from_secs(5), fresh).await.unwrap().unwrap().2.contains("\"cancelled\":true"));
+    request(&app, "POST", "/api/sessions/native-other/cancel", None, None, &[], "").await;
+    assert!(tokio::time::timeout(std::time::Duration::from_secs(5), other).await.unwrap().unwrap().2.contains("\"cancelled\":true"));
+}
+
+#[tokio::test]
+async fn export_and_forwarded_chat_hold_the_same_exclusive_legacy_lease() {
+    use axum::response::IntoResponse;
+    let temp = Temp::new();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let cancel_release = release.clone();
+    let (e, r) = (entered.clone(), release.clone());
+    let (e2, r2) = (entered.clone(), release.clone());
+    let sidecar = Router::new()
+        .route("/api/sessions/lease01/export", get(move || {
+            let (entered, release) = (e.clone(), r.clone());
+            async move { entered.notify_one(); release.notified().await; ([("content-type", "application/zip")], b"binary bundle").into_response() }
+        }))
+        .route("/api/chat", axum::routing::post(move || {
+            let (entered, release) = (e2.clone(), r2.clone());
+            async move { entered.notify_one(); release.notified().await; axum::Json(json!({"cancelled":true})) }
+        }))
+        .route("/api/sessions/lease01/cancel", axum::routing::post(move || {
+            let release = cancel_release.clone(); async move { release.notify_one(); axum::Json(json!({"cancel_requested":true})) }
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, sidecar).await.unwrap() });
+    let mut state = civil_workbench::api::AppState::live(Paths::from_demo(temp.dir("lease-demo")));
+    state.engine = Some(Arc::new(civil_workbench::py_engine::PyEngine::attach(&base, ALICE_TOKEN).unwrap()));
+    state.force_has_key = Some(true);
+    let app = civil_workbench::api::app(state);
+    for exporting in [true, false] {
+        let active_app = app.clone();
+        let active = tokio::spawn(async move {
+            if exporting { request(&active_app, "GET", "/api/sessions/lease01/export", None, None, &[], "").await }
+            else { request(&active_app, "POST", "/api/chat", None, None, &[("content-type","application/json")],
+                &json!({"session_id":"lease01","message":"hello","cad_project_id":"a".repeat(32)}).to_string()).await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified()).await.unwrap();
+        for cad in ["", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] {
+            assert_eq!(request(&app, "POST", "/api/chat", None, None, &[("content-type","application/json")],
+                &json!({"session_id":"lease01","message":"hello","cad_project_id":cad}).to_string()).await.0, StatusCode::CONFLICT);
+        }
+        assert_eq!(request(&app, "GET", "/api/sessions/lease01/export", None, None, &[], "").await.0, StatusCode::CONFLICT);
+        if exporting { release.notify_one(); }
+        else { request(&app, "POST", "/api/sessions/lease01/cancel", None, None, &[], "").await; }
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), active).await.unwrap().unwrap();
+        assert_eq!(response.0, StatusCode::OK);
+        assert!(!civil_workbench::turns::is_active("lease01"));
+    }
+    server.abort();
 }

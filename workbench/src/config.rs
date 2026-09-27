@@ -31,11 +31,15 @@ impl Paths {
             .unwrap_or_else(|| demo_root.clone());
         let kb_root = demo_root.join("kb");
         let instance = env::var_os("CIVIL_STATE_ROOT").map(PathBuf::from);
-        let data_dir = instance.as_ref().map(|p| p.join("legacy/data"))
+        let data_dir = instance
+            .as_ref()
+            .map(|p| p.join("legacy/data"))
             .unwrap_or_else(|| demo_root.join("data"));
         let skill = repo_root.join("skills").join("civil-buddy");
         Self {
-            out_root: instance.as_ref().map(|p| p.join("domains"))
+            out_root: instance
+                .as_ref()
+                .map(|p| p.join("domains"))
                 .unwrap_or_else(|| demo_root.join("out")),
             user_catalog: data_dir.join("user_catalog.json"),
             skill_hard_rules: skill.join("references").join("hard-rules.md"),
@@ -98,7 +102,11 @@ fn detect_demo_root() -> PathBuf {
 
 /// cwd `.env` fills gaps; exe-dir and repo `.env` next; `demo/.env` overrides a stale User-level key.
 pub fn load_env() {
-    if env::var("PYTHON_DOTENV_DISABLED").as_deref()==Ok("1") || env::var("CIVIL_DOTENV_DISABLED").as_deref()==Ok("1") { return; }
+    if env::var("PYTHON_DOTENV_DISABLED").as_deref() == Ok("1")
+        || env::var("CIVIL_DOTENV_DISABLED").as_deref() == Ok("1")
+    {
+        return;
+    }
     let _ = dotenvy::dotenv();
     if let Ok(exe) = env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -191,9 +199,9 @@ where
 }
 
 /* ux(round17) 运行时模型配置覆盖：让评委/试用者在界面里填 Key、切 DeepSeek / z.ai 等
-   OpenAI 兼容供应商，不必改 demo/.env 再重启进程。
-   边界：只存进程内存——不写盘、不进日志、不随会话落盘；进程退出即失效。
-   env 仍是缺省来源，清除覆盖即回退到 .env 口径。 */
+OpenAI 兼容供应商，不必改 demo/.env 再重启进程。
+边界：只存进程内存——不写盘、不进日志、不随会话落盘；进程退出即失效。
+env 仍是缺省来源，清除覆盖即回退到 .env 口径。 */
 static RUNTIME_LLM: RwLock<Option<LlmConfig>> = RwLock::new(None);
 
 pub fn set_runtime_llm(cfg: Option<LlmConfig>) {

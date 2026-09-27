@@ -102,3 +102,8 @@ data/civilbuddy.db-shm
 data/backup/
 /node_modules/
 /work/
+/login-token*.txt
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm

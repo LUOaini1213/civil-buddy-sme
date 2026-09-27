@@ -1,5 +1,8 @@
 //! One named user per host process. This is not a multi-tenant identity service.
 //! Apply `protect` to the fully merged router, including legacy and domain routes.
+//! Users need independent, non-nested physical workspaces. Ownership records are
+//! configuration guards, not OS account isolation: an OS user who can change the
+//! directories/records or concurrently reconfigure instances remains trusted.
 use axum::{
     extract::{DefaultBodyLimit, Request, State},
     http::{header, HeaderMap, StatusCode},
@@ -189,6 +192,7 @@ impl InstanceAuth {
         // alone would not isolate those outputs if users shared a source root.
         if let Some(root) = self.roots.first() {
             self.authorize_workspace(root)?;
+            reject_nested_workspaces(root)?;
             let metadata = root.join(".civil-buddy");
             if std::fs::symlink_metadata(&metadata).is_ok() {
                 reject_links(&metadata)?;
@@ -285,6 +289,38 @@ impl InstanceAuth {
             .and_then(|sessions| sessions.get(cookie).copied())
             .is_some_and(|expires| expires > Instant::now())
     }
+}
+
+fn reject_nested_workspaces(root: &Path) -> Result<(), String> {
+    const BINDING: &str = ".civil-buddy/instance-owner.sqlite";
+    for parent in root.ancestors().skip(1) {
+        if parent.join(BINDING).try_exists().map_err(|_| "cannot verify ancestor workspace ownership")? {
+            return Err("workspace is nested inside an owned workspace; use independent non-overlapping directories".into());
+        }
+    }
+    let mut pending = vec![root.to_path_buf()];
+    let mut visited = 0usize;
+    while let Some(directory) = pending.pop() {
+        if directory != root && directory.join(BINDING).try_exists().map_err(|_| "cannot verify nested workspace ownership")? {
+            return Err("workspace contains an owned workspace; use independent non-overlapping directories".into());
+        }
+        for entry in std::fs::read_dir(&directory).map_err(|_| "cannot verify all nested workspace directories")? {
+            visited += 1;
+            if visited > 100_000 {
+                return Err("workspace ownership scan exceeds 100000 entries; choose a smaller dedicated project directory".into());
+            }
+            let entry = entry.map_err(|_| "cannot verify nested workspace entry")?;
+            let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| "cannot verify nested workspace entry")?;
+            let mut linked = metadata.file_type().is_symlink();
+            #[cfg(windows)] {
+                use std::os::windows::fs::MetadataExt;
+                linked |= metadata.file_attributes() & 0x400 != 0;
+            }
+            // Linked paths are already inaccessible to the workspace resolver.
+            if metadata.is_dir() && !linked { pending.push(entry.path()); }
+        }
+    }
+    Ok(())
 }
 
 fn reject_links(path: &Path) -> Result<(), String> {

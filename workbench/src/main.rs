@@ -15,10 +15,11 @@ async fn main() {
 
     let paths = Paths::detect();
     // Validate identity and state ownership before starting any helper process.
-    let product = civil_workbench::product::api::ProductState::open(paths.clone()).unwrap_or_else(|e| {
-        eprintln!("product runtime startup failed: {e}");
-        std::process::exit(1);
-    });
+    let product =
+        civil_workbench::product::api::ProductState::open(paths.clone()).unwrap_or_else(|e| {
+            eprintln!("product runtime startup failed: {e}");
+            std::process::exit(1);
+        });
     let port: u16 = std::env::var("CIVIL_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -38,9 +39,14 @@ async fn main() {
     let domain_base = std::env::var("CIVIL_DOMAIN_URL").ok();
     let engine = match &domain_base {
         Some(base) => civil_workbench::py_engine::PyEngine::attach(
-            base, &std::env::var("CIVIL_DOMAIN_TOKEN").unwrap_or_default()),
-        None => tokio::task::spawn_blocking(move || civil_workbench::py_engine::PyEngine::start(&paths))
-            .await.unwrap_or_else(|_| Err("Python tool startup worker failed".into())),
+            base,
+            &std::env::var("CIVIL_DOMAIN_TOKEN").unwrap_or_default(),
+        ),
+        None => {
+            tokio::task::spawn_blocking(move || civil_workbench::py_engine::PyEngine::start(&paths))
+                .await
+                .unwrap_or_else(|_| Err("Python tool startup worker failed".into()))
+        }
     };
     match engine {
         Ok(engine) => {
@@ -49,7 +55,9 @@ async fn main() {
         }
         Err(err) => {
             eprintln!("Python 工具引擎未启动（CAD / 施工计划 / 箱单 / 招标对照不可用）：{err}");
-            if domain_base.is_some() { std::process::exit(1); }
+            if domain_base.is_some() {
+                std::process::exit(1);
+            }
         }
     }
     let auth = product.auth.clone();
@@ -57,7 +65,10 @@ async fn main() {
     if std::env::var_os("CIVIL_DOMAIN_URL").is_some() {
         routes = routes.merge(civil_workbench::product::domains::router());
     }
-    axum::serve(listener, civil_workbench::product::auth::protect(routes, auth))
+    axum::serve(
+        listener,
+        civil_workbench::product::auth::protect(routes, auth),
+    )
     .await
     .expect("server");
 }

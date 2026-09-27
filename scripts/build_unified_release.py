@@ -71,7 +71,9 @@ def safe_name(name: str) -> None:
     if (folded.startswith(FORBIDDEN_ROOTS)
             or any(part.casefold() in {".git", ".venv", "__pycache__", "node_modules"} for part in path.parts)
             or (path.name.casefold().startswith(".env") and path.name.casefold() != ".env.example")
-            or path.suffix.casefold() in {".key", ".pem", ".pfx", ".p12", ".sqlite", ".sqlite3", ".db", ".jsonl", ".pyc"}):
+            or path.name.casefold().startswith("login-token")
+            or path.suffix.casefold() in {".key", ".pem", ".pfx", ".p12", ".sqlite", ".sqlite3", ".db", ".jsonl", ".pyc",
+                                          ".sqlite-wal", ".sqlite-shm", ".sqlite3-wal", ".sqlite3-shm", ".db-wal", ".db-shm"}):
         raise ValueError(f"Private or runtime file cannot be released: {name}")
 
 

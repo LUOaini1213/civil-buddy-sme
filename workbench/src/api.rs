@@ -288,10 +288,6 @@ async fn sessions_list(
     Json(crate::projects::list_sessions(&st.paths, &pid, &query, limit, offset))
 }
 
-fn zip_bytes(name: &str, bytes: &[u8]) -> Vec<u8> {
-    zip_named(&[(name.to_string(), bytes.to_vec())])
-}
-
 fn zip_named(files: &[(String, Vec<u8>)]) -> Vec<u8> {
     use std::io::{Cursor, Write};
     let mut cursor = Cursor::new(Vec::new());
@@ -341,15 +337,15 @@ async fn session_export(
     AxPath(sid): AxPath<String>,
 ) -> Result<Response, ApiError> {
     let sid = require_sid(&sid)?;
-    if crate::turns::is_active(&sid) {
-        return Err(err(StatusCode::CONFLICT, "当前任务正在运行或取消中，请等待结束后备份"));
-    }
+    let (flag, _) = crate::turns::try_begin(&sid).map_err(|_| err(StatusCode::CONFLICT,
+        "当前任务正在运行或取消中，请等待结束后备份"))?;
+    let _guard = crate::turns::Guard { sid: sid.clone(), flag: flag.clone() };
     let engine = st.engine.as_ref().ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE,
         "完整任务包需要 Python 工具引擎；未导出仅含聊天记录的不完整备份"))?;
     let mut response = engine.forward(reqwest::Method::GET,
         &format!("/api/sessions/{sid}/export"), None, Vec::new()).await;
-    if crate::turns::is_active(&sid) {
-        return Err(err(StatusCode::CONFLICT, "备份期间任务已开始运行，请等待结束后重试"));
+    if flag.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(err(StatusCode::CONFLICT, "备份已取消，请重试"));
     }
     if response.status().is_success() {
         response.headers_mut().insert(axum::http::header::CONTENT_DISPOSITION,
@@ -556,10 +552,14 @@ async fn session_import(
 async fn session_get(
     State(st): State<Arc<AppState>>,
     AxPath(sid): AxPath<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
+    let sid = require_sid(&sid)?;
+    if let Some(engine) = &st.engine {
+        return Ok(engine.forward(reqwest::Method::GET, &format!("/api/sessions/{sid}"), None, Vec::new()).await);
+    }
     let v = crate::projects::session_detail(&st.paths, &sid)
         .map_err(|e| err(StatusCode::BAD_REQUEST, &e))?;
-    Ok(Json(v))
+    Ok(Json(v).into_response())
 }
 
 #[derive(Deserialize)]
@@ -1175,8 +1175,17 @@ fn sse_offline_chat(text: String) -> Response {
         .into_response()
 }
 
-async fn chat(State(st): State<Arc<AppState>>, Json(body): Json<ChatIn>) -> Result<Response, ApiError> {
+async fn chat(State(st): State<Arc<AppState>>, Json(mut body): Json<ChatIn>) -> Result<Response, ApiError> {
     let confirm_ok = request_confirmation(body.confirm_ok, &body.confirm_text)?;
+    let session = if body.session_id.is_empty() {
+        Uuid::new_v4().simple().to_string().chars().take(12).collect()
+    } else {
+        require_sid(&body.session_id)?
+    };
+    let (turn_flag, turn_notify) = crate::turns::try_begin(&session)
+        .map_err(|_| err(StatusCode::CONFLICT, "这个会话正在运行、取消或备份，请等待结束后重试"))?;
+    let turn_guard = crate::turns::Guard { sid: session.clone(), flag: turn_flag.clone() };
+    body.session_id = session.clone();
     if let Some(engine) = &st.engine {
         if chat_needs_python_tools(
             &body.message,
@@ -1212,12 +1221,6 @@ async fn chat(State(st): State<Arc<AppState>>, Json(body): Json<ChatIn>) -> Resu
         }
         // Run/Both: exclusive steps do not need a live model.
     }
-    let session = if body.session_id.is_empty() {
-        let raw = Uuid::new_v4().simple().to_string();
-        raw.chars().take(12).collect()
-    } else {
-        body.session_id.clone()
-    };
     let _ = std::fs::create_dir_all(&st.paths.out_root);
     let mut ids: Vec<String> = body
         .expert_ids
@@ -1284,13 +1287,8 @@ async fn chat(State(st): State<Arc<AppState>>, Json(body): Json<ChatIn>) -> Resu
     let files_send = files_acc.clone();
     let run_acc = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     let run_send = run_acc.clone();
-    let (turn_flag, turn_notify) = crate::turns::begin(&session);
-    let turn_sid = session.clone();
     tokio::spawn(async move {
-        let _turn = crate::turns::Guard {
-            sid: turn_sid,
-            flag: turn_flag.clone(),
-        };
+        let _turn = turn_guard;
         let send = move |ev: agent::EventOut| {
             let (name, data) = ev;
             if name == "done" {
