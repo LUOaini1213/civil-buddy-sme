@@ -98,14 +98,11 @@ def invoke_with_checkpoint(app: Any, state: Dict[str, Any], thread_id: str) -> D
     config = thread_config(thread_id)
     if cp is None:
         return app.invoke(state)
-    # app 应已 compile(checkpointer=cp)；若未带，退回无 checkpoint
-    try:
-        return app.invoke(state, config=config)
-    except TypeError:
-        return app.invoke(state)
-    except Exception:
-        # checkpoint 失败不阻断业务
-        return app.invoke(state)
+    # No fallback: the old `except TypeError / except Exception: return app.invoke(state)` caught the node's own
+    # error and re-invoked without a thread_id, so a compiled graph with a checkpointer raised an unrelated
+    # "Checkpointer requires ... thread_id" ValueError and the real failure was lost. A compiled graph accepts
+    # config with or without a checkpointer, so the node's error now reaches the caller as it was raised.
+    return app.invoke(state, config=config)
 
 
 def get_thread_state(thread_id: str, app: Any = None) -> Optional[Dict[str, Any]]:

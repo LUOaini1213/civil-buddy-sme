@@ -281,6 +281,16 @@ impl ToolScope<'_> {
         Ok(source)
     }
     pub async fn execute(&self, name: &str, args: Value) -> Result<Value, String> {
+        self.execute_as(name, args, None).await
+    }
+    /// `call_id` applies to `apply_document` only: the host's replay key for
+    /// the document worker (see `worker::document_call_id`).
+    pub async fn execute_as(
+        &self,
+        name: &str,
+        args: Value,
+        call_id: Option<&str>,
+    ) -> Result<Value, String> {
         self.cancel.check().map_err(|e| e.to_string())?;
         match name {
             "list_files" => {
@@ -390,10 +400,13 @@ impl ToolScope<'_> {
                     .as_str()
                     .ok_or("expected_sha256 required")?;
                 let evidence = self.patch_evidence(&args).await?;
+                let fresh = uuid::Uuid::new_v4().to_string();
+                let call_id = call_id.filter(|_| name == "apply_document").unwrap_or(&fresh);
                 let mut response = self
                     .state
                     .worker
-                    .document(
+                    .document_as(
+                        call_id,
                         self.workspace,
                         if name == "apply_document" {
                             "apply"

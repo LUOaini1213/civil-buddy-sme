@@ -79,6 +79,13 @@ pub struct RuntimeEvent {
     pub ts: String,
 }
 
+/// What a keyed turn request found: a new turn to run, or the turn an earlier
+/// request with the same idempotency key already created.
+pub enum TurnStart {
+    Started(TurnLease),
+    Existing(TurnRecord),
+}
+
 struct Inner {
     db: Mutex<Connection>,
     cancellations: Mutex<HashMap<TurnId, CancellationToken>>,
@@ -118,6 +125,11 @@ impl RuntimeCore {
                 turn_id TEXT NOT NULL REFERENCES runtime_turns(turn_id), seq INTEGER NOT NULL CHECK(seq > 0),
                 task_id TEXT NOT NULL, event TEXT NOT NULL, data_json TEXT NOT NULL, ts TEXT NOT NULL,
                 PRIMARY KEY(turn_id, seq)
+            );
+            CREATE TABLE IF NOT EXISTS runtime_turn_keys (
+                workspace_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, session_id TEXT NOT NULL,
+                request_sha256 TEXT NOT NULL, turn_id TEXT NOT NULL UNIQUE REFERENCES runtime_turns(turn_id),
+                created_at TEXT NOT NULL, PRIMARY KEY(workspace_id, idempotency_key)
             );")?;
         Ok(Self(Arc::new(Inner {
             db: Mutex::new(db),
@@ -131,8 +143,54 @@ impl RuntimeCore {
         session: &SessionId,
         request: Value,
     ) -> Result<TurnLease> {
+        match self.start_turn(workspace, session, request, None)? {
+            TurnStart::Started(lease) => Ok(lease),
+            TurnStart::Existing(_) => Err(RuntimeError::InvalidState(
+                "a turn without a key cannot match an earlier one".into(),
+            )),
+        }
+    }
+
+    /// A client retry that carries the same key gets the turn the first request
+    /// created, running or finished, instead of a second run. The same key with
+    /// a different session or request fingerprint is refused. New turns still
+    /// obey the one-active-turn-per-session rule.
+    pub fn begin_turn_keyed(
+        &self,
+        workspace: &WorkspaceContext,
+        session: &SessionId,
+        request: Value,
+        key: &str,
+        request_sha256: &str,
+    ) -> Result<TurnStart> {
+        if key.is_empty() || key.len() > 128 || !key.bytes().all(|b| b.is_ascii_graphic()) {
+            return Err(RuntimeError::InvalidId(key.chars().take(128).collect()));
+        }
+        self.start_turn(workspace, session, request, Some((key, request_sha256)))
+    }
+
+    fn start_turn(
+        &self,
+        workspace: &WorkspaceContext,
+        session: &SessionId,
+        request: Value,
+        key: Option<(&str, &str)>,
+    ) -> Result<TurnStart> {
         let mut db = self.0.db.lock().map_err(|_| RuntimeError::Poisoned)?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some((key, fingerprint)) = key {
+            // Checked before the busy rule: a retry of a still-running turn
+            // must get that turn back, not 409.
+            let found: Option<(String, String, String)> = tx.query_row("SELECT session_id,request_sha256,turn_id FROM runtime_turn_keys WHERE workspace_id=?1 AND idempotency_key=?2",
+                params![workspace.id(), key], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
+            if let Some((stored_session, stored_fingerprint, turn)) = found {
+                if stored_session != session.as_str() || stored_fingerprint != fingerprint {
+                    return Err(RuntimeError::IdempotencyConflict);
+                }
+                let record = read_turn(&tx, workspace.id(), session, &TurnId::parse(turn)?)?;
+                return Ok(TurnStart::Existing(record));
+            }
+        }
         let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM runtime_turns WHERE workspace_id=?1 AND session_id=?2 AND status IN ('running','cancelling'))", params![workspace.id(), session.as_str()], |r| r.get(0))?;
         if active {
             return Err(RuntimeError::SessionBusy);
@@ -145,6 +203,10 @@ impl RuntimeCore {
         let ts = now();
         tx.execute("INSERT INTO runtime_turns(turn_id,workspace_id,session_id,task_id,status,request_json,created_at,updated_at)
             VALUES(?1,?2,?3,?4,'running',?5,?6,?6)", params![turn_id.as_str(), workspace.id(), session.as_str(), task_id.as_str(), serde_json::to_string(&request)?, ts])?;
+        if let Some((key, fingerprint)) = key {
+            tx.execute("INSERT INTO runtime_turn_keys(workspace_id,idempotency_key,session_id,request_sha256,turn_id,created_at)
+                VALUES(?1,?2,?3,?4,?5,?6)", params![workspace.id(), key, session.as_str(), fingerprint, turn_id.as_str(), ts])?;
+        }
         append_event(
             &tx,
             workspace.id(),
@@ -163,7 +225,7 @@ impl RuntimeCore {
         tx.commit()?;
         let cancellation = CancellationToken::new();
         tokens.insert(turn_id.clone(), cancellation.clone());
-        Ok(TurnLease {
+        Ok(TurnStart::Started(TurnLease {
             runtime: self.clone(),
             workspace: workspace.clone(),
             session: session.clone(),
@@ -171,7 +233,7 @@ impl RuntimeCore {
             task_id,
             cancellation,
             finished: false,
-        })
+        }))
     }
 
     pub fn turn(

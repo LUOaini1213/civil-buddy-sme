@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -76,12 +77,19 @@ def _checkpoint_status(state: Dict[str, Any]) -> str:
     action = str(state.get("user_action") or "")
     if phase == "await_user_confirm":
         return "interrupted"
+    if phase == "interrupted":
+        # left mid-run by a restart (recover_interrupted). Not "interrupted": that word means "awaiting HITL" here.
+        return "aborted"
     if phase == "cancelled" or action == "cancel":
         return "cancelled"
     if phase in ("done", "team_b_done") or action == "confirm":
         # confirm 后可能仍在跑 B；finalize 后 phase 多为 done
         if phase == "await_user_confirm":
             return "interrupted"
+        if phase == "team_b_running" and not state.get("container_plan"):
+            # the confirm checkpoint: Team A's final_response is still in the state, Team B has not packed yet.
+            # A finished LLM-path run also ends in team_b_running, with its container_plan: that one is done.
+            return "resumed"
         return "done" if phase in ("done", "cancelled") or state.get("final_response") else "resumed"
     if state.get("final_response") and phase not in ("await_user_confirm",):
         return "done"
@@ -145,8 +153,54 @@ def _db_write(sid: str, rid: str, s: Dict[str, Any], meta: Dict[str, Any]) -> No
     )
 
 
+class SessionPersistError(RuntimeError):
+    """SQLite stayed locked through every retry, so the session was not saved.
+
+    No JSON copy is written in its place: load_session reads SQLite first, so a JSON-only save would be
+    read back as the older SQLite row after a restart (the two stores would disagree). The previously
+    saved state stays intact in both; the caller reports the failure.
+    """
+
+
+def _write_attempts() -> int:
+    try:
+        return max(1, int(os.getenv("CB_SQLITE_WRITE_ATTEMPTS") or 3))
+    except ValueError:
+        return 3
+
+
+#: pause before the 2nd, 3rd, ... attempt; each attempt itself already waits busy_timeout for the lock
+_RETRY_BACKOFF_S = (0.2, 0.5, 1.0)
+
+
+def _db_write_retrying(sid: str, rid: str, s: Dict[str, Any], meta: Dict[str, Any]) -> None:
+    """_db_write, retried a bounded number of times while another writer holds the lock."""
+    attempts = _write_attempts()
+    for attempt in range(1, attempts + 1):
+        try:
+            _db_write(sid, rid, s, meta)
+            return
+        except Exception as exc:
+            if not _storage.is_lock_error(exc):
+                raise
+            try:
+                _storage.get_storage().rollback_write()
+            except Exception:
+                logger.warning("rollback after a locked write failed", exc_info=True)
+            if attempt == attempts:
+                raise SessionPersistError(
+                    f"session {sid} was not saved: the database stayed locked through {attempts} attempts"
+                    f" of {_storage.busy_timeout_ms()} ms each ({exc})"
+                ) from exc
+            logger.warning("sqlite save_session: database locked (attempt %d of %d), retrying", attempt, attempts)
+            time.sleep(_RETRY_BACKOFF_S[min(attempt - 1, len(_RETRY_BACKOFF_S) - 1)])
+
+
 def save_session(session_id: str, state: Dict[str, Any]) -> Dict[str, str]:
-    """Persist full pipeline state for later /api/confirm resume."""
+    """Persist full pipeline state for later /api/confirm resume.
+
+    In sqlite mode a lock that outlasts every retry raises SessionPersistError instead of quietly
+    writing JSON only (see that class)."""
     sid = str(session_id or state.get("session_id") or "default")
     rid = str(state.get("run_id") or sid)
     s = dict(state)
@@ -159,7 +213,13 @@ def save_session(session_id: str, state: Dict[str, Any]) -> Dict[str, str]:
     mode = _storage.storage_mode()
     if mode == "sqlite":
         try:
-            _db_write(sid, rid, s, meta)
+            _db_write_retrying(sid, rid, s, meta)
+        except SessionPersistError:
+            logger.error("sqlite save_session failed: session %s NOT saved (database locked)", sid, exc_info=True)
+            raise
+        except Exception:
+            logger.warning("sqlite save_session failed, fallback to JSON", exc_info=True)
+        else:
             return {
                 "session_id": sid,
                 "thread_id": sid,
@@ -168,8 +228,6 @@ def save_session(session_id: str, state: Dict[str, Any]) -> Dict[str, str]:
                 "status": str(meta.get("status")),
                 "interrupt": bool(meta.get("interrupt")),
             }
-        except Exception:
-            logger.warning("sqlite save_session failed, fallback to JSON", exc_info=True)
 
     _atomic_write_json(session_state_path(rid), s)
     _atomic_write_json(checkpoint_meta_path(rid), meta)
@@ -388,3 +446,95 @@ def delete_checkpoint(session_id: str) -> bool:
             except OSError:
                 pass
     return removed
+
+
+#: phases a live pipeline passes through; after a restart nobody is running them any more
+RUNNING_PHASES = ("team_a_running", "team_b_running")
+
+
+def _interrupted_state(state: Dict[str, Any], sid: str, rid: str, was: str, at: str, reason: str) -> Dict[str, Any]:
+    s = dict(state or {})
+    s.setdefault("session_id", sid)
+    s.setdefault("run_id", rid or sid)
+    s.update(
+        phase="interrupted",
+        status="aborted",
+        interrupted_phase=was or "running",
+        interrupted={"reason": reason, "at": at, "phase": was or "running"},
+    )
+    s.setdefault("final_response", "网关重启时该会话仍在运行，已标记为中断，没有自动续跑；请重新运行装箱流程。")
+    return s
+
+
+def _done_since(run_id: str, saved_at: str) -> bool:
+    """True when the run's JSONL trace has a done event at or after `saved_at` (json store; the sqlite sweep
+    asks the events table the same question). A run that finished after its last save is not mid-run."""
+    from packing_assistant.trace_events import run_trace_path
+
+    path = run_trace_path(run_id)
+    if not saved_at or not path.is_file():
+        return False
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            if '"done"' not in line:
+                continue
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if ev.get("type") == "done" and str(ev.get("ts") or "") >= saved_at:
+                return True
+    return False
+
+
+def recover_interrupted(*, reason: str = "gateway_restart") -> Dict[str, int]:
+    """Startup sweep: whatever a crash left mid-run is marked interrupted, never resumed or replayed.
+
+    The gateway counterpart of the Rust host's recover_interrupted (runtime_core/persistence.rs): a session
+    in team_a_running / team_b_running with no done event since its last save, a run_start placeholder whose run never reached done/hitl, and a
+    runs row with no outcome. /api/confirm then answers 409 for it instead of silently running Team B from
+    a half-written state. Like the Rust sweep it assumes one server process owns this store; call it before
+    serving. Never raises: a failed sweep must not stop the gateway from starting.
+    """
+    at = _now_iso()
+    seen: set = set()
+    counts = {"sessions": 0, "runs": 0}
+    mode = _storage.storage_mode()
+    if mode != "json" and _storage.default_db_path().exists():
+        try:
+            st = _storage.get_storage()
+            for sid, rid, phase, raw in st.stale_sessions(RUNNING_PHASES):
+                try:
+                    state = json.loads(raw or "{}")
+                except ValueError:
+                    state = {}
+                save_session(sid, _interrupted_state(state if isinstance(state, dict) else {}, sid, rid,
+                                                     str(phase or ""), at, reason))
+                seen.add(sid)
+                counts["sessions"] += 1
+            counts["runs"] = st.interrupt_orphan_runs(RUNNING_PHASES, ended_at=at)
+        except Exception:
+            logger.warning("recover_interrupted: sqlite sweep failed (non-blocking)", exc_info=True)
+    if mode != "sqlite" and SESSIONS_DIR.exists():
+        for p in SESSIONS_DIR.glob("*.json"):
+            try:
+                idx = json.loads(p.read_text(encoding="utf-8"))
+                sid = str(idx.get("session_id") or "")
+                if not sid or sid in seen or idx.get("phase") not in RUNNING_PHASES:
+                    continue
+                state = load_session(sid)
+                if not state or state.get("phase") not in RUNNING_PHASES:
+                    continue
+                rid = str(state.get("run_id") or sid)
+                if _done_since(rid, str(state.get("_session_saved_at") or idx.get("saved_at") or "")):
+                    continue  # a finished LLM-path run keeps team_b_running; its trace says done
+                save_session(sid, _interrupted_state(state, sid, str(state.get("run_id") or ""),
+                                                     str(state.get("phase")), at, reason))
+                seen.add(sid)
+                counts["sessions"] += 1
+            except Exception:
+                logger.warning("recover_interrupted: skipped %s", p.name, exc_info=True)
+    if counts["sessions"] or counts["runs"]:
+        logger.warning("recover_interrupted (%s): %d session(s), %d run(s) marked interrupted",
+                       reason, counts["sessions"], counts["runs"])
+    return counts

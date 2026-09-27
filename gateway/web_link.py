@@ -84,6 +84,21 @@ def max_panel_bytes() -> int:
     return _limit_mb("CIVIL_LINK_MAX_PANEL_MB", 5)
 
 
+def max_tender_text_bytes() -> int:
+    """Tender TEXT one upload may carry (a .md file's bytes; a .docx / .pdf's text once read): more is refused, 413.
+    A run is budgeted for a tender's logistics part, not for megabytes of text inside the tool's 60 s."""
+    try:
+        return int(float(os.getenv("CIVIL_LINK_MAX_TENDER_TEXT_KB") or 400) * 1024)
+    except ValueError:
+        return 400 * 1024
+
+
+def _text_too_large(size: int) -> "Refusal":
+    return Refusal(413, "too_large", f"the tender has {size // 1024} kB of text; the link reads at most "
+                                     f"{max_tender_text_bytes() // 1024} kB per upload. Upload the part of the tender with "
+                                     "the delivery, packing and transport clauses on its own")
+
+
 def max_panel_rows() -> int:
     try:
         return max(1, int(os.getenv("CIVIL_LINK_MAX_PANEL_ROWS") or MAX_PANEL_ROWS))
@@ -97,6 +112,8 @@ def max_request_bytes() -> int:
 
 #: runs at once on this server; a third caller gets 429 instead of queueing behind a 60 s tool timeout
 _RUNS = threading.BoundedSemaphore(int(os.getenv("CIVIL_LINK_CONCURRENCY") or 2))
+#: seconds a busy (429) caller is told to wait before retrying
+RETRY_AFTER_S = "5"
 _SESSION_LOCKS: Dict[str, threading.Lock] = {}
 # Includes requests waiting for the same session lock: its prior record must
 # survive until that request can compare against it. Registration, job creation
@@ -117,7 +134,9 @@ class Refusal(Exception):
         self.status, self.code, self.detail = status, code, detail
 
     def response(self) -> JSONResponse:
-        return JSONResponse({"ok": False, "error_code": self.code, "detail": self.detail}, status_code=self.status)
+        headers = {"Retry-After": RETRY_AFTER_S} if self.status == 429 else None  # busy: when to come back
+        return JSONResponse({"ok": False, "error_code": self.code, "detail": self.detail}, status_code=self.status,
+                            headers=headers)
 
 
 def output_root() -> Path:
@@ -414,6 +433,7 @@ def _run_job(session: str, job: Path, tender: Path, panel: Path, uploaded: Dict[
     """One linked run in ``job``: the tool through a ToolEngine, the deliverables through write_deliverable."""
     from packing_assistant.office_job import job_root_scope
     from packing_assistant.runtime.tool_engine import default_engine
+    from packing_assistant.tender_packing_link import tender_text_limit
 
     t0 = time.perf_counter()
     previous = _previous_record(job.parent, job)
@@ -428,9 +448,11 @@ def _run_job(session: str, job: Path, tender: Path, panel: Path, uploaded: Dict[
         args["container_type"] = container_type
     if project_name:
         args["project_name"] = project_name
-    with job_root_scope(job):
+    with job_root_scope(job), tender_text_limit(max_tender_text_bytes()) as text_seen:
         result = engine.execute("tender.packing_link", args, expert_id="bid-parse", intent="run",
                                 run_id=run_id)
+    if text_seen.get("too_large"):
+        raise _text_too_large(text_seen["too_large"])
     if not result.get("ok"):
         code = str(result.get("error_code") or "link_failed")
         _log_failure(job, "tender.packing_link", result)
@@ -544,10 +566,37 @@ def _upload_job(session: str, tender: Tuple[str, str, bytes], panel: Tuple[str, 
     return _run_job(session, job, tender_path, panel_path, uploaded, container_type, project_name)
 
 
+def _once(session: str, key: Optional[str], fp: str, work):
+    """With an Idempotency-Key: the stored result of this key (replayed), 422 if the key was used for another
+    upload, else the run, stored. Checked under the key's lock, so two identical sends run once."""
+    from gateway import idempotency
+
+    if not key:
+        return work()
+    scope = f"/api/tender/link|{session}"
+    with idempotency.key_lock(scope, key):
+        try:
+            stored = idempotency.lookup(scope, key, fp)
+        except idempotency.KeyReused as e:
+            raise Refusal(422, "idempotency_key_reused", str(e)) from None
+        if stored is not None:
+            return idempotency.replayed(stored)
+        result = work()
+        idempotency.remember(scope, key, fp, result)
+        return result
+
+
 @router.post("/api/tender/link")
 async def api_tender_link(request: Request):
-    """Upload a tender and a panel list; run tender.packing_link on them in a job folder of their own."""
+    """Upload a tender and a panel list; run tender.packing_link on them in a job folder of their own.
+    An Idempotency-Key header makes a resend of the same upload return the first result (gateway/idempotency.py)."""
+    from gateway import idempotency
+
     try:
+        try:
+            key = idempotency.request_key(request.headers)
+        except idempotency.BadKey as e:
+            raise Refusal(400, "bad_idempotency_key", str(e)) from None
         length = request.headers.get("content-length")
         if length is None:
             raise Refusal(411, "length_required", "send the upload with a Content-Length header")
@@ -563,6 +612,9 @@ async def api_tender_link(request: Request):
             # no session_id: a session of its own, returned in the reply (a shared default would compare one
             # caller's upload with another caller's previous job)
             session = str(form.get("session_id") or "").strip() or "web-" + secrets.token_hex(8)
+            # an Idempotency-Key is scoped to the session the caller named ("" when it named none, so a resend
+            # without session_id finds the first run and its generated session)
+            key_session = str(form.get("session_id") or "").strip()
             if not SESSION_RE.match(session) or session.startswith("demo-"):
                 raise Refusal(400, "bad_session", "session_id: 1-64 of A-Z a-z 0-9 _ - (not starting with demo-)")
             container_type = str(form.get("container_type") or "").strip()
@@ -570,11 +622,26 @@ async def api_tender_link(request: Request):
                 raise Refusal(400, "bad_container_type", "container_type: a code such as 40HQ, or leave it empty")
             project_name = str(form.get("project_name") or "").strip()[:120]
             tender = await _read_upload(form, "tender", TENDER_TYPES, max_tender_bytes(), "tender")
+            if tender[0] == ".md" and len(tender[2]) > max_tender_text_bytes():
+                raise _text_too_large(len(tender[2]))       # before a slot or a job folder is taken
             panel = await _read_upload(form, "panel_list", PANEL_TYPES, max_panel_bytes(), "panel list")
         finally:
             await form.close()          # the spooled upload temp files; the bytes are in memory now
-        return await run_in_threadpool(_locked_run, session,
-                                       lambda: _upload_job(session, tender, panel, container_type, project_name))
+        # the parsed form, not the raw bytes: a browser picks a new multipart boundary on every send
+        fp = idempotency.fingerprint(key_session, container_type, project_name,
+                                     [tender[1], hashlib.sha256(tender[2]).hexdigest()],
+                                     [panel[1], hashlib.sha256(panel[2]).hexdigest()])
+        if key:
+            # a finished resend is answered without taking a run slot (no 429 while the server is busy)
+            try:
+                stored = await run_in_threadpool(idempotency.lookup, f"/api/tender/link|{key_session}", key, fp)
+            except idempotency.KeyReused as e:
+                raise Refusal(422, "idempotency_key_reused", str(e)) from None
+            if stored is not None:
+                return idempotency.replayed(stored)
+        return await run_in_threadpool(
+            _locked_run, session,
+            lambda: _once(key_session, key, fp, lambda: _upload_job(session, tender, panel, container_type, project_name)))
     except Refusal as r:
         return r.response()
 

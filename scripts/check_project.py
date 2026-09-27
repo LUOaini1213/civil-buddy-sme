@@ -101,6 +101,8 @@ CHECKS = (
     Check("tender-link-clauses", ("scripts/test_tender_link_clauses.py",), timeout=600),
     # the same reader on the sealed held-out set written blind on 2026-09-26: floors = its first scored run (README there)
     Check("tender-link-sealed", ("test/benchmarks/tender_link_sealed/score_sealed.py", "--check"), timeout=600),
+    # the reader is bounded: a sentence too dense to read figure by figure goes to a person, runs stop at checkpoints
+    Check("tender-link-bounded", ("scripts/test_tender_link_bounded.py",), timeout=600),
     # planted text in SYNTHETIC tender / panel-list files does not change statuses, approve anything or become a
     # statement (steps mode, gateway, and a scripted fake model that obeys the plant); a live model was not tested
     Check("injection-plants", ("scripts/test_injection_plants.py",), timeout=600),
@@ -126,12 +128,17 @@ CHECKS = (
     Check("middleware", ("scripts/test_agent_middleware.py",)),
     Check("deadlock", ("scripts/test_deadlock.py",)),
     Check("runtime-cancel-isolation", ("scripts/test_runtime_cancel_isolation.py",)),
+    # the shared ToolEngine's fault circuit: open after 3 faults, half-open trial after the cool-down
+    Check("tool-circuit", ("scripts/test_tool_circuit.py",)),
+    Check("lg-checkpoint-errors", ("scripts/test_lg_checkpoint_errors.py",)),
     Check("sandbox", ("scripts/test_sandbox.py",)),
     Check("pack-ship-read-sandbox", ("scripts/test_pack_ship_read_sandbox.py",), timeout=300),
     Check("civil-cli", ("scripts/test_civil_codex.py",)),
     Check("civil-config", ("scripts/test_civil_config.py",)),
     Check("civil-workspace", ("scripts/test_civil_workspace.py",)),
     Check("model-loop", ("scripts/test_model_loop.py",)),
+    # bounded retry of one model request (429/5xx/timeouts/resets) against a fake endpoint on 127.0.0.1
+    Check("model-retry", ("scripts/test_model_retry.py",), timeout=300),
     # model mode on the link: deterministic first, the model only explains; its claims checked against the record
     Check("model-mode-link", ("scripts/test_model_mode_link.py",), timeout=300),
     # 12 frozen requests against a scripted OpenAI-compatible server on 127.0.0.1 (no network, no key)
@@ -209,6 +216,10 @@ CHECKS = (
     Check("panel-lists-sealed", ("test/benchmarks/panel_lists_sealed/score_sealed.py", "--check"), timeout=300),
     Check("workbench-needs-human", ("scripts/test_workbench_needs_human.py",)),
     Check("storage-parent", ("scripts/test_storage_ensure_run.py",)),
+    # confirm runs Team B once (replay / 409), exports never collide, busy 429s carry Retry-After, restarts mark
+    # running sessions interrupted, a pipeline concurrency cap
+    Check("gateway-state-safety", ("scripts/test_gateway_state_safety.py",), timeout=300),
+    Check("python-idempotency", ("scripts/test_python_idempotency.py",), timeout=300),
     Check("offline-eval", ("-c", "from packing_assistant.runtime.eval_live import live_eval; "
           "v=live_eval(); assert v.get('verdict')=='offline_gate_pass', v; print(v['verdict'])")),
     Check("industry-eval", ("scripts/test_industry_agent_eval.py",)),

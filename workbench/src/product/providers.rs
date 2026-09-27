@@ -10,8 +10,20 @@ pub enum ProviderError {
     Invalid(String),
     #[error("provider HTTP {0}; check configuration or retry later")]
     Http(u16),
+    /// HTTP 429 carries the provider's Retry-After, when it sent one.
+    #[error("provider rate-limited this request (HTTP 429{}); this is not a configuration problem, wait a moment and try again", wait_hint(.0))]
+    RateLimited(Option<Duration>),
+    #[error("provider HTTP {status}: the provider failed temporarily{}; retry later", wait_hint(.retry_after))]
+    Unavailable {
+        status: u16,
+        retry_after: Option<Duration>,
+    },
     #[error("provider request failed or timed out")]
     Transport,
+    /// The attempt ran to its timeout. The provider may still be working on
+    /// it, so this is not retried: another attempt would only wait again.
+    #[error("provider did not answer before the request timeout; retry later")]
+    TimedOut,
     #[error(transparent)]
     Runtime(#[from] crate::runtime_core::RuntimeError),
 }
@@ -60,8 +72,8 @@ fn validate_endpoint(raw: &str) -> Result<()> {
     Ok(())
 }
 
-/// One bounded HTTP request. Failed attempts are charged conservatively by the
-/// budget reservation; callers explicitly choose whether to retry.
+/// One bounded HTTP request (120 s). Failed attempts stay charged by the budget
+/// reservation; retrying is the caller's choice, see [`complete_with_retry`].
 pub async fn complete(
     cfg: &LlmConfig,
     messages: &[Value],
@@ -71,6 +83,24 @@ pub async fn complete(
     budget: &BudgetTree,
     task: &TaskId,
     cancel: &CancellationToken,
+) -> Result<Completion> {
+    let timeout = MODEL_REQUEST_TIMEOUT;
+    attempt(
+        cfg, messages, tools, max_output, window, budget, task, cancel, timeout,
+    )
+    .await
+}
+
+async fn attempt(
+    cfg: &LlmConfig,
+    messages: &[Value],
+    tools: &[Value],
+    max_output: u64,
+    window: u64,
+    budget: &BudgetTree,
+    task: &TaskId,
+    cancel: &CancellationToken,
+    timeout: Duration,
 ) -> Result<Completion> {
     if cfg.api_key.is_empty() {
         return Err(ProviderError::Invalid(
@@ -102,23 +132,19 @@ pub async fn complete(
     let mut reservation = budget.reserve(task, estimated_input, max_output, 1)?;
     reservation.start()?;
     let request = async {
-        let mut response = client(Duration::from_secs(120))?
+        let mut response = client(timeout)?
             .post(endpoint)
             .bearer_auth(&cfg.api_key)
             .json(&payload)
             .send()
             .await
-            .map_err(|_| ProviderError::Transport)?;
+            .map_err(transport_error)?;
         let status = response.status();
         if !status.is_success() {
-            return Err(ProviderError::Http(status.as_u16()));
+            return Err(status_error(status.as_u16(), response.headers()));
         }
         let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| ProviderError::Transport)?
-        {
+        while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
             if bytes.len() + chunk.len() > 4 * 1024 * 1024 {
                 return Err(ProviderError::Invalid(
                     "provider response exceeds 4 MiB".into(),
@@ -131,7 +157,24 @@ pub async fn complete(
     };
     let raw = tokio::select! {
         _ = cancelled(cancel) => { cancel.check()?; unreachable!() },
-        result = request => result?,
+        result = request => result,
+    };
+    let raw = match raw {
+        Ok(raw) => raw,
+        Err(error) => {
+            if error.is_status() {
+                // The provider answered with an error status, so it generated
+                // no output. Keep the call and the (estimated) input charged;
+                // transport failures stay charged their whole reservation.
+                let _ = reservation.settle(Usage {
+                    input_tokens: estimated_input,
+                    output_tokens: 0,
+                    model_calls: 1,
+                    estimated: true,
+                });
+            }
+            return Err(error);
+        }
     };
     let message = raw
         .pointer("/choices/0/message")
@@ -174,6 +217,205 @@ pub async fn complete(
             .unwrap_or("unknown")
             .into(),
     })
+}
+
+const MODEL_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// A retry starts only if at least this much of the task deadline would remain
+/// after its backoff, so a retry never runs the turn past its deadline.
+const MIN_RETRY_WINDOW: Duration = Duration::from_secs(5);
+
+fn wait_hint(wait: &Option<Duration>) -> String {
+    match wait.map(|d| d.as_secs_f64().ceil() as u64) {
+        Some(secs) if secs > 0 => format!(", it asked to wait {secs} s"),
+        _ => String::new(),
+    }
+}
+
+fn transport_error(error: reqwest::Error) -> ProviderError {
+    if error.is_timeout() {
+        ProviderError::TimedOut
+    } else {
+        ProviderError::Transport
+    }
+}
+
+fn status_error(status: u16, headers: &reqwest::header::HeaderMap) -> ProviderError {
+    match status {
+        429 => ProviderError::RateLimited(retry_after(headers)),
+        500..=599 => ProviderError::Unavailable {
+            status,
+            retry_after: retry_after(headers),
+        },
+        _ => ProviderError::Http(status),
+    }
+}
+
+/// `retry-after-ms` (sent by some OpenAI-compatible APIs) or `Retry-After` in
+/// seconds. The HTTP-date form is ignored and ordinary backoff applies.
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let number = |name: &str| {
+        headers
+            .get(name)?
+            .to_str()
+            .ok()?
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .map(|v| v.min(86_400_000.0))
+    };
+    number("retry-after-ms")
+        .map(|ms| Duration::from_secs_f64(ms / 1000.0))
+        .or_else(|| number("retry-after").map(|s| Duration::from_secs_f64(s.min(86_400.0))))
+}
+
+impl ProviderError {
+    /// The provider answered with an HTTP error status (no output generated).
+    fn is_status(&self) -> bool {
+        matches!(
+            self,
+            Self::Http(_) | Self::RateLimited(_) | Self::Unavailable { .. }
+        )
+    }
+    /// 429, 5xx and connection errors are worth another attempt; a timeout is
+    /// not (the attempt already waited its whole window). The inner value is
+    /// the provider's Retry-After, if it sent one.
+    fn transient(&self) -> Option<Option<Duration>> {
+        match self {
+            Self::RateLimited(wait)
+            | Self::Unavailable {
+                retry_after: wait, ..
+            } => Some(*wait),
+            Self::Transport => Some(None),
+            _ => None,
+        }
+    }
+}
+
+/// Bounded retry of transient provider failures.
+#[derive(Clone, Debug)]
+pub struct RetryPolicy {
+    pub max_retries: u32,
+    /// Full jitter: retry n sleeps a uniform time in [0, min(max, base * 2^n)].
+    pub base_delay: Duration,
+    /// Also the longest Retry-After honoured; a longer one ends the retries.
+    pub max_delay: Duration,
+    /// Each attempt's timeout (never past the task deadline).
+    pub attempt_timeout: Duration,
+}
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_retries: 2,
+            base_delay: Duration::from_secs(2),
+            max_delay: Duration::from_secs(8),
+            attempt_timeout: MODEL_REQUEST_TIMEOUT,
+        }
+    }
+}
+impl RetryPolicy {
+    pub fn none() -> Self {
+        Self {
+            max_retries: 0,
+            ..Self::default()
+        }
+    }
+    /// A model call may be retried only while no tool has run in the turn.
+    pub fn before_tools(no_tool_has_run: bool) -> Self {
+        if no_tool_has_run {
+            Self::default()
+        } else {
+            Self::none()
+        }
+    }
+    fn delay(&self, retry: u32, requested: Option<Duration>) -> Option<Duration> {
+        match requested {
+            Some(wait) => (wait <= self.max_delay).then_some(wait),
+            None => {
+                let ceiling = self
+                    .base_delay
+                    .saturating_mul(1u32 << retry.min(16))
+                    .min(self.max_delay);
+                // The low 62 bits of a v4 UUID are random.
+                let bits = uuid::Uuid::new_v4().as_u128() as u64 & ((1u64 << 53) - 1);
+                Some(ceiling.mul_f64(bits as f64 / (1u64 << 53) as f64))
+            }
+        }
+    }
+}
+
+/// Reported to the caller before each backoff sleep.
+#[derive(Clone, Debug)]
+pub struct RetryNotice {
+    pub retry: u32,
+    pub max_retries: u32,
+    pub delay: Duration,
+    pub reason: String,
+}
+
+fn remaining(budget: &BudgetTree) -> Duration {
+    budget
+        .snapshot()
+        .map(|s| Duration::from_millis(s.limits.timeout_ms.saturating_sub(s.elapsed_ms)))
+        .unwrap_or(MODEL_REQUEST_TIMEOUT)
+}
+
+/// [`complete`] with bounded retry of transient failures (429, 5xx, dropped
+/// connections): at most `policy.max_retries` more attempts after a
+/// full-jitter backoff or the provider's Retry-After, never past the task
+/// deadline, and cancellation ends the backoff sleep at once. A timed-out
+/// attempt is not retried, so a hung provider fails after one attempt window
+/// (120 s) instead of holding the turn to its 300 s limit. Every attempt
+/// makes its own budget reservation and consumes a model call. The caller
+/// decides when a retry is safe; the product agent retries only before any
+/// tool has run in the turn.
+pub async fn complete_with_retry(
+    cfg: &LlmConfig,
+    messages: &[Value],
+    tools: &[Value],
+    max_output: u64,
+    window: u64,
+    budget: &BudgetTree,
+    task: &TaskId,
+    cancel: &CancellationToken,
+    policy: &RetryPolicy,
+    mut on_retry: impl FnMut(&RetryNotice),
+) -> Result<Completion> {
+    let mut retry = 0;
+    loop {
+        let timeout = remaining(budget).min(policy.attempt_timeout);
+        let error = match attempt(
+            cfg, messages, tools, max_output, window, budget, task, cancel, timeout,
+        )
+        .await
+        {
+            Ok(completion) => return Ok(completion),
+            Err(error) => error,
+        };
+        let Some(requested) = error.transient() else {
+            return Err(error);
+        };
+        if retry >= policy.max_retries || cancel.is_cancelled() {
+            return Err(error);
+        }
+        let Some(delay) = policy.delay(retry, requested) else {
+            return Err(error);
+        };
+        if remaining(budget) < delay.saturating_add(MIN_RETRY_WINDOW) {
+            return Err(error);
+        }
+        retry += 1;
+        on_retry(&RetryNotice {
+            retry,
+            max_retries: policy.max_retries,
+            delay,
+            reason: error.to_string(),
+        });
+        tokio::select! {
+            _ = cancelled(cancel) => { cancel.check()?; unreachable!() },
+            _ = tokio::time::sleep(delay) => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -338,7 +580,7 @@ pub async fn decide(
             .await
             .map_err(|_| ProviderError::Transport)?;
         if !response.status().is_success() {
-            return Err(ProviderError::Http(response.status().as_u16()));
+            return Err(status_error(response.status().as_u16(), response.headers()));
         }
         if response.content_length().is_some_and(|n| n > 256 * 1024) {
             return Err(ProviderError::Invalid("Jev response too large".into()));
