@@ -26,9 +26,13 @@ except ImportError:  # Direct invocation from scripts/.
 ROOT = Path(__file__).resolve().parents[1]
 EXTRA = (
     "SECURITY.md", "docs/civil-buddy/release-handoff.md",
+    "docs/civil-buddy/sme-integration.md", "README.zh.md",
     "scripts/unified_acceptance.py", "scripts/test_unified_runtime_http.py",
     "examples/facade-demo/README.md", "examples/facade-demo/facade_itt_doc.md",
-    "examples/facade-demo/facade_panels.xlsx",
+    "examples/facade-demo/facade_panels.xlsx", "examples/facade-demo/facade_panels_rev_b.xlsx",
+    "examples/facade-demo/facade_panels_zh.xlsx", "examples/facade-demo/daily_report_input.txt",
+    "examples/facade-demo/wah_briefing_input.txt",
+    "scripts/demo_facade.py",
     "workbench/Cargo.toml", "workbench/Cargo.lock",
     "scripts/build_workbench_release.py", "scripts/build_unified_release.py",
     "docs/civil-buddy/architecture/implementation.md",
@@ -157,6 +161,10 @@ def release_readme(version: str, architecture: str, commit: str) -> str:
 本包包含 Windows {architecture} 的 Rust 主程序、固定 Python 工具服务、原 Python 工作台、
 66 个岗位 SOP、知识库、文档技能，以及 Rust 源码和架构文档。需要另备 **Python 3.11 或更高版本**。
 不包含 Python 解释器、API Key、`.env`、运行历史或用户工程资料。
+
+新比赛仓库：https://github.com/LUOaini1213/civil-buddy-sme 。
+比赛主线为英文招标与箱单联动；全部演示资料均为合成样例。依赖安装后可运行
+`python scripts/demo_facade.py` 复跑离线演示，不需要模型密钥。
 
 ## 首次准备
 

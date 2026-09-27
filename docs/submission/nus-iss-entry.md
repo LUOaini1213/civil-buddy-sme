@@ -45,7 +45,7 @@ When revision B of the panel list arrives (30 panels, 13,920 kg), the same reque
 and names what went stale: statements S2, S3, S6 and S7 need re-confirmation, S1, S4 and S5 keep the
 same figures, and the earlier Word copies `bidbook.en.docx` and `tender-packing-link.docx` "still hold
 the previous statements - do not send them". A statement the plan cannot evidence is never marked
-covered; `scripts/test_tender_packing_link.py` (18 tests) pins that, including a plan that does not fit
+covered; `scripts/test_tender_packing_link.py` pins that, including a plan that does not fit
 and container clauses that name a size only or a type the planner cannot model.
 
 Flows 2–4 of the same script run tender review, packing and site paperwork on their own. Site
@@ -64,7 +64,7 @@ Shipped in pull request #61 (merge commit `d3ada11`) and enforced in code:
   without it, but every draft carries `submit_blocked = true`.
 - The server is token-gated: with `CIVIL_TOKEN` set, every API route needs it, loopback included; a
   non-loopback bind without a token refuses to start.
-- 146 offline checks (`npm run check`) run in CI on every push, next to a `docker-smoke` job that builds
+- The offline checks (`npm run check`, current list in `scripts/check_project.py --list`) run in CI on every push, next to a `docker-smoke` job that builds
   and starts the gateway image (pull request #64, merge commit `16316df`).
 
 ## Real and synthetic
@@ -96,12 +96,13 @@ As the demo and the technical document print them:
   `/api/tender/delivery` route can plan sample materials in another container type and leaves that row
   to a person.
 - The English bid-book still carries Chinese titles in chapter 3 and Annex B for non-logistics rows.
-- No step yet in which a person marks a link statement confirmed; the link has not been run in model
-  mode.
+- No step yet in which a person marks a link statement confirmed; model-mode routing and explanation
+  have scripted offline checks, but no live-model business acceptance.
 - English routing: on the blind held-out set `heldout_en2` (28 sentences) accuracy is 0.786 with 0
   false runs; the misses fall back to chat.
-- The legacy Rust workbench (`workbench/`) predates the security baseline and still accepts
-  `confirm_ok`; it is not part of the deployed surface.
+- The current Rust workbench includes named-instance identity, persistent Agent events, current-operation
+  HTTP confirmation and an authenticated Python tool service. It is a local preview, not an already
+  deployed multi-tenant platform. See the [current integration record](../civil-buddy/sme-integration.md).
 
 ## Links
 

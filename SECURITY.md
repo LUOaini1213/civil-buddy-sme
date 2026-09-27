@@ -72,11 +72,13 @@ model would obey. The plants are our own synthetic development cases, not an ind
 
 ## Known open items
 
-Stated in the technical document (`docs/submission/nus-iss-technical.md`, §4.4) and still true:
+The technical document (`docs/submission/nus-iss-technical.md`, §4.4) describes the older `a161251`
+snapshot. Remaining boundaries and their current scope are listed here:
 
-- **Rust tools.** The undeployed Rust `civil-mcp` binary and the Rust workbench still accept `confirm_ok`
-  (`workbench/src/mcp.rs`, `workbench/src/api.rs`). Neither is part of the deployed surface, although old
-  Rust-workbench trial builds are on GitHub Releases.
+- **Old Rust binaries.** Earlier trial builds accepted an approval flag. Current HTTP routes require the
+  confirmation text for the operation. Current Rust MCP does not advertise or accept approval arguments,
+  denies high-risk tool calls, validates session IDs and enforces its launch scope. Use the interactive
+  workbench for approval; do not substitute an old executable for this source.
 - **Pack-ship circuit on the steps path.** Three needs-human packing lists in a row open a process-wide circuit for
   `pack-ship__plan` until a restart.
 - **Run routes.** `/api/runs/compare` and the `{run_id}` routes join request values onto the runs folder; they are
@@ -87,8 +89,9 @@ Stated in the technical document (`docs/submission/nus-iss-technical.md`, §4.4)
   confined on Windows.
 - **No PII masking.** Nothing is masked before a call to a cloud model; the safeguard today is no key, or a local
   model.
-- **Cost, audit, identity.** The session cost fuse is wired only in a demo script; the engine's audit log is in
-  memory; no approver is named until user accounts exist.
+- **Legacy cost, audit, identity.** The original Python engine's audit log is in memory and its demo cost fuse
+  is not a shared billing system. The new Rust Agent records actor, events and provider usage in SQLite;
+  this does not retroactively add identity or complete billing to separately launched legacy entry points.
 - **Gateway packing pause.** `enable_auto_confirm` defaults to true for API callers. This is the packing-plan pause,
   not the licensed-person gate.
 - **Prompt injection.** There is no injection detector. The planted-instruction test above covers the steps mode and
@@ -103,6 +106,8 @@ authentication layer covers Agent, legacy, domain and artifact routes. Accounts 
 HttpOnly SameSite=Strict session cookie; cookies expire on restart. Per-instance state and workspace ownership
 records reject reuse by another user or another state directory. This is separate-instance isolation, not a
 shared-process multi-tenant service. A public reverse proxy requires the configured HTTPS public origin.
+This is application isolation, not an OS security boundary against someone who can edit another instance's
+files under the same Windows/Linux account. Use separate OS accounts or hosts when that boundary is required.
 
 The internal Python service has a separate random Bearer token, a route allowlist, no provider keys and no model
 loop. Named mode disables legacy local-path import, URL import and studio editing. Rust Agent events, actor IDs,

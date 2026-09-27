@@ -312,9 +312,16 @@ class ModelMode(Fixture):
         guard = out["provenance"]
         self.assertEqual(guard["rewrites"], 1)
         self.assertEqual(guard["claims_corrected"], ["All seven clauses are covered"])
-        self.assertEqual(guard["verdicts"], ["complies with the tender", "approved for submission", "can book"])
+        # The record guard removes the entire approval sentence before the
+        # verdict guard checks what remains. All three claims must stay absent
+        # from the reply body, with evidence in the guard that actually removed it.
+        self.assertEqual(guard["verdicts"], ["can book"])
+        self.assertEqual(len(guard["record"]), 1)
+        self.assertIn("complies with the tender", guard["record"][0])
+        self.assertIn("approved for submission", guard["record"][0])
         self.assertIn("Corrected from the link record", out["reply"])
-        self.assertIn("Struck from this reply", out["reply"])
+        self.assertIn("Struck from the reply because the link record says otherwise", out["reply"])
+        self.assertIn("These verdicts are not this system's to give", out["reply"])
 
     def test_named_and_counted_claims_are_checked_against_the_record(self):
         files = ["facade_itt_doc.md", "facade_panels.xlsx"]

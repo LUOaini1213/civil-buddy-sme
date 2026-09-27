@@ -23,6 +23,45 @@ import webbrowser
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def validate_owned_directory(root: Path, *, state: bool) -> None:
+    """Reject overlap before helpers start; Rust repeats this before claiming state.
+
+    These records guard trusted local configuration, not malicious OS users who
+    can remove records or concurrently rearrange directories. identity.sqlite is
+    reserved for private instance state, including damaged or partial databases.
+    """
+    workspace_binding = Path(".civil-buddy/instance-owner.sqlite")
+    def present(path: Path) -> bool:
+        try:
+            path.lstat()
+            return True
+        except FileNotFoundError:
+            return False
+    if state and present(root / workspace_binding):
+        raise ValueError("State storage cannot be an owned workspace")
+    if not state and present(root / "identity.sqlite"):
+        raise ValueError("Workspace cannot be a private instance state directory")
+    for parent in root.parents:
+        if present(parent / workspace_binding) or present(parent / "identity.sqlite"):
+            raise ValueError("Directory is nested inside an owned workspace or private instance state")
+    if not present(root):
+        return
+    pending, visited = [root], 0
+    while pending:
+        directory = pending.pop()
+        if directory != root and (present(directory / workspace_binding) or present(directory / "identity.sqlite")):
+            raise ValueError("Directory contains an owned workspace or private instance state")
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                visited += 1
+                if visited > 100_000:
+                    raise ValueError("Ownership scan exceeds 100000 entries; choose a smaller dedicated directory")
+                metadata = entry.stat(follow_symlinks=False)
+                linked = entry.is_symlink() or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)
+                if entry.is_dir(follow_symlinks=False) and not linked:
+                    pending.append(Path(entry.path))
+
+
 class ProcessFamily:
     """Own only this launcher's helpers and their descendants, including ASR workers."""
     def __init__(self):
@@ -121,6 +160,12 @@ def main():
     elif any(environment.get(k) for k in ("CIVIL_INSTANCE_USER", "CIVIL_TOKEN", "CIVIL_TOKEN_SHA256", "CIVIL_PUBLIC_ORIGIN", "CIVIL_ALLOWED_WORKSPACES")):
         parser.error("Identity environment is configured; use explicit --user-id, --workspace and --token-file")
     args.state_root = args.state_root.resolve()
+    if named:
+        try:
+            validate_owned_directory(workspace, state=False)
+            validate_owned_directory(args.state_root, state=True)
+        except (OSError, ValueError) as exc:
+            parser.error(f"Cannot safely separate workspace and state: {exc}")
     args.state_root.mkdir(parents=True, exist_ok=True)
     # OS lock prevents a second host from recovering a live host's active turns.
     lock = (args.state_root / "host.lock").open("a+b")

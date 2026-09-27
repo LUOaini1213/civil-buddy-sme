@@ -286,7 +286,8 @@ class Instance:
 def run(binary, output):
     output.mkdir(parents=True, exist_ok=False)
     report = {"passed": False, "synthetic": True, "cross_computer": False, "real_provider_calls": False,
-              "binary": str(binary), "checks": {}, "logs_root": str(output),
+              "binary": str(binary), "binary_sha256": sha256(binary.read_bytes()).hexdigest(),
+              "checks": {}, "logs_root": str(output),
               "session_scopes": {"document_agent": "Rust /api/agent workspace turns and new document copies",
                                  "legacy_bundle": "Legacy /api/sessions ZIP transfers sources, artifacts and history; not Rust Agent workspace turns"}}
     provider = document_acceptance.model_server(0)

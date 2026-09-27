@@ -721,7 +721,7 @@ pub async fn run_expert(
             // 在 tokio worker 上 drop 时 panic，SSE 流被无声截断（只收到 context 事件）。
             let paths_owned = paths.clone();
             let expert_owned = expert.clone();
-            let run = match tokio::task::spawn_blocking(move || {
+            let run = match crate::turns::blocking(session_id, move || {
                 harness::run_expert_steps(&paths_owned, &expert_owned, ticket)
             })
             .await

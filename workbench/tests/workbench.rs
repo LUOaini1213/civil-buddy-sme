@@ -649,7 +649,7 @@ async fn test_health_exposes_context_policy() {
     assert_eq!(v["capabilities"]["chat"], Value::Bool(true), "{body}");
     assert_eq!(v["capabilities"]["attachments"], Value::Bool(true), "{body}");
     assert_eq!(v["capabilities"]["cancel"], Value::Bool(true), "{body}");
-    assert_eq!(v["capabilities"]["session_backup"], Value::Bool(true), "{body}");
+    assert_eq!(v["capabilities"]["session_backup"], Value::Bool(false), "{body}");
     assert!(v["capabilities"]["packing"].is_boolean(), "{body}");
     assert_eq!(v["harness"]["expert_runtime"].as_str(), Some("understand"));
     assert_eq!(v["harness"]["summoned_default"].as_str(), Some("chat"));

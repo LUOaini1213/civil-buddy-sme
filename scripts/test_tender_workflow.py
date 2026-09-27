@@ -282,17 +282,28 @@ class TenderWorkflowTests(unittest.TestCase):
         self.assert_preserved(result)
 
     def test_model_timeout_returns_and_signals_readonly_runner(self):
-        exited = [Event(), Event()]
+        entered, exited, stops = Barrier(3), [Event(), Event()], []
         index = iter(range(2))
 
         def runner(messages, *, max_tokens, cancel_event):
             slot = next(index)
-            cancel_event.wait(3)
+            stops.append(cancel_event)
+            entered.wait(timeout=10)
+            cancel_event.wait(5)
             exited[slot].set()
             return answer(messages, max_tokens=max_tokens, cancel_event=cancel_event)
 
-        began = time.monotonic()
-        result = self.run_workflow(model_runner=runner, budget={"timeout_s": 1.5})
+        # Office export precedes model execution and may take more than one
+        # second on a loaded builder. Start the deadline assertion only after
+        # both read-only callbacks have actually entered; still test _Stop's
+        # real deadline and require prompt return and cancellation propagation.
+        with ThreadPoolExecutor(1) as pool:
+            future = pool.submit(self.run_workflow, model_runner=runner)
+            entered.wait(timeout=10)
+            began = time.monotonic()
+            for stop in stops:
+                stop.deadline = began + 0.1
+            result = future.result(timeout=2.5)
         self.assertLess(time.monotonic() - began, 2.5)
         self.assertEqual(result["state"], "timed_out", result)
         self.assertTrue(all(event.wait(1) for event in exited))
@@ -335,17 +346,25 @@ class TenderWorkflowTests(unittest.TestCase):
         self.assert_preserved(result)
 
     def test_late_uncooperative_analysis_cannot_write_after_timeout(self):
-        gate, finished, index = Event(), [Event(), Event()], iter(range(2))
+        gate, entered, finished, stops = Event(), Barrier(3), [Event(), Event()], []
+        index = iter(range(2))
 
         def runner(messages, *, max_tokens, cancel_event):
             slot = next(index)
-            gate.wait(3)  # Deliberately ignores cancellation; it cannot write.
+            stops.append(cancel_event)
+            entered.wait(timeout=10)
+            gate.wait(10)  # Deliberately ignores cancellation; it cannot write.
             value = answer(messages, max_tokens=max_tokens, cancel_event=cancel_event)
             finished[slot].set()
             return value
 
         try:
-            result = self.run_workflow(model_runner=runner, budget={"timeout_s": 1.0})
+            with ThreadPoolExecutor(1) as pool:
+                future = pool.submit(self.run_workflow, model_runner=runner)
+                entered.wait(timeout=10)
+                for stop in stops:
+                    stop.deadline = time.monotonic() + 0.1
+                result = future.result(timeout=2.5)
             self.assertEqual(result["state"], "timed_out", result)
             manifest = Path(result["directory"]) / "workflow.json"
             before = manifest.read_bytes()

@@ -7,6 +7,11 @@ date: "Code: main at a161251, 2026-09-26"
 
 Repository: <https://github.com/LUOaini1213/civil-buddy-sme> (MIT licence; commits are cited by SHA) · Code: `main` at `a161251`, 2026-09-26
 
+> Historical snapshot: this document's results, counts and line references describe `a161251`,
+> not the current integrated source. The new repository preserves that evaluation record; see
+> [SME integration](../civil-buddy/sme-integration.md) for the unified host, named instances,
+> current-operation confirmation, persisted Agent events and the remaining acceptance tasks.
+
 Every result we claim was produced offline, with no model key, on a named checkout of `main`. The linked tender and packing run (§3.4), the release gate (§5.3), the Docker checks (§6) and every `file:line` reference are those of `a161251`, which is `main` after pull request #65. The benchmark rows of §5.2 and the measured flows of §3.1–§3.3 were run on the earlier `d3ada11` and are labelled so. Release-gate results are GitHub CI's. The few older figures we mention are labelled as archived. Appendix A names the command or file behind each number and strong claim. Each part of the architecture carries one status tag:
 
 | Tag | Meaning |

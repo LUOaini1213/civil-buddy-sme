@@ -117,11 +117,11 @@ Enforced in code, not in prompts; shipped as the security baseline (pull request
    The bid posts (bid-parse, bid-tech, bid-compliance) are **low risk** in `seed.json`: they draft without
    the sentence, but every draft carries `submit_blocked = true` and the qualification / rejection rows
    wait for a person.
-4. **The server is token-gated.** With `CIVIL_TOKEN` set, every API route and WebSocket needs the token,
+4. **The Python server is token-gated.** With `CIVIL_TOKEN` set, every API route and WebSocket needs the token,
    from loopback too (so a reverse proxy cannot bypass it). Binding a non-loopback address without a
    token refuses to start. `/api/health` stays public on purpose for health checks.
 5. **Policy as code and an offline gate.** Every registered tool call on the default path, over MCP and
-   through the gateway's tool route passes a policy function that refuses with a stated reason. `npm run check` (146 checks, no key) runs in CI on every push; the
+   through the gateway's tool route passes a policy function that refuses with a stated reason. `npm run check` runs offline in CI on every push; `python scripts/check_project.py --list` lists the current checks. The
    badge above is this repository's CI.
 
 ## Where it runs (AWS, stated honestly)
@@ -153,12 +153,12 @@ Each figure comes from a command in this repository, run offline with no key.
 | What | Figure | Command |
 |---|---|---|
 | Linked run (synthetic façade job) | 5 logistics clauses; 7 statements: 1 covered, 2 partial, 0 gap, 4 for a person. Rev B: 6 → 8 containers, 4 statements to re-confirm, 2 stale Word copies named | `python scripts/demo_facade.py` |
-| Link behaviour pinned by tests | 18 tests, including tenders that must *not* read as covered (a plan that does not fit, a 6,000 kg limit, size-only or negated container clauses, open-top / flat-rack types) | `python scripts/test_tender_packing_link.py` |
+| Link behaviour pinned by tests | Includes tenders that must *not* read as covered (a plan that does not fit, a 6,000 kg limit, size-only or negated container clauses, open-top / flat-rack types); current counts are printed by the command | `python scripts/test_tender_packing_link.py` |
 | English request routing, blind held-out set | `heldout_en2`: 28 sentences, accuracy 0.786, **0 false runs** (all 6 misses fall back to chat). The two other English sets are not blind and are not quoted | `python scripts/test_english_intents.py --score` |
 | Chinese request routing, held-out | 1.000 accuracy, 0 false runs | `python scripts/eval_task_intent.py --check` |
 | Packing fan-out evaluation (128 runs) | All 128 runs completed, but only **71 of 128** produced a plan that fits; 57 returned `can_fit=False` to a person | `python scripts/render_eval_table.py` |
 | Tools | 82 registered tools (71 write), each with JSON Schema input and output contracts; MCP scopes of 11 / 8 / 9 / 13 tools | `scripts/check_project.py` checks `tool-contracts` |
-| Release gate | 146 default checks | `python scripts/check_project.py --list`; `npm run check` |
+| Release gate | Current offline checks, with separate full HTTP and Rust checks | `python scripts/check_project.py --list`; `npm run check`; `npm run check:full` |
 
 The fan-out line that CI checks against the archive is kept in its original wording (CI runs
 `python scripts/render_eval_table.py --check README.md`):
@@ -187,10 +187,29 @@ The link is built on a local-first agent workbench:
 - **MCP:** `python -m packing_assistant.civil mcp --pack construction` (stdio JSON-RPC, for VS Code,
   Cursor or other agent hosts; configs in [ide/](ide/README.md)). High-risk writes over MCP return
   `approval_required` and write nothing.
-- **Legacy Rust workbench** (`workbench/`): it predates the security baseline and **still accepts
-  `confirm_ok`** (`workbench/src/api.rs:1292`, `workbench/src/mcp.rs:173-176`). It is not part of the
-  deployed surface and must not be used as the safe entry for high-risk posts. This repository ships
-  no binary builds of it.
+- **Unified Rust workbench** (`workbench/`): one browser entry for Agent tasks, the specialist
+  workflow, document copies, CAD, schedules and packing-list records. The host keeps actor and tool
+  events in SQLite and calls a fixed, authenticated Python service for deterministic tools. Current
+  HTTP requests require the typed confirmation for high-risk operations; MCP arguments cannot grant
+  that approval. Historical trial binaries are not evidence for the current source.
+
+### Run the unified workbench from source
+
+```powershell
+python -m pip install -r requirements.txt -r requirements-documents.txt
+cargo build --locked --release --manifest-path workbench/Cargo.toml
+python scripts/start_unified_workbench.py --binary workbench/target/release/civil-workbench.exe --open
+```
+
+This local preview starts both processes and opens the Agent page. Install optional CAD, engineering
+and planning dependencies from their respective requirements files when using those pages. The
+ordinary checks use scripted local models; no paid model or cloud deployment is implied.
+
+For a named user, provide `--user-id`, `--workspace` and `--token-file` together. Each instance owns
+one physical workspace and private state; this is **not a shared-process multi-tenant service**.
+The [handoff guide](docs/civil-buddy/release-handoff.md) covers login, restart, project packages and
+remaining real-business acceptance. The [SME integration record](docs/civil-buddy/sme-integration.md)
+distinguishes this source from the older competition repository and archived evaluation figures.
 
 ## Documents
 
@@ -215,13 +234,15 @@ examples/facade-demo/       SYNTHETIC façade ITT, panel lists (rev A, rev B), s
 scripts/                    demos, tests, evaluations; scripts/check_project.py is the gate
 test/benchmarks/            benchmark sets behind the evaluation figures
 docs/                       technical document, deployment guide, design notes (many in Chinese)
-workbench/                  legacy Rust workbench (see above)
+workbench/                  unified Rust task host and compatibility routes
 .github/workflows/ci.yml    CI: smoke (the gate), rust, packing-eval-slice, docker-smoke
 ```
 
 ## Settings
 
-Copy `.env.example` / `demo/.env.example`; never commit keys.
+The table below describes the original Python entry points. The unified launcher's options and
+separate host/service configuration are documented in the handoff guide. Copy `.env.example` /
+`demo/.env.example`; never commit keys.
 
 | Variable | Default | Effect |
 |---|---|---|

@@ -46,6 +46,43 @@ class LauncherTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name).resolve()
 
+    def test_owned_workspace_and_state_overlap_rejected_in_both_directions(self):
+        owner = self.root / "alice-job" / ".civil-buddy" / "instance-owner.sqlite"
+        owner.parent.mkdir(parents=True)
+        owner.touch()
+        with self.assertRaises(ValueError):
+            launcher.validate_owned_directory(self.root / "alice-job" / "bob-state", state=True)
+        with self.assertRaises(ValueError):
+            launcher.validate_owned_directory(self.root, state=True)
+        private = self.root / "private" / "alice-state"
+        private.mkdir(parents=True)
+        (private / "identity.sqlite").write_bytes(b"damaged state still must stay private")
+        for candidate in (private, private / "data", private.parent):
+            with self.subTest(candidate=candidate), self.assertRaises(ValueError):
+                launcher.validate_owned_directory(candidate, state=False)
+        launcher.validate_owned_directory(private.parent / "bob-state", state=True)
+
+    def test_ownership_scan_refuses_unreadable_directories(self):
+        with patch.object(launcher.os, "scandir", side_effect=PermissionError("synthetic denied")), self.assertRaises(PermissionError):
+            launcher.validate_owned_directory(self.root, state=False)
+
+    def test_named_launcher_rejects_foreign_workspace_state_before_spawning_helpers(self):
+        binary = self.root / "host.exe"
+        binary.touch()
+        workspace = self.root / "bob-job"
+        workspace.mkdir()
+        marker = self.root / "alice-job/.civil-buddy/instance-owner.sqlite"
+        marker.parent.mkdir(parents=True)
+        marker.touch()
+        token = self.root / "token.txt"
+        token.write_text("x" * 40, encoding="utf-8")
+        with patch.dict(os.environ, {}, clear=True), \
+             patch.object(sys, "argv", ["launcher", "--binary", str(binary), "--workspace", str(workspace),
+                    "--state-root", str(self.root / "alice-job/state"), "--user-id", "bob", "--token-file", str(token)]), \
+             patch.object(launcher.subprocess, "Popen") as start, contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            launcher.main()
+        start.assert_not_called()
+
     def test_domain_process_has_no_provider_credentials_and_uses_state_directory(self):
         binary = self.root / "civil-workbench.exe"
         binary.write_bytes(b"test executable marker; never executed")

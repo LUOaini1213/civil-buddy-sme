@@ -324,7 +324,7 @@ async fn session_cancel(State(st): State<Arc<AppState>>, AxPath(sid): AxPath<Str
         "ok": true,
         "session_id": sid,
         "cancel_requested": requested,
-        "cancelled": requested,
+        "cancelled": false,
         "active": requested,
         "state": if requested { "cancelling" } else { "idle" },
         "detail": if requested { "已请求停止本轮" } else { "当前没有进行中的回合" },
@@ -1254,7 +1254,7 @@ async fn chat(State(st): State<Arc<AppState>>, Json(mut body): Json<ChatIn>) -> 
     let mut fetch_notes: Vec<String> = Vec::new();
     if intent != crate::agent::Intent::Chat && !attach::addresses_in(&body.message).is_empty() {
         let (paths, sess, msg) = (st.paths.clone(), session.clone(), body.message.clone());
-        if let Ok((ids, notes)) = tokio::task::spawn_blocking(move || attach::import_addresses(&paths, &sess, &msg)).await {
+        if let Ok((ids, notes)) = crate::turns::blocking(&session, move || attach::import_addresses(&paths, &sess, &msg)).await {
             for id in ids {
                 if !attachment_ids.contains(&id) {
                     attachment_ids.push(id);
@@ -1365,7 +1365,7 @@ async fn chat(State(st): State<Arc<AppState>>, Json(mut body): Json<ChatIn>) -> 
                 let run_v = {
                     let st3 = st2.clone();
                     let session3 = session.clone();
-                    match tokio::task::spawn_blocking(move || {
+                    match crate::turns::blocking(&session, move || {
                         crate::firm::run_bid_job(&st3.paths, &session3, &args)
                     })
                     .await
@@ -1429,10 +1429,14 @@ async fn chat(State(st): State<Arc<AppState>>, Json(mut body): Json<ChatIn>) -> 
             }
             Ok::<(), llm::LlmError>(())
         };
+        let mut was_cancelled = false;
         let result = tokio::select! {
+            biased;
             _ = crate::turns::cancelled(&turn_flag, &turn_notify) => {
-                let payload = json!({"cancelled": true, "ok": false, "text": "已停止，已有结果已保留。"}).to_string();
-                let _ = tx_cancel.send(Ok(Event::default().event("done").data(payload))).await;
+                was_cancelled = true;
+                let payload = json!({"phase":"cancelling","text":"已请求停止，正在等待已开始的文件操作结束。"}).to_string();
+                let _ = tx_cancel.send(Ok(Event::default().event("status").data(payload))).await;
+                crate::turns::wait_for_blocking(&session, &turn_flag).await;
                 Ok(())
             }
             result = result => result,
@@ -1464,6 +1468,10 @@ async fn chat(State(st): State<Arc<AppState>>, Json(mut body): Json<ChatIn>) -> 
             }
         })
         .await;
+        if was_cancelled {
+            let payload = json!({"cancelled":true,"ok":false,"text":"已停止，已开始的文件操作已结束，已有结果保留待核查。"}).to_string();
+            let _ = tx_cancel.send(Ok(Event::default().event("done").data(payload))).await;
+        }
     });
 
     Ok(Sse::new(ReceiverStream::new(rx))

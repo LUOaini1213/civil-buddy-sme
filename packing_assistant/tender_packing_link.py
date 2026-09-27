@@ -168,6 +168,48 @@ _ROW_REF_RE = re.compile(r"\d+(?:\.\d+){0,3}(?:\([a-z0-9]{1,3}\))*|[A-Z]\d{0,2}(
 # the planner needs the type, so a clause like this is read as naming a container but not a type to plan in
 _SIZE_ONLY_RE = re.compile(r"(?<![\w.])(20|40|45)\s*-?\s*(?:ft|foot|feet|['’]|尺|英尺)\.?(?:\s*[A-Za-z]+){0,2}?\s*(?:containers?|集装箱|柜)",
                            re.I)
+# Source text addressed to a document processor is not a logistics requirement.
+# This only bounds the unclassified-requirement fallback and its quotations;
+# numbers/types in the original still make conflicting constraints fail safe.
+_PROCESSOR_TEXT_RE = re.compile(
+    r"\b(?:AI\s+(?:system|assistant|model)|automated\s+(?:assistants?|reviewers?)|language\s+model|ChatGPT|LLM)\b|"
+    r"\b(?:ignore|disregard|override|forget|bypass)\s+(?:(?:all|the|your|previous|prior|system)\s+){0,3}"
+    r"(?:instructions?|rules?|safeguards?|tender\s+limits)\b|"
+    r"(?:^|[.:;]\s*)\s*(?:record|mark|treat|report|declare)\b[^.;]{0,100}\b(?:clauses?|statements?|requirements?)\b"
+    r"[^.;]{0,80}\b(?:covered|approved|compliant)\b|"
+    r"人工智能(?:系统|助手)|自动(?:化)?(?:助手|审阅器)|语言模型|大模型|"
+    r"忽略.{0,20}(?:指令|规则)|(?:标记|记录|声明).{0,30}(?:条款|应答).{0,20}(?:已覆盖|全部覆盖|已批准)", re.I)
+
+
+def _unplaced_source_text(text: str) -> str:
+    """Only non-processor sentences may be quoted as an unknown requirement."""
+    parts, start = [], 0
+    for boundary in _SENTENCE_RE.finditer(text or ""):
+        parts.append(text[start:boundary.end()])  # preserve the source sentence's punctuation
+        start = boundary.end()
+    parts.append((text or "")[start:])
+    return " ".join(part.strip() for part in parts if part.strip() and not _processor_text(part))
+
+
+def _processor_text(text: str) -> bool:
+    # A source clause label must not hide an imperative at the sentence start.
+    return bool(_PROCESSOR_TEXT_RE.search(_REF_RE.sub("", text or "", count=1)))
+
+
+def _mixed_processor_requirement(text: str, context: str) -> bool:
+    """A real transport obligation before a processor instruction still needs review."""
+    for part in _SENTENCE_RE.split(text or ""):
+        part = _REF_RE.sub("", part, count=1)
+        instruction = _PROCESSOR_TEXT_RE.search(part)
+        if instruction is None:
+            continue
+        prefix = part[:instruction.start()]
+        normative = re.search(r"\b(?:shall|must|required|requirement)\b|必须|应当|不得", prefix, re.I)
+        term = _CONTAINER_TERM_RE.search(prefix) or _MASS_WORD_RE.search(prefix) or _mass_figures(prefix)
+        transport = _TRANSPORT_RE.search(_CONTAINER_TERM_RE.sub(" ", prefix)) or _TRANSPORT_RE.search(context)
+        if normative and term and transport:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -502,15 +544,22 @@ def logistics_clauses(text: str, source: Optional[str] = None) -> List[Dict[str,
             kinds.append("logistics_plan_submission")
             detail["plan_asked"] = _PLAN_RE.search(body).group(0)
         # the safety net: a mass or container term in a transport / packing context that no kind took
-        plain = _STRUCTURAL_LOAD_RE.sub(" ", body)
+        requirement = _unplaced_source_text(body)
+        plain = _STRUCTURAL_LOAD_RE.sub(" ", requirement)
         term = bool(_CONTAINER_TERM_RE.search(plain) or _mass_figures(plain) or _MASS_WORD_RE.search(plain))
         transport = bool(_TRANSPORT_RE.search(_CONTAINER_TERM_RE.sub(" ", plain)) or _TRANSPORT_RE.search(around))
-        if limits["unplaced"]:
+        mixed_requirement = _mixed_processor_requirement(body, around)
+        if limits["unplaced"] or mixed_requirement:
             kinds.append("unplaced")
-            detail["unplaced_text"] = " ... ".join(limits["unplaced"])
+            if mixed_requirement or any(_processor_text(part) for part in limits["unplaced"]):
+                # Keep the unresolved numeric constraint as a stop, without
+                # promoting an instruction from the source into our statement.
+                detail.update(unplaced_text="", unplaced_instruction=True)
+            else:
+                detail["unplaced_text"] = " ... ".join(limits["unplaced"])
         elif not kinds and term and transport:
             kinds.append("unplaced")
-            detail["unplaced_text"] = body
+            detail["unplaced_text"] = requirement
         if kinds:
             found.append({**unit, "kinds": kinds, **detail, "sha256": _sha(body.encode("utf-8"))})
     return found
@@ -950,6 +999,14 @@ def build_checks(clauses: Sequence[Dict[str, Any]], decision: Dict[str, Any], pl
                                  {"plan_file": None}, why, True))
     # the safety net: what the reader found but could not place goes to a person, quoted - it never disappears
     for clause in by_kind["unplaced"]:
+        if clause.get("unplaced_instruction"):
+            checks.append(_check("unplaced", clause, "human_required",
+                                 _placeholder("logistics", f"unresolved mass/transport requirement at {_ref(clause)}. "
+                                              "The same source also contains processor-directed wording; it is not a "
+                                              "logistics instruction and is not reproduced as a bid statement. A person "
+                                              "must read the original and identify the applicable constraint"),
+                                 {"quoted": None}, "unresolved constraint; processor-directed source wording withheld", True))
+            continue
         quote = _quote(clause.get("unplaced_text") or clause["text"])
         checks.append(_check("unplaced", clause, "human_required",
                              _placeholder("logistics", f"limit/requirement not placed \u2014 {_ref(clause)}: \"{quote}\". The "

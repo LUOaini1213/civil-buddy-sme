@@ -166,6 +166,15 @@ impl InstanceAuth {
 
     /// Called while holding the runtime-owner process lock, before crash recovery.
     pub fn claim_state(&self, folder: &Path) -> Result<(), String> {
+        if let Some(root) = self.roots.first() {
+            reject_links(folder)?;
+            let state = folder.canonicalize().map_err(|_| "state directory is not accessible")?;
+            if root.starts_with(&state) || state.starts_with(root) {
+                return Err("state storage and workspace must be separate non-nested directories".into());
+            }
+            reject_owned_overlap(&state, true)?;
+            reject_owned_overlap(root, false)?;
+        }
         let mut db = Connection::open(folder.join("identity.sqlite")).map_err(|e| e.to_string())?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS instance_owner(id INTEGER PRIMARY KEY CHECK(id=1),user_id TEXT NOT NULL,workspace_root TEXT NOT NULL)").map_err(|e| e.to_string())?;
         let tx = db.transaction().map_err(|e| e.to_string())?;
@@ -192,7 +201,6 @@ impl InstanceAuth {
         // alone would not isolate those outputs if users shared a source root.
         if let Some(root) = self.roots.first() {
             self.authorize_workspace(root)?;
-            reject_nested_workspaces(root)?;
             let metadata = root.join(".civil-buddy");
             if std::fs::symlink_metadata(&metadata).is_ok() {
                 reject_links(&metadata)?;
@@ -291,11 +299,23 @@ impl InstanceAuth {
     }
 }
 
-fn reject_nested_workspaces(root: &Path) -> Result<(), String> {
+fn reject_owned_overlap(root: &Path, state: bool) -> Result<(), String> {
     const BINDING: &str = ".civil-buddy/instance-owner.sqlite";
+    // identity.sqlite is reserved for instance state. Treat its presence as
+    // private state even if damaged; never open it as selected project material.
+    let exists = |path: PathBuf| path.try_exists().map_err(|_| "cannot verify directory ownership");
+    if state && exists(root.join(BINDING))? {
+        return Err("state storage cannot be an owned workspace".into());
+    }
+    if !state && exists(root.join("identity.sqlite"))? {
+        return Err("workspace cannot be an instance state directory".into());
+    }
     for parent in root.ancestors().skip(1) {
-        if parent.join(BINDING).try_exists().map_err(|_| "cannot verify ancestor workspace ownership")? {
+        if exists(parent.join(BINDING))? {
             return Err("workspace is nested inside an owned workspace; use independent non-overlapping directories".into());
+        }
+        if exists(parent.join("identity.sqlite"))? {
+            return Err("directory is nested inside private instance state".into());
         }
     }
     let mut pending = vec![root.to_path_buf()];
@@ -303,6 +323,9 @@ fn reject_nested_workspaces(root: &Path) -> Result<(), String> {
     while let Some(directory) = pending.pop() {
         if directory != root && directory.join(BINDING).try_exists().map_err(|_| "cannot verify nested workspace ownership")? {
             return Err("workspace contains an owned workspace; use independent non-overlapping directories".into());
+        }
+        if directory != root && exists(directory.join("identity.sqlite"))? {
+            return Err("directory contains private instance state; choose independent non-overlapping directories".into());
         }
         for entry in std::fs::read_dir(&directory).map_err(|_| "cannot verify all nested workspace directories")? {
             visited += 1;

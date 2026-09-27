@@ -213,6 +213,7 @@ pub fn run_bid_steps(paths: &Paths, ticket: Ticket) -> Run {
         reply: String::new(),
     };
 
+    if stop_cancelled(&mut run) { return run; }
     if !ticket.path.trim().is_empty() {
         match crate::attach::import_local(paths, &ticket.session, &ticket.path) {
             Ok(files) => {
@@ -355,6 +356,7 @@ pub fn run_bid_steps(paths: &Paths, ticket: Ticket) -> Run {
         });
     }
 
+    if stop_cancelled(&mut run) { return run; }
     let firm_dir = run.job_dir.clone();
     let _ = fs::create_dir_all(&firm_dir);
     let price_path = firm_dir.join("价表-待填.md");
@@ -392,6 +394,7 @@ pub fn run_bid_steps(paths: &Paths, ticket: Ticket) -> Run {
         let path = f.get("path").and_then(|v| v.as_str()).unwrap_or("");
         index.push_str(&format!("- {name}\n  `{path}`\n"));
     }
+    if stop_cancelled(&mut run) { return run; }
     let index_path = firm_dir.join("成套作业单.md");
     if fs::write(&index_path, &index).is_ok() {
         run.files.push(json!({
@@ -415,6 +418,7 @@ fn exec_step(
     tool: &str,
     args: &Value,
 ) {
+    if stop_cancelled(run) { return; }
     let owner = crate::tier_map::exclusive_owner(tool);
     let legal = owner.map(|o| o == expert).unwrap_or(true) || LEGAL_BID.contains(&tool);
     let mut ctx = ToolCtx::new(
@@ -437,6 +441,14 @@ fn exec_step(
         ok,
         note: out.chars().take(160).collect(),
     });
+}
+
+fn stop_cancelled(run: &mut Run) -> bool {
+    if crate::turns::is_cancelled(&run.session) {
+        run.error = Some("cancelled: no further steps were started".into());
+        persist_trace(run);
+        true
+    } else { false }
 }
 
 fn persist_trace(run: &Run) {
@@ -604,6 +616,7 @@ pub fn run_expert_steps(paths: &Paths, expert: &crate::catalog::Expert, ticket: 
         reply: String::new(),
     };
 
+    if stop_cancelled(&mut run) { return run; }
     if !ticket.path.trim().is_empty() {
         match crate::attach::import_local(paths, &ticket.session, &ticket.path) {
             Ok(files) => {
