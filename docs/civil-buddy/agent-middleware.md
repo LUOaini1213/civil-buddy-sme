@@ -5,7 +5,7 @@
 不做五个平庸包装。Runtime 只深做 **两层**：
 
 1. **策略引擎** — 谁能调哪个工具、花多少 token、能否碰生产数据；拒绝当场弹出原因  
-2. **失败恢复** — 下游超时 / 工具报错 → 重试 → 降级 `UNSPECIFIED` → 留下审计链  
+2. **失败恢复** — 下游超时 / 工具报错 → 重试 → 降级 `UNSPECIFIED` → 留下审计链（演示脚本 `scripts/demo_agent_middleware.py` 里的一拍；生产路径不自动重试工具，`execute_with_recovery` 只有这个脚本调用）  
 
 `submit_blocked=true`。不判定可以投标 / 可以开工。密钥不进 git。
 

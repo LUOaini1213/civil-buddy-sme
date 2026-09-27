@@ -235,7 +235,7 @@ async fn execute(
             "status",
             json!({"phase":"model","iteration":iteration+1,"message":"模型正在处理资料与工具结果"}),
         )?;
-        let completion = providers::complete(
+        let completion = providers::complete_with_retry(
             &cfg,
             &prepared.messages,
             &prepared.tools,
@@ -244,6 +244,18 @@ async fn execute(
             budget,
             lease.task_id(),
             &cancel,
+            // Transient model failures are retried only while no tool (the
+            // user-selected skill included) has run in this turn.
+            &providers::RetryPolicy::before_tools(iteration == 0 && selected_skill.is_none()),
+            |notice| {
+                let _ = emit(
+                    lease,
+                    "status",
+                    json!({"phase":"model_retry","retry":notice.retry,"max_retries":notice.max_retries,
+                        "delay_ms":notice.delay.as_millis() as u64,"reason":notice.reason,
+                        "message":format!("模型服务暂时不可用，{:.1} 秒后重试（第 {}/{} 次）", notice.delay.as_secs_f64(), notice.retry, notice.max_retries)}),
+                );
+            },
         )
         .await
         .map_err(|e| e.to_string())?;

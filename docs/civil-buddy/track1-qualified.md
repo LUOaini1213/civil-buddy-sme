@@ -11,7 +11,7 @@
 | 可复现仓 + README + 自动化测试 | GitHub `main` · README 赛道 1 段 · `test_agent_middleware.py` | **完全合格** |
 | `npm run check` 必须过 | 根目录 `package.json` → `scripts/npm-check.cjs` | **完全合格** |
 | 不得泄露密钥 | `scan_tracked_secrets.py`；拒写 `.env` | **完全合格** |
-| 贴生产：权限/审计/安全/多 Agent/恢复/成本 | 深做 2 层：策略引擎 + 失败恢复（不摊五个平庸包装） | **完全合格** |
+| 贴生产：权限/审计/安全/多 Agent/恢复/成本 | 深做 2 层：策略引擎 + 失败恢复（不摊五个平庸包装；失败恢复只在演示脚本 `scripts/demo_agent_middleware.py` 中接线，生产路径不自动重试工具） | **完全合格** |
 
 现场四拍（必须按序）：
 
