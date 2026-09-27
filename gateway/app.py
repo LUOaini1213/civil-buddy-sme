@@ -184,6 +184,17 @@ PIPELINE_PATHS = frozenset({"/api/pipeline", "/api/pipeline/stream", "/api/pipel
                             "/api/pipeline/trace", "/api/demo"})
 
 
+def _pipeline_concurrency() -> int:
+    """CIVIL_PIPELINE_CONCURRENCY, at least 1; a value that is not a number falls back to 4 (the middleware is
+    built on the first request, so raising here would answer 500 to every path, /api/health included)."""
+    raw = os.getenv("CIVIL_PIPELINE_CONCURRENCY") or "4"
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        logger.warning("CIVIL_PIPELINE_CONCURRENCY=%r is not a number; using 4", raw)
+        return 4
+
+
 class _PipelineCap:
     """At most CIVIL_PIPELINE_CONCURRENCY (default 4) pipeline requests at once on this server; the next one
     gets 429 + Retry-After at once instead of queueing for a thread. A streaming run holds its slot until the
@@ -191,7 +202,7 @@ class _PipelineCap:
 
     def __init__(self, app_: Any) -> None:
         self.app = app_
-        self.slots = threading.BoundedSemaphore(max(1, int(os.getenv("CIVIL_PIPELINE_CONCURRENCY") or 4)))
+        self.slots = threading.BoundedSemaphore(_pipeline_concurrency())
 
     async def __call__(self, scope, receive, send):
         if (scope["type"] != "http" or scope.get("method") != "POST" or scope.get("path") not in PIPELINE_PATHS
@@ -1313,6 +1324,22 @@ _CANCELLED_DURING_TEAM_B = ("拼柜运行期间该会话已被取消，结果未
                             "This session was cancelled while Team B was running; its result was discarded.")
 
 
+def _canonical_session_id(session_id: str) -> str:
+    """The session a confirm/cancel names when it is asked by the run_id alias _store_session also files a state
+    under. Acting on the alias would lock, mark and save a second copy, so a confirm by session_id racing one by
+    run_id ran Team B twice, and a cancel by run_id left the session itself confirmable. Any other key (what-if
+    copies and the like) is its own session and is left alone."""
+    sid = str(session_id or "default")
+    try:
+        known = _get_session(sid) or {}
+    except Exception:
+        known = {}
+    owner = str(known.get("session_id") or "")
+    if owner and owner != sid and str(known.get("run_id") or "") == sid:
+        return owner
+    return sid
+
+
 def _session_lock(session_id: str) -> _SessionLock:
     sid = str(session_id or "default")
     with _CONFIRM_LOCKS_GUARD:
@@ -1321,6 +1348,29 @@ def _session_lock(session_id: str) -> _SessionLock:
             holder = _SessionLock()
             _CONFIRM_LOCKS[sid] = holder
         return holder
+
+
+def _run_team_b_guarded(sid: str, before: Dict[str, Any], run) -> Dict[str, Any]:
+    """Run Team B for a session that passed _team_b_gate, under its lock. A cancel that lands meanwhile wins (409);
+    a Team B exception puts the session back to await_user_confirm so the person can retry."""
+    # RAM agrees with disk while Team B runs: /api/session shows it, and a cancel meanwhile is seen below
+    _SESSIONS[sid] = {**before, "phase": "team_b_running", "user_action": "confirm"}
+    try:
+        state = run()
+    except Exception:
+        now = _SESSIONS.get(sid) or {}
+        if now.get("phase") == "cancelled":  # a cancel stopped Team B: that is the answer, not a crash
+            _store_session(sid, now)
+            raise HTTPException(409, _CANCELLED_DURING_TEAM_B) from None
+        if now.get("phase") == "team_b_running":
+            _store_session(sid, before)  # Team B failed: still awaiting confirmation, the user may retry
+        raise
+    current = _SESSIONS.get(sid) or {}
+    if current.get("phase") == "cancelled":
+        # cancelled while Team B ran: Team B already saved its result to disk, the cancel is final
+        _store_session(sid, current)
+        raise HTTPException(409, _CANCELLED_DURING_TEAM_B)
+    return state
 
 
 def _team_b_gate(session_id: str, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1356,6 +1406,14 @@ def _team_b_gate(session_id: str, state: Dict[str, Any]) -> Optional[Dict[str, A
 
 @app.post("/api/confirm")
 def api_confirm(body: ConfirmRequest):
+    asked = str(body.session_id)
+    sid = _canonical_session_id(asked)
+    if sid != asked:
+        body = body.model_copy(update={"session_id": sid})
+        if body.action == "cancel":
+            from packing_assistant.runtime import cancel as _cancel
+
+            _cancel.request(asked)  # a pipeline may be registered under the alias
     if body.action == "cancel":
         return _api_confirm(body)
     holder = _session_lock(body.session_id)
@@ -1463,32 +1521,14 @@ def _api_confirm(body: ConfirmRequest):
         pass
     from packing_assistant.graph_resume import resume_team_b_segment
 
-    sid = str(body.session_id)
-    before = state
-    # RAM agrees with disk while Team B runs: /api/session shows it, and a cancel meanwhile is seen below
-    _SESSIONS[sid] = {**before, "phase": "team_b_running", "user_action": "confirm"}
-    try:
-        state = resume_team_b_segment(
-            state,
-            session_id=body.session_id,
-            container_type=body.container_type,
-            max_containers=body.max_containers,
-            adjust_note=body.adjust_note or "",
-            confirmed_box_ids=body.confirmed_box_ids,
-        )
-    except Exception:
-        now = _SESSIONS.get(sid) or {}
-        if now.get("phase") == "cancelled":  # a cancel stopped Team B: that is the answer, not a crash
-            _store_session(sid, now)
-            raise HTTPException(409, _CANCELLED_DURING_TEAM_B) from None
-        if now.get("phase") == "team_b_running":
-            _store_session(sid, before)  # Team B failed: still awaiting confirmation, the user may retry
-        raise
-    current = _SESSIONS.get(sid) or {}
-    if current.get("phase") == "cancelled":
-        # cancelled while Team B ran: Team B already saved its result to disk, the cancel is final
-        _store_session(sid, current)
-        raise HTTPException(409, _CANCELLED_DURING_TEAM_B)
+    state = _run_team_b_guarded(str(body.session_id), state, lambda: resume_team_b_segment(
+        state,
+        session_id=body.session_id,
+        container_type=body.container_type,
+        max_containers=body.max_containers,
+        adjust_note=body.adjust_note or "",
+        confirmed_box_ids=body.confirmed_box_ids,
+    ))
     if "hitl_summary" in state:
         state = {**state, "hitl_summary": {}}
     state = {**state, "phase": state.get("phase") or "done"}
@@ -1519,6 +1559,7 @@ def api_resume_team_b(session_id: str, body: ConfirmRequest):
     """显式从 HITL resume 小 Team B（等同 confirm，可仅带 session）。"""
     from packing_assistant.graph_resume import load_resume_state, resume_team_b_segment
 
+    session_id = _canonical_session_id(session_id)
     holder = _session_lock(session_id)  # the same door to Team B as /api/confirm: the same once-only rule
     if not holder.lock.acquire(timeout=_CONFIRM_WAIT_S):
         raise HTTPException(409, "该会话的上一个确认仍在运行。The previous confirm for this session is still running.")
@@ -1529,14 +1570,14 @@ def api_resume_team_b(session_id: str, body: ConfirmRequest):
         stored = _team_b_gate(session_id, st)
         if stored is not None:
             return stored
-        state = resume_team_b_segment(
+        state = _run_team_b_guarded(str(session_id), st, lambda: resume_team_b_segment(
             st,
             session_id=session_id,
             container_type=body.container_type or st.get("container_type") or "40HQ",
             max_containers=body.max_containers,
             adjust_note=body.adjust_note or "",
             confirmed_box_ids=body.confirmed_box_ids,
-        )
+        ))
         _store_session(session_id, state)
     finally:
         holder.lock.release()

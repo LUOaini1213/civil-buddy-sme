@@ -351,6 +351,56 @@ def test_json_store_is_swept_too() -> None:
     assert state["phase"] == "interrupted" and state["interrupted_phase"] == "team_a_running", state
 
 
+def test_confirm_by_run_id_alias_still_runs_team_b_once() -> None:
+    """_store_session files a state under its run_id too: a confirm by session_id racing one by run_id is one run."""
+    _paused("ss-alias")
+    rid = str(G._get_session("ss-alias").get("run_id") or "")
+    assert rid and rid != "ss-alias", rid
+    out = []
+    with patch.object(H, "run_team_b", _counted_team_b):
+        before = TEAM_B["runs"]
+        threads = [threading.Thread(target=lambda s=s: out.append(_confirm(s))) for s in ("ss-alias", rid)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        runs = TEAM_B["runs"] - before
+    assert sorted(r.status_code for r in out) == [200, 200], [r.text[:200] for r in out]
+    assert runs == 1, f"Team B ran {runs} times through the run_id alias"
+    # and a cancel by the alias cancels the session itself
+    _paused("ss-alias-c")
+    rid = str(G._get_session("ss-alias-c").get("run_id") or "")
+    assert CLIENT.post("/api/confirm", json={"session_id": rid, "action": "cancel"}).status_code == 200
+    r = _confirm("ss-alias-c")
+    assert r.status_code == 409 and "cancelled" in r.json()["detail"], r.text[:300]
+
+
+def test_cancel_during_the_resume_door_wins() -> None:
+    _paused("ss-door")
+    started = threading.Event()
+
+    def slow_b(*args, **kwargs):
+        started.set()
+        time.sleep(1.0)
+        return _REAL_TEAM_B(*args, **kwargs)
+
+    out = []
+    with patch.object(H, "run_team_b", slow_b):
+        t = threading.Thread(target=lambda: out.append(_confirm("ss-door", "/api/resume/ss-door/team-b")))
+        t.start()
+        assert started.wait(30)
+        assert CLIENT.post("/api/confirm", json={"session_id": "ss-door", "action": "cancel"}).status_code == 200
+        t.join()
+    assert out[0].status_code == 409, out[0].text[:300]
+    assert CLIENT.get("/api/session/ss-door").json()["phase"] == "cancelled"
+    G._SESSIONS.clear()
+    assert CLIENT.get("/api/session/ss-door").json()["phase"] == "cancelled", "the cancel must win on disk too"
+
+
+def test_a_bad_concurrency_setting_does_not_take_the_gateway_down() -> None:
+    for raw, want in (("abc", 4), ("0", 1), ("-3", 1), ("", 4), ("6", 6)):
+        with patch.dict(os.environ, {"CIVIL_PIPELINE_CONCURRENCY": raw}):
+            assert G._pipeline_concurrency() == want, (raw, G._pipeline_concurrency())
+
+
 def main() -> int:
     tests = [
         test_sequential_double_confirm_runs_team_b_once,
@@ -365,6 +415,9 @@ def main() -> int:
         test_a_model_429_is_reported_as_rate_limiting,
         test_restart_marks_running_sessions_interrupted,
         test_json_store_is_swept_too,
+        test_confirm_by_run_id_alias_still_runs_team_b_once,
+        test_cancel_during_the_resume_door_wins,
+        test_a_bad_concurrency_setting_does_not_take_the_gateway_down,
     ]
     for test in tests:
         test()
