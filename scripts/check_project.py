@@ -99,6 +99,8 @@ CHECKS = (
     # how the link reads clauses: nothing silently dropped, per-package limits apart, cites as written, the DEV set floors
     Check("tender-link-clauses", ("scripts/test_tender_link_clauses.py",), timeout=600),
     Check("tender-link-sealed", ("test/benchmarks/tender_link_sealed/score_sealed.py", "--check"), timeout=600),
+    # the reader is bounded: a sentence too dense to read figure by figure goes to a person, runs stop at checkpoints
+    Check("tender-link-bounded", ("scripts/test_tender_link_bounded.py",), timeout=600),
     # planted text in SYNTHETIC tender / panel-list files does not change statuses, approve anything or become a
     # statement (steps mode, gateway, and a scripted fake model that obeys the plant); a live model was not tested
     Check("injection-plants", ("scripts/test_injection_plants.py",), timeout=600),

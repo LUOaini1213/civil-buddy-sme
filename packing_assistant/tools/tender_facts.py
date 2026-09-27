@@ -587,6 +587,9 @@ _ALIAS_PATTERNS = tuple((alias, key, alias.isascii(),
 
 
 def _topic_hits(clause: str) -> List[Tuple[int, int, str]]:
+    from packing_assistant.runtime import cancel
+
+    cancel.check()      # the hot call of every phase: a timed-out tender.packing_link stops here, not minutes later
     taken = [False] * len(clause)
     hits: List[Tuple[int, int, str]] = []
     for alias, key, ascii_alias, pattern in _ALIAS_PATTERNS:

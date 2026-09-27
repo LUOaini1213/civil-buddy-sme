@@ -677,6 +677,7 @@ def parse_tender_text(text: str, *, source: str = "text", sides: str = "auto") -
     把文本当成人说的话来读——「招标要求工期60日历天，我们投标函写了999日历天」里，999 那半句
     是我方的，不进 requirements，也不会被当成工期。分句规则见 tools/tender_facts.py。
     """
+    from packing_assistant.runtime import cancel
     from packing_assistant.tools.tender_facts import extract as extract_facts, tender_pieces
 
     raw = (text or "").strip()
@@ -688,6 +689,7 @@ def parse_tender_text(text: str, *, source: str = "text", sides: str = "auto") -
     seen = set()
 
     for rid, cat, patterns, title, owner, risk in _RULES:
+        cancel.check()
         hits: List[str] = []
         refs: List[str] = []
         for i, parts in enumerate(pieces):

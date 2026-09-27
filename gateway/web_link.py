@@ -76,6 +76,21 @@ def max_panel_bytes() -> int:
     return _limit_mb("CIVIL_LINK_MAX_PANEL_MB", 5)
 
 
+def max_tender_text_bytes() -> int:
+    """Tender TEXT one upload may carry (a .md file's bytes; a .docx / .pdf's text once read): more is refused, 413.
+    A run is budgeted for a tender's logistics part, not for megabytes of text inside the tool's 60 s."""
+    try:
+        return int(float(os.getenv("CIVIL_LINK_MAX_TENDER_TEXT_KB") or 400) * 1024)
+    except ValueError:
+        return 400 * 1024
+
+
+def _text_too_large(size: int) -> "Refusal":
+    return Refusal(413, "too_large", f"the tender has {size // 1024} kB of text; the link reads at most "
+                                     f"{max_tender_text_bytes() // 1024} kB per upload. Upload the part of the tender with "
+                                     "the delivery, packing and transport clauses on its own")
+
+
 def max_request_bytes() -> int:
     return max_tender_bytes() + max_panel_bytes() + 64 * 1024     # the rest of the form and the multipart framing
 
@@ -253,6 +268,7 @@ def _run_job(session: str, job: Path, tender: Path, panel: Path, uploaded: Dict[
     """One linked run in ``job``: the tool through a ToolEngine, the deliverables through write_deliverable."""
     from packing_assistant.office_job import job_root_scope
     from packing_assistant.runtime.tool_engine import default_engine
+    from packing_assistant.tender_packing_link import tender_text_limit
 
     t0 = time.perf_counter()
     previous = _previous_record(job.parent, job)
@@ -267,9 +283,11 @@ def _run_job(session: str, job: Path, tender: Path, panel: Path, uploaded: Dict[
         args["container_type"] = container_type
     if project_name:
         args["project_name"] = project_name
-    with job_root_scope(job):
+    with job_root_scope(job), tender_text_limit(max_tender_text_bytes()) as text_seen:
         result = engine.execute("tender.packing_link", args, expert_id="bid-parse", intent="run",
                                 run_id=run_id)
+    if text_seen.get("too_large"):
+        raise _text_too_large(text_seen["too_large"])
     if not result.get("ok"):
         raise Refusal(422, str(result.get("error_code") or "link_failed"),
                       "the link did not run: " + str(result.get("detail") or result.get("reason") or "")[:300])
@@ -402,6 +420,8 @@ async def api_tender_link(request: Request):
                 raise Refusal(400, "bad_container_type", "container_type: a code such as 40HQ, or leave it empty")
             project_name = str(form.get("project_name") or "").strip()[:120]
             tender = await _read_upload(form, "tender", TENDER_TYPES, max_tender_bytes(), "tender")
+            if tender[0] == ".md" and len(tender[2]) > max_tender_text_bytes():
+                raise _text_too_large(len(tender[2]))       # before a slot or a job folder is taken
             panel = await _read_upload(form, "panel_list", PANEL_TYPES, max_panel_bytes(), "panel list")
         finally:
             await form.close()          # the spooled upload temp files; the bytes are in memory now
