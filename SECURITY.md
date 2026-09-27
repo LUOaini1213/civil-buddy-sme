@@ -95,7 +95,8 @@ snapshot. Remaining boundaries and their current scope are listed here:
   denies high-risk tool calls, validates session IDs and enforces its launch scope. Use the interactive
   workbench for approval; do not substitute an old executable for this source.
 - **Pack-ship circuit on the steps path.** Three needs-human packing lists in a row open a process-wide circuit for
-  `pack-ship__plan` until a restart.
+  `pack-ship__plan`. It refuses calls for 45 s, then lets one trial call through: a list that plans closes it, a
+  failing one reopens it for another 45 s. No restart is needed.
 - **Run routes.** `/api/runs/compare` and the `{run_id}` routes join request values onto the runs folder; they are
   behind the token.
 - **Token-less proxying.** Without a token, a proxy that rewrites `Host` and sends no forwarding header can look
