@@ -410,6 +410,38 @@ class Storage:
         self.save_session(session_id, st, meta=meta)
         return {"session_id": str(session_id), "status": status}
 
+    # A run that reached one of these events finished or paused cleanly; it is not left mid-run.
+    _SETTLED_EVENTS = "('done','hitl')"
+
+    def stale_sessions(self, running_phases: tuple) -> List[tuple]:
+        """(session_id, run_id, phase, state_json) for sessions a crash left mid-run: a running phase with no
+        done event at or after the save, or a run_start placeholder (ensure_run) whose run never reached a
+        done/hitl event. A finished LLM-path run keeps phase team_b_running in its last save; its done event
+        is what says it finished."""
+        marks = ",".join("?" for _ in running_phases)
+        return self._read_conn().execute(
+            "SELECT session_id, run_id, phase, state_json FROM sessions s"
+            f" WHERE (s.phase IN ({marks}) AND NOT EXISTS(SELECT 1 FROM events e"
+            " WHERE e.run_id=s.run_id AND e.type='done' AND e.ts >= s.saved_at))"
+            " OR (s.status='placeholder' AND NOT EXISTS(SELECT 1 FROM events e"
+            f" WHERE e.run_id=s.run_id AND e.type IN {self._SETTLED_EVENTS}))",
+            tuple(running_phases),
+        ).fetchall()
+
+    def interrupt_orphan_runs(self, running_phases: tuple, *, ended_at: str) -> int:
+        """runs rows with no outcome (status NULL or running) and no done/hitl event → phase interrupted."""
+        marks = ",".join("?" for _ in running_phases)
+        with self._lock:
+            cur = self.write_conn.execute(
+                "UPDATE runs SET phase='interrupted', status='aborted', ended_at=COALESCE(ended_at, ?)"
+                f" WHERE archived=0 AND (phase IS NULL OR phase='' OR phase IN ({marks}))"
+                " AND (status IS NULL OR status IN ('', 'running', 'resumed'))"
+                f" AND NOT EXISTS(SELECT 1 FROM events e WHERE e.run_id=runs.run_id AND e.type IN {self._SETTLED_EVENTS})",
+                (ended_at, *running_phases),
+            )
+            self.write_conn.commit()
+            return int(cur.rowcount or 0)
+
     def delete_sessions(self, ids: List[str]) -> int:
         ids = [str(i) for i in (ids or []) if i]
         if not ids:
