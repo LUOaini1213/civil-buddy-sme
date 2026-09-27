@@ -35,18 +35,18 @@ pub fn current_turn_confirmation(req: &TurnRequest) -> bool {
 fn claims_document_publication(reply: &str) -> bool {
     let claim = regex::Regex::new(concat!(
         r"(?ix)",
-        r"(?:已(?:经)?|成功)(?:[^。！？\n]{0,60})(?:保存|生成|导出|修改|更新|写入|创建)",
-        r"|(?:保存|生成|导出|修改|更新|写入|创建)(?:已(?:经)?)?(?:成功|完成)",
-        r"|\b(?:I(?:'ve|\s+have)?|we(?:'ve|\s+have)?)\s+(?:successfully\s+)?(?:saved|created|generated|exported|updated|modified|written)\b",
-        r"|\b(?:files?|documents?|copies|copy|drafts?|reports?|models?|changes)\b[^.!?\n]{0,60}\b(?:has|have|was|were|is|are)\s+(?:been\s+)?(?:successfully\s+)?(?:saved|created|generated|exported|updated|modified|written)\b",
-        r"|\b(?:saved|created|generated|exported|updated|modified|written)\s+(?:the\s+|a\s+|new\s+|all\s+|your\s+)*(?:files?|documents?|copies|copy|drafts?|reports?|models?|changes)\b"
+        r"(?:已(?:经)?|成功)(?:[^。！？\n]{0,60})(?:保存|生成|导出|修改|更新|写入|创建|修复|修正|改好)",
+        r"|(?:保存|生成|导出|修改|更新|写入|创建|修复|修正)(?:已(?:经)?)?(?:成功|完成)",
+        r"|\b(?:I(?:'ve|\s+have)?|we(?:'ve|\s+have)?)\s+(?:successfully\s+)?(?:saved|created|generated|exported|updated|modified|written|fixed|corrected)\b",
+        r"|\b(?:files?|documents?|copies|copy|drafts?|reports?|models?|changes)\b[^.!?\n]{0,60}\b(?:has|have|was|were|is|are)\s+(?:been\s+)?(?:successfully\s+)?(?:saved|created|generated|exported|updated|modified|written|fixed|corrected)\b",
+        r"|\b(?:saved|created|generated|exported|updated|modified|written|fixed|corrected)\s+(?:the\s+|a\s+|new\s+|all\s+|your\s+)*(?:files?|documents?|copies|copy|drafts?|reports?|models?|changes)\b"
     )).unwrap();
     let hypothetical = regex::Regex::new(
-        r#"(?i)^\s*(?:["'“‘`]|如果|假如|例如|示例|当|要想|若|if\b|when\b|for example\b|example\b|to\s+(?:save|create|generate|export|update|modify)\b)"#,
+        r#"(?i)^\s*(?:["'“‘`]|如果|假如|例如|示例|当|要想|若|if\b|when\b|for example\b|example\b|to\s+(?:save|create|generate|export|update|modify|fix|correct)\b)"#,
     ).unwrap();
     let negated = regex::Regex::new(r"(?i)未|没有|尚未|并未|\bnot\b|\bnever\b").unwrap();
-    let preceding_negation = regex::Regex::new(r"(?i)(?:未|没有|并未|没能|无法|不能|\bnot|\bnever)\s*$").unwrap();
-    let document_context = regex::Regex::new(r"(?i)文件|文档|副本|草稿|模型|台账|表格|报告|原件|\.docx\b|\.xlsx\b|\.pdf\b|\.glb\b|\b(?:file|document|copy|copies|draft|report|model|spreadsheet)s?\b").unwrap();
+    let preceding_negation = regex::Regex::new(r"(?i)(?:未|没有|并未|没能|无法|不能|\bnot|\bnever|\b(?:haven|hasn|wasn|weren|isn|aren|didn|couldn|can)['’]t)\s*$").unwrap();
+    let document_context = regex::Regex::new(r"(?i)文件|文档|附件|副本|草稿|模型|台账|表格|报告|原件|\.docx\b|\.xlsx\b|\.pdf\b|\.glb\b|\b(?:file|document|attachment|copy|copies|draft|report|model|spreadsheet)s?\b").unwrap();
     let publication_verb = regex::Regex::new(r"(?i)保存|导出|写入|\b(?:saved|exported)\b").unwrap();
     let mut fenced = false;
     reply.lines().any(|line| {
@@ -81,13 +81,16 @@ fn requests_document_publication(request: &str, selected: bool) -> bool {
         return false;
     }
     let publication = regex::Regex::new(r"(?i)保存|另存|导出|写入|写盘|\b(?:save|export|apply|publish)\b").unwrap();
-    let edit = regex::Regex::new(r"(?i)修改|更改|改成|改为|换成|设为|设置为|替换|调整|删除|插入|新增|添加|更新|重排|填写|填入|批注|\b(?:edit|modify|change|replace|update|revise|rewrite|reorder|fill|annotate|add|remove|delete|insert)\b").unwrap();
+    let edit = regex::Regex::new(r"(?i)修改|更改|改成|改为|改好|改一下|修复|修正|换成|设为|设置为|替换|调整|删除|插入|新增|添加|更新|重排|填写|填入|批注|\b(?:edit|modify|change|replace|update|revise|rewrite|reorder|fill|annotate|add|remove|delete|insert)\b").unwrap();
+    // "correct" can describe a value, and "fix" can name a proposed solution.
+    // These new verbs require an imperative or an explicit request prefix.
+    let repair_command = regex::Regex::new(r"(?i)(?:^\s*(?:please\s+)?|\b(?:please|can\s+you|could\s+you|would\s+you|will\s+you|help\s+(?:me|us)(?:\s+to)?)\s+)(?:fix|correct)\b|\b(?:and|then)\s+(?:fix|correct)\s+(?:the|this|that|these|those|a|an|my|our|your|its|all)\b").unwrap();
     let create = regex::Regex::new(r"(?i)生成|创建|制作|新建|编写|写一|写份|\b(?:create|generate|produce|make|write|draft)\b").unwrap();
-    let document = regex::Regex::new(r"(?i)报告|文档|文件|表格|台账|模型|\.docx\b|\.xlsx\b|\.pdf\b|\.glb\b|\b(?:report|document|file|spreadsheet|workbook|model|pdf|docx|xlsx)s?\b").unwrap();
-    let explanation = regex::Regex::new(r"(?i)如何|怎么|为什么|为何|解释|讲解|是什么|什么意思|哪些|是否|是不是|区别|原理|示例|总结|汇总|不要|不用|不需要|不必|先别|暂不|禁止|不能|不(?:修改|更改|改动|替换|更新|调整|删除|插入|写入|保存|生成)|\b(?:how|why|explain|describe|example|summarize|without|not|don't|never)\b").unwrap();
+    let document = regex::Regex::new(r"(?i)报告|文档|文件|附件|表格|台账|模型|\.docx\b|\.xlsx\b|\.pdf\b|\.glb\b|\b(?:report|document|file|attachment|spreadsheet|workbook|model|pdf|docx|xlsx)s?\b").unwrap();
+    let explanation = regex::Regex::new(r"(?i)如何|怎么|为什么|为何|解释|讲解|是什么|什么意思|哪些|是否|是不是|区别|原理|示例|总结|汇总|不要|不用|不需要|不必|先别|暂不|禁止|不能|不(?:修改|更改|改动|改好|改一下|修复|修正|替换|更新|调整|删除|插入|写入|保存|生成)|\b(?:how|why|explain|describe|example|summarize|without|not|don't|never)\b").unwrap();
     clauses.iter().any(|clause| {
         !explanation.is_match(clause)
-            && (publication.is_match(clause) || ((selected || document.is_match(clause)) && edit.is_match(clause))
+            && (publication.is_match(clause) || ((selected || document.is_match(clause)) && (edit.is_match(clause) || repair_command.is_match(clause)))
                 || (create.is_match(clause) && document.is_match(clause)))
     })
 }
@@ -774,5 +777,21 @@ mod publication_tests {
         }
         assert!(claims_document_publication("已将 report.docx 修改并保存为新副本。"));
         assert!(claims_document_publication("I have saved the report."));
+    }
+
+    #[test]
+    fn repair_wording_respects_execution_explanation_and_negation() {
+        for request in ["把错字改好", "改一下", "修复附件", "修正附件", "Fix the typo in report.docx", "Correct the spreadsheet", "Please fix the file", "Can you correct the spreadsheet?", "Could you fix the file?", "Help me correct the attachment", "Check the file and correct the typo"] {
+            assert!(requests_document_publication(request, true), "{request}");
+        }
+        for request in ["不要修复附件，只解释原因", "不修正附件，只看差异", "解释如何修复附件", "解释如何修正附件", "Don't fix the file", "Explain how to correct the spreadsheet", "Explain the attachment", "Is this spreadsheet correct?", "Check whether the totals are correct.", "What is the fix for this file?", "Is this spreadsheet complete and correct?", "Check that the totals are complete and correct."] {
+            assert!(!requests_document_publication(request, true), "{request}");
+        }
+        for reply in ["已修复报告。", "报告已修正。", "已把报告改好。", "I fixed the document.", "I corrected the document.", "已修复附件。", "I fixed the attachment."] {
+            assert!(claims_document_publication(reply), "{reply}");
+        }
+        for reply in ["文件尚未修复成功。", "没有修正报告。", "解释如何修复附件", "I have not fixed the document.", "I haven't corrected the document.", "To fix the file, first make a copy."] {
+            assert!(!claims_document_publication(reply), "{reply}");
+        }
     }
 }

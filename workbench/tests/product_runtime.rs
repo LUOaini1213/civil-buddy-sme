@@ -304,6 +304,38 @@ async fn full_completion_endpoint_and_base_url_use_the_same_provider_route() {
 
 #[tokio::test]
 async fn final_publication_claims_require_registered_outputs_but_explanations_remain_available() {
+    publication_cases(&["no_tools", "read_only", "failed_read", "failed_apply", "english", "done", "formatted_done", "emoji_done", "edit_done", "create_zh", "create_en", "explain", "conditional", "negative_explanation"]).await;
+}
+
+#[tokio::test]
+async fn repair_wording_requires_receipts_and_keeps_explanations() {
+    publication_cases(&["repair_hao", "repair_yixia", "repair_xiufu", "repair_xiuzheng", "repair_fix", "repair_correct", "repair_noop_zh", "repair_explain_zh", "repair_noop_en", "repair_negative_en", "repair_explain_en", "repair_explain_attachment", "repair_adjective_question", "repair_adjective_check", "repair_claim_zh", "repair_claim_en"]).await;
+}
+
+// Request, scripted reply, conversational response expected, explicit write request.
+fn repair_case(scenario: &str) -> Option<(&'static str, &'static str, bool, bool)> {
+    Some(match scenario {
+        "repair_hao" => ("把错字改好", "Done.", false, true),
+        "repair_yixia" => ("改一下", "Done.", false, true),
+        "repair_xiufu" => ("修复附件", "Done.", false, true),
+        "repair_xiuzheng" => ("修正附件", "Done.", false, true),
+        "repair_fix" => ("Fix the typo in report.docx", "Done.", false, true),
+        "repair_correct" => ("Correct the spreadsheet", "Done.", false, true),
+        "repair_noop_zh" => ("不要修复附件，只解释原因", "我不会修改附件；以下解释修复流程。", true, false),
+        "repair_explain_zh" => ("解释如何修复附件", "修复附件通常先检查文件结构。", true, false),
+        "repair_noop_en" => ("Don't fix the file", "I have not fixed the document.", true, false),
+        "repair_negative_en" => ("Don't fix the file", "I haven't corrected the document.", true, false),
+        "repair_explain_en" => ("Explain how to correct the spreadsheet", "Correcting a spreadsheet starts with checking its structure.", true, false),
+        "repair_explain_attachment" => ("Explain the attachment", "The attachment contains source material.", true, false),
+        "repair_adjective_question" => ("Is this spreadsheet correct?", "The selected material needs further checks.", true, false),
+        "repair_adjective_check" => ("Check whether the totals are correct.", "I need to inspect the source values first.", true, false),
+        "repair_claim_zh" => ("解释附件结构，不修改文件。", "已修复附件。", false, false),
+        "repair_claim_en" => ("Explain the selected file structure.", "I fixed the attachment.", false, false),
+        _ => return None,
+    })
+}
+
+async fn publication_cases(scenarios: &[&str]) {
     let _model_guard = SCRIPTED_MODEL_LOCK.lock().unwrap();
     struct ResetModel;
     impl Drop for ResetModel {
@@ -332,7 +364,7 @@ async fn final_publication_claims_require_registered_outputs_but_explanations_re
             };
             json!({"role":"assistant","content":null,"tool_calls":[{"id":"proof","type":"function","function":{"name":name,"arguments":args.to_string()}}]})
         } else {
-            let text = match scenario {
+            let text = if let Some((_, text, _, _)) = repair_case(scenario) {text} else {match scenario {
                 "explain" => explanation,
                 "conditional" => conditional,
                 "done" | "create_en" => "Done.",
@@ -342,7 +374,7 @@ async fn final_publication_claims_require_registered_outputs_but_explanations_re
                 "negative_explanation" => "文件尚未保存成功，请检查目录权限。",
                 "english" => "I have saved the report. All files have been generated with quantity 987654.",
                 _ => "已将报告修改并保存为新副本，所有文件已生成，数量已经更新为 987654。",
-            };
+            }};
             json!({"role":"assistant","content":text})
         };
         let finish = if message["tool_calls"].is_array() {"tool_calls"} else {"stop"};
@@ -351,10 +383,13 @@ async fn final_publication_claims_require_registered_outputs_but_explanations_re
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    for scenario in ["no_tools", "read_only", "failed_read", "failed_apply", "english", "done", "formatted_done", "emoji_done", "edit_done", "create_zh", "create_en", "explain", "conditional", "negative_explanation"] {
+    for &scenario in scenarios {
         civil_workbench::config::set_runtime_llm(Some(LlmConfig { api_key:"offline-only".into(), base_url:base_url.clone(), model:scenario.into() }));
-        let conversational = matches!(scenario, "explain" | "conditional" | "negative_explanation");
-        let task = if scenario == "negative_explanation" {"为什么没有保存成功？"}
+        let repair = repair_case(scenario);
+        let conversational = repair.map(|case| case.2).unwrap_or(matches!(scenario, "explain" | "conditional" | "negative_explanation"));
+        let requested_publication = repair.map(|case| case.3).unwrap_or(!conversational);
+        let task = if let Some((task, _, _, _)) = repair {task}
+            else if scenario == "negative_explanation" {"为什么没有保存成功？"}
             else if conversational {"解释如何保存副本，不要执行。"}
             else if scenario == "edit_done" {"把 brief.txt 的标题改成 X。"}
             else if scenario == "create_zh" {"帮我生成一份报告。"}
@@ -377,11 +412,11 @@ async fn final_publication_claims_require_registered_outputs_but_explanations_re
         assert!(result["artifacts"].as_array().unwrap().is_empty());
         assert_eq!(result["execution_evidence"]["registered_documents"], 0);
         assert_eq!(result["execution_evidence"]["requested_task_complete"], if conversational {Value::Null}else{json!(false)}, "{scenario}: {result}");
-        assert_eq!(result["execution_evidence"]["requested_document_publication"], !conversational, "{scenario}: {result}");
+        assert_eq!(result["execution_evidence"]["requested_document_publication"], requested_publication, "{scenario}: {result}");
         assert_eq!(result["partial"], !conversational, "{scenario}: {result}");
         let reply = result["reply"].as_str().unwrap();
         if conversational {
-            assert_eq!(reply, match scenario { "explain" => explanation, "negative_explanation" => "文件尚未保存成功，请检查目录权限。", _ => conditional });
+            assert_eq!(reply, repair.map(|case| case.1).unwrap_or(match scenario { "explain" => explanation, "negative_explanation" => "文件尚未保存成功，请检查目录权限。", _ => conditional }));
             assert_eq!(result["execution_evidence"]["publication_summary_from_receipts"], false);
         } else {
             assert!(reply.contains("本轮没有成功保存"), "{scenario}: {reply}");
