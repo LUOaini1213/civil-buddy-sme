@@ -309,6 +309,9 @@ fn default_sandbox() -> String {
 /// One optional client key, from the `Idempotency-Key` header or the
 /// `idempotency_key` field; naming two different keys is ambiguous.
 fn idempotency_key(headers: &HeaderMap, field: Option<String>) -> Result<Option<String>, HttpError> {
+    if headers.get_all("idempotency-key").iter().count() > 1 {
+        return Err(bad("send one Idempotency-Key header, not several"));
+    }
     let header = headers
         .get("idempotency-key")
         .map(|value| value.to_str().map(str::to_owned))

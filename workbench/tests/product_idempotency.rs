@@ -130,6 +130,41 @@ async fn idempotency_key_replays_the_finished_turn_instead_of_running_it_again()
         http(&app, "POST", "/api/agent/turns", Some(&"k".repeat(129)), body.clone()).await.0,
         StatusCode::BAD_REQUEST
     );
+    // Two Idempotency-Key headers (a client or proxy appending one) are just as
+    // ambiguous: refused, and no turn starts under either key.
+    let mut duplicated = body.clone();
+    duplicated["session_id"] = json!("duplicated");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/agent/turns")
+                .header("Content-Type", "application/json")
+                .header("Idempotency-Key", "dup-a")
+                .header("Idempotency-Key", "dup-b")
+                .body(Body::from(duplicated.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let dup_turns = http(
+        &app,
+        "GET",
+        &format!("/api/agent/turns?workspace={wid}&session_id=duplicated"),
+        None,
+        Value::Null,
+    )
+    .await
+    .1["turns"]
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(
+        (response.status(), dup_turns),
+        (StatusCode::BAD_REQUEST, 0),
+        "two Idempotency-Key headers were not refused"
+    );
     // Without a key, or with a new key, a request is a new turn as before.
     let (status, fresh) = http(&app, "POST", "/api/agent/turns", Some("client-retry-2"), body.clone()).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{fresh}");
