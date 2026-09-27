@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -145,8 +146,54 @@ def _db_write(sid: str, rid: str, s: Dict[str, Any], meta: Dict[str, Any]) -> No
     )
 
 
+class SessionPersistError(RuntimeError):
+    """SQLite stayed locked through every retry, so the session was not saved.
+
+    No JSON copy is written in its place: load_session reads SQLite first, so a JSON-only save would be
+    read back as the older SQLite row after a restart (the two stores would disagree). The previously
+    saved state stays intact in both; the caller reports the failure.
+    """
+
+
+def _write_attempts() -> int:
+    try:
+        return max(1, int(os.getenv("CB_SQLITE_WRITE_ATTEMPTS") or 3))
+    except ValueError:
+        return 3
+
+
+#: pause before the 2nd, 3rd, ... attempt; each attempt itself already waits busy_timeout for the lock
+_RETRY_BACKOFF_S = (0.2, 0.5, 1.0)
+
+
+def _db_write_retrying(sid: str, rid: str, s: Dict[str, Any], meta: Dict[str, Any]) -> None:
+    """_db_write, retried a bounded number of times while another writer holds the lock."""
+    attempts = _write_attempts()
+    for attempt in range(1, attempts + 1):
+        try:
+            _db_write(sid, rid, s, meta)
+            return
+        except Exception as exc:
+            if not _storage.is_lock_error(exc):
+                raise
+            try:
+                _storage.get_storage().rollback_write()
+            except Exception:
+                logger.warning("rollback after a locked write failed", exc_info=True)
+            if attempt == attempts:
+                raise SessionPersistError(
+                    f"session {sid} was not saved: the database stayed locked through {attempts} attempts"
+                    f" of {_storage.busy_timeout_ms()} ms each ({exc})"
+                ) from exc
+            logger.warning("sqlite save_session: database locked (attempt %d of %d), retrying", attempt, attempts)
+            time.sleep(_RETRY_BACKOFF_S[min(attempt - 1, len(_RETRY_BACKOFF_S) - 1)])
+
+
 def save_session(session_id: str, state: Dict[str, Any]) -> Dict[str, str]:
-    """Persist full pipeline state for later /api/confirm resume."""
+    """Persist full pipeline state for later /api/confirm resume.
+
+    In sqlite mode a lock that outlasts every retry raises SessionPersistError instead of quietly
+    writing JSON only (see that class)."""
     sid = str(session_id or state.get("session_id") or "default")
     rid = str(state.get("run_id") or sid)
     s = dict(state)
@@ -159,7 +206,13 @@ def save_session(session_id: str, state: Dict[str, Any]) -> Dict[str, str]:
     mode = _storage.storage_mode()
     if mode == "sqlite":
         try:
-            _db_write(sid, rid, s, meta)
+            _db_write_retrying(sid, rid, s, meta)
+        except SessionPersistError:
+            logger.error("sqlite save_session failed: session %s NOT saved (database locked)", sid, exc_info=True)
+            raise
+        except Exception:
+            logger.warning("sqlite save_session failed, fallback to JSON", exc_info=True)
+        else:
             return {
                 "session_id": sid,
                 "thread_id": sid,
@@ -168,8 +221,6 @@ def save_session(session_id: str, state: Dict[str, Any]) -> Dict[str, str]:
                 "status": str(meta.get("status")),
                 "interrupt": bool(meta.get("interrupt")),
             }
-        except Exception:
-            logger.warning("sqlite save_session failed, fallback to JSON", exc_info=True)
 
     _atomic_write_json(session_state_path(rid), s)
     _atomic_write_json(checkpoint_meta_path(rid), meta)
