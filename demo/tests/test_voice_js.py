@@ -41,6 +41,55 @@ def _clean(result: dict) -> None:
     assert all(e == "input:input" for e in log["events"]), log["events"]
 
 
+def test_english_locale_sets_local_decoder_hint_and_keeps_transcript_as_draft(runs):
+    r = runs["english_server_hint_and_draft"]
+    _clean(r)
+    uploads = [request for request in r["log"]["requests"] if request["url"] == "/api/asr"]
+    assert len(uploads) == 1 and uploads[0]["headers"]["X-Civil-ASR-Language"] == "en"
+    assert r["after"]["input"] == "Review panel A12"
+    assert r["after"]["label"] == "Voice input"
+    assert "never sends automatically" in r["after"]["status"]
+
+
+def test_english_locale_sets_browser_language_and_explains_consent(runs):
+    r = runs["english_browser_hint_and_draft"]
+    _clean(r)
+    assert r["lang"] == "en-US"
+    assert "Google" in r["log"]["confirmText"] and "Continue?" in r["log"]["confirmText"]
+    assert r["log"]["order"].index("confirm") < r["log"]["order"].index("recognition")
+    assert r["after"]["input"] == "Review panel A12"
+    assert "never sends automatically" in r["after"]["status"]
+
+
+def test_language_event_aborts_local_request_and_ignores_old_result(runs):
+    r = runs["language_switch_cancels_server_and_preserves_typed_draft"]
+    _clean(r)
+    uploads = [request for request in r["log"]["requests"] if request["url"] == "/api/asr"]
+    assert [request["headers"]["X-Civil-ASR-Language"] for request in uploads] == ["zh", "en"]
+    assert uploads[0]["aborted"] and not uploads[1]["aborted"]
+    assert f'/api/asr/{uploads[0]["headers"]["X-Civil-ASR-ID"]}/cancel' in r["log"]["fetches"]
+    for snapshot in (r["switched"], r["settled"]):
+        assert snapshot["input"] == "原始图纸.xlsx"
+        assert snapshot["interim"] == "" and snapshot["label"] == "Voice input"
+        assert "pending voice input was cancelled" in snapshot["status"]
+    assert r["after"]["input"] == "原始图纸.xlsx New English note"
+    assert r["log"]["events"] == ["input:input"]
+    assert r["log"]["trackStops"] == 2
+
+
+def test_language_event_aborts_browser_and_ignores_old_callbacks(runs):
+    r = runs["language_switch_cancels_browser_and_preserves_typed_draft"]
+    _clean(r)
+    assert r["oldLang"] == "zh-CN" and r["newLang"] == "en-US"
+    assert r["log"]["recAborts"] == 1
+    for snapshot in (r["switched"], r["settled"]):
+        assert snapshot["input"] == "原始图纸.xlsx"
+        assert snapshot["interim"] == "" and snapshot["label"] == "Voice input"
+        assert "pending voice input was cancelled" in snapshot["status"]
+    assert r["after"]["input"] == "原始图纸.xlsx New English note"
+    assert r["log"]["events"] == ["input:input"]
+
+
 def test_cancel_aborts_server_request_and_rejects_late_transcript(runs):
     r = runs["cancelled_server_result_is_ignored"]
     _clean(r)
