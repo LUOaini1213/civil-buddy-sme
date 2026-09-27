@@ -121,6 +121,8 @@ CHECKS = (
     Check("middleware", ("scripts/test_agent_middleware.py",)),
     Check("deadlock", ("scripts/test_deadlock.py",)),
     Check("runtime-cancel-isolation", ("scripts/test_runtime_cancel_isolation.py",)),
+    # the shared ToolEngine's fault circuit: open after 3 faults, half-open trial after the cool-down
+    Check("tool-circuit", ("scripts/test_tool_circuit.py",)),
     Check("sandbox", ("scripts/test_sandbox.py",)),
     Check("pack-ship-read-sandbox", ("scripts/test_pack_ship_read_sandbox.py",), timeout=300),
     Check("civil-cli", ("scripts/test_civil_codex.py",)),
