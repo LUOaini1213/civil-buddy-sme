@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import struct
 from pathlib import Path
 import sys
 import tempfile
@@ -323,6 +324,26 @@ class Workbench(unittest.TestCase):
         with self.assertRaises(ValueError):
             bundle.import_bundle(b"bad zip")
         self.assertEqual(len(self.store.list_projects()), 1)
+
+    def test_http_corrupt_deflate_members_rejected_without_changing_projects(self):
+        project = self.create()
+        original = self.store._path(project["id"]).read_bytes()
+        archive = bundle.export_bundle(self.store._read(project["id"]))
+        with zipfile.ZipFile(io.BytesIO(archive)) as z:
+            offsets = {item.filename: item.header_offset for item in z.infolist()}
+        for name, offset in offsets.items():
+            with self.subTest(member=name):
+                damaged = bytearray(archive)
+                name_len, extra_len = struct.unpack_from("<HH", damaged, offset + 26)
+                # Invalid DEFLATE block type; central directory remains valid.
+                damaged[offset + 30 + name_len + extra_len] = 7
+                response = self.client.post(api.BASE + "/import", files={
+                    "file": ("broken.zip", bytes(damaged), "application/zip"),
+                })
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertIn("项目包损坏", response.json()["detail"])
+                self.assertEqual(self.store._path(project["id"]).read_bytes(), original)
+                self.assertEqual(len(self.store.list_projects()), 1)
 
     def test_saved_checksum_and_source_hash_rejected(self):
         project = self.create()

@@ -28,6 +28,104 @@ pub fn current_turn_confirmation(req: &TurnRequest) -> bool {
     req.risk_confirmation == CONFIRMATION || req.message.split(['\n', '。', ';', '；']).any(|line| line.trim() == CONFIRMATION)
 }
 
+/// Catch explicit publication claims, not instructions explaining how to save.
+/// This is a fallback for a model that skipped tools altogether. Once an apply
+/// is attempted, the final publication report is always derived from receipts,
+/// independently of the wording chosen by the model.
+fn claims_document_publication(reply: &str) -> bool {
+    let claim = regex::Regex::new(concat!(
+        r"(?ix)",
+        r"(?:已(?:经)?|成功)(?:[^。！？\n]{0,60})(?:保存|生成|导出|修改|更新|写入|创建|修复|修正|改好)",
+        r"|(?:保存|生成|导出|修改|更新|写入|创建|修复|修正)(?:已(?:经)?)?(?:成功|完成)",
+        r"|\b(?:I(?:'ve|\s+have)?|we(?:'ve|\s+have)?)\s+(?:successfully\s+)?(?:saved|created|generated|exported|updated|modified|written|fixed|corrected)\b",
+        r"|\b(?:files?|documents?|copies|copy|drafts?|reports?|models?|changes)\b[^.!?\n]{0,60}\b(?:has|have|was|were|is|are)\s+(?:been\s+)?(?:successfully\s+)?(?:saved|created|generated|exported|updated|modified|written|fixed|corrected)\b",
+        r"|\b(?:saved|created|generated|exported|updated|modified|written|fixed|corrected)\s+(?:the\s+|a\s+|new\s+|all\s+|your\s+)*(?:files?|documents?|copies|copy|drafts?|reports?|models?|changes)\b"
+    )).unwrap();
+    let hypothetical = regex::Regex::new(
+        r#"(?i)^\s*(?:["'“‘`]|如果|假如|例如|示例|当|要想|若|if\b|when\b|for example\b|example\b|to\s+(?:save|create|generate|export|update|modify|fix|correct)\b)"#,
+    ).unwrap();
+    let negated = regex::Regex::new(r"(?i)未|没有|尚未|并未|\bnot\b|\bnever\b").unwrap();
+    let preceding_negation = regex::Regex::new(r"(?i)(?:未|没有|并未|没能|无法|不能|\bnot|\bnever|\b(?:haven|hasn|wasn|weren|isn|aren|didn|couldn|can)['’]t)\s*$").unwrap();
+    let document_context = regex::Regex::new(r"(?i)文件|文档|附件|副本|草稿|模型|台账|表格|报告|原件|\.docx\b|\.xlsx\b|\.pdf\b|\.glb\b|\b(?:file|document|attachment|copy|copies|draft|report|model|spreadsheet)s?\b").unwrap();
+    let publication_verb = regex::Regex::new(r"(?i)保存|导出|写入|\b(?:saved|exported)\b").unwrap();
+    let mut fenced = false;
+    reply.lines().any(|line| {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            return false;
+        }
+        if fenced || line.trim_start().starts_with('>') {
+            return false;
+        }
+        line.split(['。', '！', '？', '\n']).any(|sentence| {
+            !hypothetical.is_match(sentence)
+                && (document_context.is_match(sentence) || publication_verb.is_match(sentence))
+                && claim.find_iter(sentence).any(|found| {
+                    !negated.is_match(found.as_str())
+                        && !preceding_negation.is_match(&sentence[..found.start()])
+                })
+        })
+    })
+}
+
+/// Classify explicit operations on selected documents before looking at any
+/// model reply. This affects reporting only, never tool authorization. A
+/// preview/no-write instruction wins over a request to change content, while
+/// "do not overwrite the original" does not prohibit saving a new copy.
+fn requests_document_publication(request: &str, selected: bool) -> bool {
+    let request = request.replace("能不能", "能否");
+    let clauses: Vec<_> = request.split(['。', '！', '？', '，', ',', ';', '；', '\n']).collect();
+    let no_write = regex::Regex::new(r"(?i)(?:不要|不用|不需要|不必|先别|暂不|不得|不能|禁止|不)[^，。;；\n]{0,8}(?:保存|写盘|写入|导出)|\b(?:do\s+not|don't|without|never)\s+(?:save|saving|write|writing|export|exporting|publish|publishing)\b|仅预览|只预览|先展示差异|\bpreview\s+only\b").unwrap();
+    let original_only = regex::Regex::new(r"(?i)原件|原文件|\b(?:source|original)\b").unwrap();
+    if clauses.iter().any(|clause| no_write.is_match(clause) && !original_only.is_match(clause)) {
+        return false;
+    }
+    let publication = regex::Regex::new(r"(?i)保存|另存|导出|写入|写盘|\b(?:save|export|apply|publish)\b").unwrap();
+    let edit = regex::Regex::new(r"(?i)修改|更改|改成|改为|改好|改一下|修复|修正|换成|设为|设置为|替换|调整|删除|插入|新增|添加|更新|重排|填写|填入|批注|\b(?:edit|modify|change|replace|update|revise|rewrite|reorder|fill|annotate|add|remove|delete|insert)\b").unwrap();
+    // "correct" can describe a value, and "fix" can name a proposed solution.
+    // These new verbs require an imperative or an explicit request prefix.
+    let repair_command = regex::Regex::new(r"(?i)(?:^\s*(?:please\s+)?|\b(?:please|can\s+you|could\s+you|would\s+you|will\s+you|help\s+(?:me|us)(?:\s+to)?)\s+)(?:fix|correct)\b|\b(?:and|then)\s+(?:fix|correct)\s+(?:the|this|that|these|those|a|an|my|our|your|its|all)\b").unwrap();
+    let create = regex::Regex::new(r"(?i)生成|创建|制作|新建|编写|写一|写份|\b(?:create|generate|produce|make|write|draft)\b").unwrap();
+    let document = regex::Regex::new(r"(?i)报告|文档|文件|附件|表格|台账|模型|\.docx\b|\.xlsx\b|\.pdf\b|\.glb\b|\b(?:report|document|file|attachment|spreadsheet|workbook|model|pdf|docx|xlsx)s?\b").unwrap();
+    let explanation = regex::Regex::new(r"(?i)如何|怎么|为什么|为何|解释|讲解|是什么|什么意思|哪些|是否|是不是|区别|原理|示例|总结|汇总|不要|不用|不需要|不必|先别|暂不|禁止|不能|不(?:修改|更改|改动|改好|改一下|修复|修正|替换|更新|调整|删除|插入|写入|保存|生成)|\b(?:how|why|explain|describe|example|summarize|without|not|don't|never)\b").unwrap();
+    clauses.iter().any(|clause| {
+        !explanation.is_match(clause)
+            && (publication.is_match(clause) || ((selected || document.is_match(clause)) && (edit.is_match(clause) || repair_command.is_match(clause)))
+                || (create.is_match(clause) && document.is_match(clause)))
+    })
+}
+
+/// A registered artifact is the publication receipt. Model prose is never
+/// evidence that a file exists or that every action in a free-form request was
+/// completed. Report only the exact saved copies and source hashes; the full
+/// old/new values remain in their deterministic tool events.
+fn publication_report(artifacts: &[Value], pending_previews: usize, tool_errors: usize) -> String {
+    let mut lines = if artifacts.is_empty() {
+        vec!["本轮没有成功保存并登记的新文档；未确认任何文件修改或导出完成。".to_owned()]
+    } else {
+        let mut lines = vec![format!("本轮实际保存并登记了 {} 份新副本：", artifacts.len())];
+        for artifact in artifacts {
+            lines.push(format!(
+                "- {}；来源：{}；原件 SHA-256：{}；副本 SHA-256：{}。",
+                artifact["name"].as_str().unwrap_or("未命名副本"),
+                artifact["source"].as_str().unwrap_or("未提供"),
+                artifact["source_sha256"].as_str().unwrap_or("未提供"),
+                artifact["output_sha256"].as_str().unwrap_or("未提供"),
+            ));
+        }
+        lines.push("修改前后值及原文证据见对应工具记录。原件保留；未进行 Excel 重算或视觉渲染，不能替代工程签认。".into());
+        lines
+    };
+    if pending_previews > 0 {
+        lines.push(format!("仍有 {pending_previews} 项已预览的修改未成功保存。"));
+    }
+    if tool_errors > 0 {
+        lines.push(format!("本轮有 {tool_errors} 次工具失败，原因见工具记录。"));
+    }
+    lines.push("以上仅确认本轮工具记录中的结果，不将其推断为全部请求均已完成。".into());
+    lines.join("\n")
+}
+
 pub async fn run(
     state: Arc<ProductState>,
     workspace: WorkspaceContext,
@@ -205,6 +303,11 @@ async fn execute(
     }
     let mut current = vec![json!({"role":"user","content":req.message})];
     let mut previews = HashMap::new();
+    let mut latest_previews = HashMap::new();
+    let mut published_previews = HashSet::new();
+    let mut publication_attempted = false;
+    let mut successful_tools = Vec::new();
+    let requested_publication = requests_document_publication(&req.message, !req.files.is_empty());
     let mut inspected = HashSet::new();
     let mut tool_errors = 0;
     let mut child_count = 0;
@@ -279,9 +382,23 @@ async fn execute(
                 },
                 result["notice"].as_str().unwrap_or("")
             );
-            return Ok(
-                json!({"reply":guarded,"partial":tool_errors>0,"tool_errors":tool_errors,"verdict_guard":result["found"]}),
-            );
+            let publication_claim = claims_document_publication(&guarded);
+            let publication_response = requested_publication || publication_attempted || !artifacts.is_empty() || publication_claim;
+            let pending_previews = latest_previews.values().filter(|key| !published_previews.contains(*key)).count();
+            let reply = if publication_response {
+                publication_report(artifacts, pending_previews, tool_errors)
+            } else {
+                guarded
+            };
+            let incomplete_publication = publication_response && (artifacts.is_empty() || pending_previews>0);
+            return Ok(json!({"reply":reply,
+                "partial":tool_errors>0 || incomplete_publication,
+                "tool_errors":tool_errors,"verdict_guard":result["found"],
+                "execution_evidence":{"scope":"this_turn_tool_receipts","successful_tools":successful_tools,
+                    "registered_documents":artifacts.len(),"unapplied_previews":pending_previews,
+                    "requested_document_publication":requested_publication,
+                    "publication_summary_from_receipts":publication_response,
+                    "requested_task_complete":if incomplete_publication {json!(false)}else{Value::Null}}}));
         }
         if calls.len() > 8 {
             return Err("单次工具调用数量超过8个".into());
@@ -292,6 +409,7 @@ async fn execute(
             let name = call["function"]["name"]
                 .as_str()
                 .ok_or("工具调用缺少名称")?;
+            publication_attempted |= name == "apply_document";
             let parsed = serde_json::from_str::<Value>(
                 call["function"]["arguments"].as_str().unwrap_or("{}"),
             )
@@ -382,13 +500,15 @@ async fn execute(
                                     }
                                     if name == "preview_document" {
                                         value["result"]["preview_id"] = json!(key);
-                                        previews.insert(key, args.clone());
+                                        latest_previews.insert(source.to_owned(), key.clone());
+                                        previews.insert(key.clone(), args.clone());
                                     }
                                     if name == "apply_document" {
                                         let artifact = state
                                             .register_artifact(&req.workspace, &value["result"])?;
                                         emit(lease, "artifact", artifact.clone())?;
                                         artifacts.push(artifact);
+                                        published_previews.insert(key);
                                     }
                                 }
                             }
@@ -409,6 +529,9 @@ async fn execute(
                     json!({"ok":false,"error":message})
                 }
             };
+            if value["ok"] != false {
+                successful_tools.push(name.to_owned());
+            }
             if name == "search_sources"
                 && value["ok"] == true
                 && !decision_attempted
@@ -608,4 +731,67 @@ async fn child_loop(
         }
     }
     Err("子代理达到5轮上限".into())
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+
+    #[test]
+    fn selected_document_execution_is_classified_before_model_wording() {
+        for request in [
+            "请把 report.docx 的标题改成 X。",
+            "Can you update quantities.xlsx A1 from 10 to 12?",
+            "修改标题，不要覆盖原件，另存新副本",
+            "Update the draft, do not overwrite the source; save a copy",
+        ] {
+            assert!(requests_document_publication(request, true), "{request}");
+        }
+        for request in ["帮我生成一份报告", "Create a report.docx", "能不能制作一份表格", "把 report.docx 的标题改成 X。"] {
+            assert!(requests_document_publication(request, false), "{request}");
+        }
+        for request in [
+            "解释附件中的‘已修改’是什么意思",
+            "总结附件改动，不修改任何文件",
+            "哪些单元格已经修改，汇总给我看",
+            "Please summarize the edits without changing the file",
+            "不要保存，先展示差异",
+            "请改成 X，但先不要写盘。",
+            "为什么没有保存成功？",
+            "为何保存失败？",
+        ] {
+            assert!(!requests_document_publication(request, true), "{request}");
+        }
+    }
+
+    #[test]
+    fn hypothetical_or_negated_publication_is_not_an_execution_claim() {
+        for reply in [
+            "文件尚未保存成功，请检查目录权限。",
+            "已检查资料，但没有保存新副本。",
+            "如果文件已保存，界面会显示下载链接。",
+            "For example, the document has been saved is a status message.",
+            "我已更新对这个问题的理解。",
+        ] {
+            assert!(!claims_document_publication(reply), "{reply}");
+        }
+        assert!(claims_document_publication("已将 report.docx 修改并保存为新副本。"));
+        assert!(claims_document_publication("I have saved the report."));
+    }
+
+    #[test]
+    fn repair_wording_respects_execution_explanation_and_negation() {
+        for request in ["把错字改好", "改一下", "修复附件", "修正附件", "Fix the typo in report.docx", "Correct the spreadsheet", "Please fix the file", "Can you correct the spreadsheet?", "Could you fix the file?", "Help me correct the attachment", "Check the file and correct the typo"] {
+            assert!(requests_document_publication(request, true), "{request}");
+        }
+        for request in ["不要修复附件，只解释原因", "不修正附件，只看差异", "解释如何修复附件", "解释如何修正附件", "Don't fix the file", "Explain how to correct the spreadsheet", "Explain the attachment", "Is this spreadsheet correct?", "Check whether the totals are correct.", "What is the fix for this file?", "Is this spreadsheet complete and correct?", "Check that the totals are complete and correct."] {
+            assert!(!requests_document_publication(request, true), "{request}");
+        }
+        for reply in ["已修复报告。", "报告已修正。", "已把报告改好。", "I fixed the document.", "I corrected the document.", "已修复附件。", "I fixed the attachment."] {
+            assert!(claims_document_publication(reply), "{reply}");
+        }
+        for reply in ["文件尚未修复成功。", "没有修正报告。", "解释如何修复附件", "I have not fixed the document.", "I haven't corrected the document.", "To fix the file, first make a copy."] {
+            assert!(!claims_document_publication(reply), "{reply}");
+        }
+    }
 }

@@ -92,9 +92,11 @@ As the demo and the technical document print them:
 - The plan does not follow the installation sequence (in rev B the L8 panels load in container 1).
 - The tender parse shows 0 of the ITT's 12 façade specification clauses, and no liquidated-damages or
   retention row.
-- The link runs through the shared turn runtime, without a dedicated MCP tool or gateway endpoint; the older
+- In the submitted v0.7.0 baseline, the link runs through the shared turn runtime, without a dedicated MCP tool or gateway endpoint; the older
   `/api/tender/delivery` route can plan sample materials in another container type and leaves that row
   to a person.
+  The development branch subsequently added the token-protected `/api/tender/link` upload route and `/demo` page;
+  these later capabilities are not part of the frozen submission's measurements.
 - The English bid-book still carries Chinese titles in chapter 3 and Annex B for non-logistics rows.
 - No step yet in which a person marks a link statement confirmed; model-mode routing and explanation
   have scripted offline checks, but no live-model business acceptance.

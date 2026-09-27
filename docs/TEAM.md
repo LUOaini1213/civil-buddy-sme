@@ -1,6 +1,6 @@
-# 团队协作与分活（packing-agent）
+# Civil Buddy 团队协作与分活
 
-仓库：https://github.com/LUOaini1213/packing-agent  
+仓库：https://github.com/LUOaini1213/civil-buddy-sme
 Owner：`LUOaini1213`
 
 ---
@@ -9,7 +9,7 @@ Owner：`LUOaini1213`
 
 ### 1. 邀请协作者
 
-1. 打开 https://github.com/LUOaini1213/packing-agent  
+1. 打开 https://github.com/LUOaini1213/civil-buddy-sme
 2. **Settings** → **Collaborators and teams**（或 **Manage access**）  
 3. **Add people** → 输入队友 GitHub 用户名  
 4. 权限选 **Write**（可推分支、开 PR）  

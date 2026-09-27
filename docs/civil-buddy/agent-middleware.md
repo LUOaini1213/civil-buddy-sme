@@ -57,8 +57,8 @@ npm run check
 ## 复现
 
 ```powershell
-git clone https://github.com/LUOaini1213/civil-buddy.git
-cd civil-buddy
+git clone https://github.com/LUOaini1213/civil-buddy-sme.git
+cd civil-buddy-sme
 pip install -r requirements.txt
 npm run check
 ```

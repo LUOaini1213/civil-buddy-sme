@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
   - name: Architecture as Harness
-    url: https://github.com/LUOaini1213/packing-agent/blob/main/docs/architecture-as-harness.md
+    url: https://github.com/LUOaini1213/civil-buddy-sme/blob/main/docs/architecture-as-harness.md
     about: Read the harness layer map before opening a design issue
   - name: One-shot demo
-    url: https://github.com/LUOaini1213/packing-agent/blob/main/scripts/demo_one_shot.py
+    url: https://github.com/LUOaini1213/civil-buddy-sme/blob/main/scripts/demo_one_shot.py
     about: Minimal command to verify a local install
