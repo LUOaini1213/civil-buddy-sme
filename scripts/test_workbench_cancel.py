@@ -258,8 +258,10 @@ class WorkbenchCancelTests(unittest.TestCase):
 
         with patch.object(engine, "execute", side_effect=paused):
             future = self.pool.submit(self.post, "写一份本岗草稿", expert_ids=["pm-daily", "admin-office"])
-            self.assertTrue(entered.wait(3))
             try:
+                # The first real tool must finish its files before cancellation is tested.
+                # Allow loaded builders to reach that boundary; post-cancel limits stay below.
+                self.assertTrue(entered.wait(30), "first tool did not finish its files")
                 requested = self.cancel()
                 self.assertEqual(requested["state"], "cancelling")
                 self.assertTrue(requested["active"])
