@@ -8,12 +8,20 @@
   PACKING_TMS_URL       外部 TMS base URL（空=本地 stub）
   PACKING_TMS_API_KEY   可选 Bearer
   PACKING_TMS_MODE      stub | http（默认 stub）
+  PACKING_TMS_TIMEOUT_S http 模式单次请求超时秒数（默认 30）
+
+幂等（http 模式）：request_id 由 (session, 方案 sha256) 决定，同一方案每次得到同一个 id，
+并作为 Idempotency-Key 头发给 TMS。已成功订过的方案再提交时直接返回本地台账里的结果
+（replayed=true），不再向 TMS 发第二次；超时后人工重发带同一个 key，由 TMS 去重。
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -31,6 +39,23 @@ def tms_mode() -> str:
 
 def tms_base_url() -> str:
     return (os.getenv("PACKING_TMS_URL") or "").rstrip("/")
+
+
+#: fields that differ between two builds of the same plan (or name the plan itself); not part of its fingerprint
+_NOT_PLAN = ("request_id", "created_at", "run_id", "plan_sha256")
+
+
+def plan_sha256(req: Dict[str, Any]) -> str:
+    """sha256 of the booking request's content: equipment, cargo, compliance, artifacts, intent, session."""
+    body = {k: v for k, v in req.items() if k not in _NOT_PLAN}
+    blob = json.dumps(body, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def booking_request_id(session_id: Any, plan_sha: str) -> str:
+    """The same plan in the same session always gets the same id: it is the Idempotency-Key."""
+    seed = f"{session_id or ''}\n{plan_sha}".encode("utf-8")
+    return f"bk-{hashlib.sha256(seed).hexdigest()[:24]}"
 
 
 def build_booking_request(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -63,7 +88,7 @@ def build_booking_request(state: Dict[str, Any]) -> Dict[str, Any]:
 
     req = {
         "schema": "packing.tms.booking_request.v1",
-        "request_id": f"bk-{uuid.uuid4().hex[:12]}",
+        "request_id": None,          # set below from (session, plan sha256)
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "session_id": state.get("session_id"),
         "run_id": state.get("run_id"),
@@ -119,6 +144,8 @@ def build_booking_request(state: Dict[str, Any]) -> Dict[str, Any]:
             "booking_volume_utilization": plan.get("booking_volume_utilization"),
         },
     }
+    req["plan_sha256"] = plan_sha256(req)
+    req["request_id"] = booking_request_id(req.get("session_id"), req["plan_sha256"])
     return req
 
 
@@ -150,6 +177,13 @@ def _stub_submit(req: Dict[str, Any]) -> Dict[str, Any]:
     return resp
 
 
+def _tms_timeout_s() -> float:
+    try:
+        return max(1.0, float(os.getenv("PACKING_TMS_TIMEOUT_S") or 30))
+    except ValueError:
+        return 30.0
+
+
 def _http_submit(req: Dict[str, Any]) -> Dict[str, Any]:
     base = tms_base_url()
     if not base:
@@ -159,7 +193,8 @@ def _http_submit(req: Dict[str, Any]) -> Dict[str, Any]:
             "error": "PACKING_TMS_URL 未配置",
         }
     url = f"{base}/api/v1/bookings"
-    headers = {"Content-Type": "application/json"}
+    # The TMS can recognise a resubmit (after a timeout, a double click) by this key and not book twice.
+    headers = {"Content-Type": "application/json", "Idempotency-Key": str(req.get("request_id") or "")}
     key = (os.getenv("PACKING_TMS_API_KEY") or "").strip()
     if key:
         headers["Authorization"] = f"Bearer {key}"
@@ -168,7 +203,7 @@ def _http_submit(req: Dict[str, Any]) -> Dict[str, Any]:
 
         data = json.dumps(req, ensure_ascii=False).encode("utf-8")
         r = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        with urllib.request.urlopen(r, timeout=30) as resp:
+        with urllib.request.urlopen(r, timeout=_tms_timeout_s()) as resp:
             body = resp.read().decode("utf-8", errors="replace")
             try:
                 parsed = json.loads(body)
@@ -182,6 +217,70 @@ def _http_submit(req: Dict[str, Any]) -> Dict[str, Any]:
             }
     except Exception as e:
         return {"ok": False, "mode": "http", "error": str(e), "url": url}
+
+
+_LEDGER_GUARD = threading.Lock()
+_LEDGER_LOCKS: Dict[str, threading.Lock] = {}
+
+
+def _ledger_path(request_id: str) -> Path:
+    """Where a booking the TMS accepted is remembered: one file per (TMS URL, request id), no expiry."""
+    name = hashlib.sha256(f"{tms_base_url()}\n{request_id}".encode("utf-8")).hexdigest()[:32]
+    return Path(TRACE_DIR).resolve().parent / "tms" / "ledger" / f"{name}.json"
+
+
+def _ledger_lock(request_id: str) -> threading.Lock:
+    with _LEDGER_GUARD:
+        return _LEDGER_LOCKS.setdefault(request_id, threading.Lock())
+
+
+def _read_ledger(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and isinstance(data.get("response"), dict) else None
+
+
+def _write_ledger(path: Path, record: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".ledger-", suffix=".json.tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(record, f, ensure_ascii=False, indent=2, default=str)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _http_submit_once(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Book at the TMS at most once per request id. A booking the TMS accepted is replayed from the ledger
+    (replayed=True); a failed or timed-out attempt is not recorded, and its resubmit carries the same
+    Idempotency-Key so the TMS can recognise it."""
+    rid = str(req.get("request_id") or "")
+    if not tms_base_url():
+        return _http_submit(req)            # no TMS configured: nothing can be booked, nothing to remember
+    with _ledger_lock(rid):
+        path = _ledger_path(rid)
+        stored = _read_ledger(path)
+        if stored is not None:
+            resp = dict(stored["response"])
+            resp["replayed"] = True
+            resp["replayed_from"] = stored.get("booked_at")
+            return resp
+        resp = _http_submit(req)
+        if resp.get("ok"):
+            try:
+                _write_ledger(path, {"request_id": rid, "booked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                     "tms_url": tms_base_url(), "response": resp})
+            except OSError:
+                resp["ledger_error"] = "booked, but the local record of this booking could not be written"
+        resp.setdefault("replayed", False)
+        return resp
 
 
 def submit_booking(
@@ -205,7 +304,7 @@ def submit_booking(
         }
     m = (mode or tms_mode()).lower()
     if m == "http":
-        resp = _http_submit(req)
+        resp = _http_submit_once(req)
     else:
         resp = _stub_submit(req)
     resp["request"] = req

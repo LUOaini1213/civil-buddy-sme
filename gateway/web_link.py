@@ -378,10 +378,37 @@ def _upload_job(session: str, tender: Tuple[str, str, bytes], panel: Tuple[str, 
     return _run_job(session, job, tender_path, panel_path, uploaded, container_type, project_name)
 
 
+def _once(session: str, key: Optional[str], fp: str, work):
+    """With an Idempotency-Key: the stored result of this key (replayed), 422 if the key was used for another
+    upload, else the run, stored. Checked under the key's lock, so two identical sends run once."""
+    from gateway import idempotency
+
+    if not key:
+        return work()
+    scope = f"/api/tender/link|{session}"
+    with idempotency.key_lock(scope, key):
+        try:
+            stored = idempotency.lookup(scope, key, fp)
+        except idempotency.KeyReused as e:
+            raise Refusal(422, "idempotency_key_reused", str(e)) from None
+        if stored is not None:
+            return idempotency.replayed(stored)
+        result = work()
+        idempotency.remember(scope, key, fp, result)
+        return result
+
+
 @router.post("/api/tender/link")
 async def api_tender_link(request: Request):
-    """Upload a tender and a panel list; run tender.packing_link on them in a job folder of their own."""
+    """Upload a tender and a panel list; run tender.packing_link on them in a job folder of their own.
+    An Idempotency-Key header makes a resend of the same upload return the first result (gateway/idempotency.py)."""
+    from gateway import idempotency
+
     try:
+        try:
+            key = idempotency.request_key(request.headers)
+        except idempotency.BadKey as e:
+            raise Refusal(400, "bad_idempotency_key", str(e)) from None
         length = request.headers.get("content-length")
         if length is None:
             raise Refusal(411, "length_required", "send the upload with a Content-Length header")
@@ -405,8 +432,21 @@ async def api_tender_link(request: Request):
             panel = await _read_upload(form, "panel_list", PANEL_TYPES, max_panel_bytes(), "panel list")
         finally:
             await form.close()          # the spooled upload temp files; the bytes are in memory now
-        return await run_in_threadpool(_locked_run, session,
-                                       lambda: _upload_job(session, tender, panel, container_type, project_name))
+        # the parsed form, not the raw bytes: a browser picks a new multipart boundary on every send
+        fp = idempotency.fingerprint(session, container_type, project_name,
+                                     [tender[1], hashlib.sha256(tender[2]).hexdigest()],
+                                     [panel[1], hashlib.sha256(panel[2]).hexdigest()])
+        if key:
+            # a finished resend is answered without taking a run slot (no 429 while the server is busy)
+            try:
+                stored = await run_in_threadpool(idempotency.lookup, f"/api/tender/link|{session}", key, fp)
+            except idempotency.KeyReused as e:
+                raise Refusal(422, "idempotency_key_reused", str(e)) from None
+            if stored is not None:
+                return idempotency.replayed(stored)
+        return await run_in_threadpool(
+            _locked_run, session,
+            lambda: _once(session, key, fp, lambda: _upload_job(session, tender, panel, container_type, project_name)))
     except Refusal as r:
         return r.response()
 
