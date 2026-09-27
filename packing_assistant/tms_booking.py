@@ -10,7 +10,8 @@
   PACKING_TMS_MODE      stub | http（默认 stub）
   PACKING_TMS_TIMEOUT_S http 模式单次请求超时秒数（默认 30）
 
-幂等（http 模式）：request_id 由 (session, 方案 sha256) 决定，同一方案每次得到同一个 id，
+幂等（http 模式）：request_id 由 (session, run_id, 方案 sha256) 决定，同一次运行的方案每次得到同一个 id
+（同样货物的新一次运行是新的一票，得到新 id），
 并作为 Idempotency-Key 头发给 TMS。已成功订过的方案再提交时直接返回本地台账里的结果
 （replayed=true），不再向 TMS 发第二次；超时后人工重发带同一个 key，由 TMS 去重。
 """
@@ -52,10 +53,12 @@ def plan_sha256(req: Dict[str, Any]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def booking_request_id(session_id: Any, plan_sha: str) -> str:
-    """The same plan in the same session always gets the same id: it is the Idempotency-Key."""
-    seed = f"{session_id or ''}\n{plan_sha}".encode("utf-8")
-    return f"bk-{hashlib.sha256(seed).hexdigest()[:24]}"
+def booking_request_id(session_id: Any, plan_sha: str, run_id: Any = None) -> str:
+    """One id per (session, run, plan): it is the Idempotency-Key. A resubmit of one run's plan (a double click, a
+    retry after a timeout or a 503) gets the same id; a new run of the same cargo is a new shipment and gets a new
+    one, so the ledger (which never expires) and the TMS do not answer it with last week's booking."""
+    seed = f"{session_id or ''}\n{plan_sha}" + (f"\n{run_id}" if run_id else "")
+    return f"bk-{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]}"
 
 
 def build_booking_request(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -145,7 +148,7 @@ def build_booking_request(state: Dict[str, Any]) -> Dict[str, Any]:
         },
     }
     req["plan_sha256"] = plan_sha256(req)
-    req["request_id"] = booking_request_id(req.get("session_id"), req["plan_sha256"])
+    req["request_id"] = booking_request_id(req.get("session_id"), req["plan_sha256"], req.get("run_id"))
     return req
 
 

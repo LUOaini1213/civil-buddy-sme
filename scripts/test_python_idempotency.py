@@ -126,8 +126,12 @@ class TmsBookingTest(unittest.TestCase):
         self.assertEqual(a["request_id"], b["request_id"])
         self.assertEqual(a["plan_sha256"], b["plan_sha256"])
         self.assertTrue(a["request_id"].startswith("bk-"))
-        # a re-run of the same plan is the same plan; another session or another cargo list is not
-        self.assertEqual(a["request_id"], tms_booking.build_booking_request(_plan_state(run="run-2"))["request_id"])
+        # a new run of the same cargo has the same plan sha256 but is a new shipment: a new id, so the ledger
+        # (no expiry) and the TMS do not answer it with the earlier run's booking. Another session or cargo list
+        # is another id too.
+        rerun = tms_booking.build_booking_request(_plan_state(run="run-2"))
+        self.assertEqual(a["plan_sha256"], rerun["plan_sha256"])
+        self.assertNotEqual(a["request_id"], rerun["request_id"])
         self.assertNotEqual(a["request_id"], tms_booking.build_booking_request(_plan_state(session="s2"))["request_id"])
         self.assertNotEqual(a["request_id"], tms_booking.build_booking_request(_plan_state(boxes=2))["request_id"])
 
@@ -144,6 +148,19 @@ class TmsBookingTest(unittest.TestCase):
         third = tms_booking.submit_booking(_plan_state(boxes=3))
         self.assertEqual(2, len(FakeTMS.posts))
         self.assertNotEqual(first["booking_summary"]["booking_id"], third["booking_summary"]["booking_id"])
+
+    def test_a_new_run_of_the_same_cargo_is_booked(self) -> None:
+        # the default session "pipeline" is shared: next week's run of the same list must reach the TMS, and only
+        # a resubmit of that run is replayed
+        first = tms_booking.submit_booking(_plan_state(session="pipeline", run="run-1"))
+        second = tms_booking.submit_booking(_plan_state(session="pipeline", run="run-2"))
+        retry = tms_booking.submit_booking(_plan_state(session="pipeline", run="run-2"))
+        self.assertEqual(2, len(FakeTMS.posts), (first, second, retry))
+        self.assertEqual(2, len({p["key"] for p in FakeTMS.posts}))
+        self.assertFalse(second["replayed"])
+        self.assertNotEqual(first["booking_summary"]["booking_id"], second["booking_summary"]["booking_id"])
+        self.assertTrue(retry["replayed"])
+        self.assertEqual(second["booking_summary"]["booking_id"], retry["booking_summary"]["booking_id"])
 
     def test_timeout_is_not_recorded_and_resubmit_carries_the_same_key(self) -> None:
         self.env.set(PACKING_TMS_TIMEOUT_S="1")
