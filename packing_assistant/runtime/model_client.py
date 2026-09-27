@@ -45,6 +45,17 @@ def _max_tokens() -> int:
         return 1500
 
 
+def _status_message(status: int, retry_after: Optional[str] = None) -> str:
+    """A 429 is the provider throttling, not a wrong model name or key; say so, and when to retry."""
+    if status == 429:
+        wait = f"（服务端建议 {retry_after.strip()} 秒后）" if retry_after and retry_after.strip().isdigit() else ""
+        return (f"模型服务正在限流（429），请稍后重试{wait}。"
+                "The model service is rate-limiting (429); retry later.")
+    if status >= 500:
+        return f"模型服务暂时不可用（HTTP {status}），请稍后重试。"
+    return f"模型接口返回 {status}，请检查模型名、Key 与额度。"
+
+
 def _calls_from_text(content: str, names: set) -> List[Dict[str, Any]]:
     candidates = _TAGGED.findall(content or "")
     stripped = (content or "").strip()
@@ -121,7 +132,7 @@ def complete(messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]
                                    headers={"Authorization": "Bearer " + config["api_key"], "Content-Type": "application/json"}) as response:
                 with interrupt_event(response, cancel_event):
                     if response.status_code >= 400:
-                        raise ModelError(f"模型接口返回 {response.status_code}，请检查模型名、Key 与额度。")
+                        raise ModelError(_status_message(response.status_code, response.headers.get("retry-after")))
                     response.read()
                     check_cancelled()
                     try:

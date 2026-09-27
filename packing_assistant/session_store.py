@@ -76,12 +76,17 @@ def _checkpoint_status(state: Dict[str, Any]) -> str:
     action = str(state.get("user_action") or "")
     if phase == "await_user_confirm":
         return "interrupted"
+    if phase == "interrupted":
+        # left mid-run by a restart (recover_interrupted). Not "interrupted": that word means "awaiting HITL" here.
+        return "aborted"
     if phase == "cancelled" or action == "cancel":
         return "cancelled"
     if phase in ("done", "team_b_done") or action == "confirm":
         # confirm 后可能仍在跑 B；finalize 后 phase 多为 done
         if phase == "await_user_confirm":
             return "interrupted"
+        if phase == "team_b_running":
+            return "resumed"  # Team A's final_response is still in the state: that is not Team B being done
         return "done" if phase in ("done", "cancelled") or state.get("final_response") else "resumed"
     if state.get("final_response") and phase not in ("await_user_confirm",):
         return "done"
@@ -388,3 +393,71 @@ def delete_checkpoint(session_id: str) -> bool:
             except OSError:
                 pass
     return removed
+
+
+#: phases a live pipeline passes through; after a restart nobody is running them any more
+RUNNING_PHASES = ("team_a_running", "team_b_running")
+
+
+def _interrupted_state(state: Dict[str, Any], sid: str, rid: str, was: str, at: str, reason: str) -> Dict[str, Any]:
+    s = dict(state or {})
+    s.setdefault("session_id", sid)
+    s.setdefault("run_id", rid or sid)
+    s.update(
+        phase="interrupted",
+        status="aborted",
+        interrupted_phase=was or "running",
+        interrupted={"reason": reason, "at": at, "phase": was or "running"},
+    )
+    s.setdefault("final_response", "网关重启时该会话仍在运行，已标记为中断，没有自动续跑；请重新运行装箱流程。")
+    return s
+
+
+def recover_interrupted(*, reason: str = "gateway_restart") -> Dict[str, int]:
+    """Startup sweep: whatever a crash left mid-run is marked interrupted, never resumed or replayed.
+
+    The gateway counterpart of the Rust host's recover_interrupted (runtime_core/persistence.rs): a session
+    in team_a_running / team_b_running, a run_start placeholder whose run never reached done/hitl, and a
+    runs row with no outcome. /api/confirm then answers 409 for it instead of silently running Team B from
+    a half-written state. Like the Rust sweep it assumes one server process owns this store; call it before
+    serving. Never raises: a failed sweep must not stop the gateway from starting.
+    """
+    at = _now_iso()
+    seen: set = set()
+    counts = {"sessions": 0, "runs": 0}
+    mode = _storage.storage_mode()
+    if mode != "json" and _storage.default_db_path().exists():
+        try:
+            st = _storage.get_storage()
+            for sid, rid, phase, raw in st.stale_sessions(RUNNING_PHASES):
+                try:
+                    state = json.loads(raw or "{}")
+                except ValueError:
+                    state = {}
+                save_session(sid, _interrupted_state(state if isinstance(state, dict) else {}, sid, rid,
+                                                     str(phase or ""), at, reason))
+                seen.add(sid)
+                counts["sessions"] += 1
+            counts["runs"] = st.interrupt_orphan_runs(RUNNING_PHASES, ended_at=at)
+        except Exception:
+            logger.warning("recover_interrupted: sqlite sweep failed (non-blocking)", exc_info=True)
+    if mode != "sqlite" and SESSIONS_DIR.exists():
+        for p in SESSIONS_DIR.glob("*.json"):
+            try:
+                idx = json.loads(p.read_text(encoding="utf-8"))
+                sid = str(idx.get("session_id") or "")
+                if not sid or sid in seen or idx.get("phase") not in RUNNING_PHASES:
+                    continue
+                state = load_session(sid)
+                if not state or state.get("phase") not in RUNNING_PHASES:
+                    continue
+                save_session(sid, _interrupted_state(state, sid, str(state.get("run_id") or ""),
+                                                     str(state.get("phase")), at, reason))
+                seen.add(sid)
+                counts["sessions"] += 1
+            except Exception:
+                logger.warning("recover_interrupted: skipped %s", p.name, exc_info=True)
+    if counts["sessions"] or counts["runs"]:
+        logger.warning("recover_interrupted (%s): %d session(s), %d run(s) marked interrupted",
+                       reason, counts["sessions"], counts["runs"])
+    return counts

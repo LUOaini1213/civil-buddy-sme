@@ -173,6 +173,7 @@ def test_busy_returns_429(client, fake_engine, monkeypatch):
     finally:
         asr._run_lock.release()
     assert r.status_code == 429
+    assert r.headers.get("retry-after") == "5"  # busy says when to come back
 
 
 def test_prepare_endpoint(client, monkeypatch):

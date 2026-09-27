@@ -196,6 +196,9 @@ CHECKS = (
     Check("panel-lists-sealed", ("test/benchmarks/panel_lists_sealed/score_sealed.py", "--check"), timeout=300),
     Check("workbench-needs-human", ("scripts/test_workbench_needs_human.py",)),
     Check("storage-parent", ("scripts/test_storage_ensure_run.py",)),
+    # confirm runs Team B once (replay / 409), exports never collide, busy 429s carry Retry-After, restarts mark
+    # running sessions interrupted, a pipeline concurrency cap
+    Check("gateway-state-safety", ("scripts/test_gateway_state_safety.py",), timeout=300),
     Check("offline-eval", ("-c", "from packing_assistant.runtime.eval_live import live_eval; "
           "v=live_eval(); assert v.get('verdict')=='offline_gate_pass', v; print(v['verdict'])")),
     Check("industry-eval", ("scripts/test_industry_agent_eval.py",)),

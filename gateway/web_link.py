@@ -82,6 +82,8 @@ def max_request_bytes() -> int:
 
 #: runs at once on this server; a third caller gets 429 instead of queueing behind a 60 s tool timeout
 _RUNS = threading.BoundedSemaphore(int(os.getenv("CIVIL_LINK_CONCURRENCY") or 2))
+#: seconds a busy (429) caller is told to wait before retrying
+RETRY_AFTER_S = "5"
 _SESSION_LOCKS: Dict[str, threading.Lock] = {}
 # Includes requests waiting for the same session lock: its prior record must
 # survive until that request can compare against it. Registration, job creation
@@ -102,7 +104,9 @@ class Refusal(Exception):
         self.status, self.code, self.detail = status, code, detail
 
     def response(self) -> JSONResponse:
-        return JSONResponse({"ok": False, "error_code": self.code, "detail": self.detail}, status_code=self.status)
+        headers = {"Retry-After": RETRY_AFTER_S} if self.status == 429 else None  # busy: when to come back
+        return JSONResponse({"ok": False, "error_code": self.code, "detail": self.detail}, status_code=self.status,
+                            headers=headers)
 
 
 def output_root() -> Path:

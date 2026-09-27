@@ -384,7 +384,7 @@ async def asr_transcribe(request: Request) -> dict:
     except asr.AsrNotReady as exc:
         raise HTTPException(409, str(exc)) from exc
     except asr.AsrBusy as exc:
-        raise HTTPException(429, str(exc)) from exc
+        raise HTTPException(429, str(exc), headers={"Retry-After": "5"}) from exc
     except asr.AsrUnavailable as exc:
         raise HTTPException(503, str(exc)) from exc
     except Exception as exc:  # anything else is an engine fault: 503 lets the page fall back
