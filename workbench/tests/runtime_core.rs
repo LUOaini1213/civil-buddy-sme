@@ -181,6 +181,90 @@ fn one_active_turn_per_workspace_session_even_across_database_connections() {
 }
 
 #[test]
+fn idempotency_key_returns_the_first_turn_and_keeps_the_busy_rule() {
+    let tmp = Temp::new();
+    let workspace = tmp.workspace("project");
+    let session = SessionId::new();
+    let path = tmp.path().join("runtime.sqlite");
+    let runtimes: Vec<_> = (0..8).map(|_| RuntimeCore::open(&path).unwrap()).collect();
+    let barrier = Arc::new(Barrier::new(runtimes.len()));
+    // Eight concurrent deliveries of one keyed request, across connections.
+    let (leases, turns): (Vec<_>, Vec<_>) = thread::scope(|scope| {
+        let handles: Vec<_> = runtimes
+            .iter()
+            .map(|runtime| {
+                let barrier = barrier.clone();
+                let (workspace, session) = (&workspace, &session);
+                scope.spawn(move || {
+                    barrier.wait();
+                    runtime
+                        .begin_turn_keyed(workspace, session, json!({"prompt":"once"}), "retry-1", "sha-a")
+                        .unwrap()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| match handle.join().unwrap() {
+                TurnStart::Started(lease) => (Some(lease), None),
+                TurnStart::Existing(record) => (None, Some(record)),
+            })
+            .unzip()
+    });
+    let leases: Vec<_> = leases.into_iter().flatten().collect();
+    let turns: Vec<_> = turns.into_iter().flatten().collect();
+    assert_eq!((leases.len(), turns.len()), (1, 7));
+    let lease = leases.into_iter().next().unwrap();
+    assert!(turns.iter().all(|t| &t.turn_id == lease.turn_id() && t.status == TurnStatus::Running));
+    let runtime = &runtimes[0];
+    // While it runs: a different key is still 409, a changed request is refused.
+    assert!(matches!(
+        runtime.begin_turn_keyed(&workspace, &session, json!({}), "retry-2", "sha-b"),
+        Err(RuntimeError::SessionBusy)
+    ));
+    assert!(matches!(
+        runtime.begin_turn_keyed(&workspace, &session, json!({}), "retry-1", "sha-b"),
+        Err(RuntimeError::IdempotencyConflict)
+    ));
+    assert!(matches!(
+        runtime.begin_turn_keyed(&workspace, &SessionId::new(), json!({}), "retry-1", "sha-a"),
+        Err(RuntimeError::IdempotencyConflict)
+    ));
+    for key in ["", "has space", &"k".repeat(129)] {
+        assert!(matches!(
+            runtime.begin_turn_keyed(&workspace, &session, json!({}), key, "sha-a"),
+            Err(RuntimeError::InvalidId(_))
+        ));
+    }
+    let turn = lease.turn_id().clone();
+    lease.finish(TurnStatus::Completed, json!({"reply":"done"})).unwrap();
+    // After completion, and after a restart, the key replays the stored result.
+    let reopened = RuntimeCore::open(&path).unwrap();
+    assert_eq!(reopened.recover_interrupted().unwrap(), 0);
+    match reopened
+        .begin_turn_keyed(&workspace, &session, json!({"prompt":"once"}), "retry-1", "sha-a")
+        .unwrap()
+    {
+        TurnStart::Existing(record) => {
+            assert_eq!(record.turn_id, turn);
+            assert_eq!(record.status, TurnStatus::Completed);
+            assert_eq!(record.result, Some(json!({"reply":"done"})));
+        }
+        TurnStart::Started(_) => panic!("a replayed key started a second turn"),
+    }
+    assert_eq!(reopened.list_turns(&workspace, Some(&session), 10).unwrap().len(), 1);
+    // Keys are scoped per workspace; unkeyed turns behave as before.
+    let other = tmp.workspace("other");
+    assert!(matches!(
+        reopened.begin_turn_keyed(&other, &session, json!({}), "retry-1", "sha-a").unwrap(),
+        TurnStart::Started(_)
+    ));
+    let plain = reopened.begin_turn(&workspace, &session, json!({})).unwrap();
+    assert_ne!(plain.turn_id(), &turn);
+    plain.finish(TurnStatus::Completed, json!({})).unwrap();
+}
+
+#[test]
 fn durable_events_have_contiguous_sequence_and_scoped_cursor_replay() {
     let tmp = Temp::new();
     let workspace = tmp.workspace("project");

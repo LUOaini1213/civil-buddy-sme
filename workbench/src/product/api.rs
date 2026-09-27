@@ -5,11 +5,11 @@ use super::{
 };
 use crate::{
     config::Paths,
-    runtime_core::{CancellationToken, RuntimeCore, SessionId, TurnId, WorkspaceContext},
+    runtime_core::{CancellationToken, RuntimeCore, SessionId, TurnId, TurnStart, WorkspaceContext},
 };
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -295,6 +295,10 @@ pub struct TurnRequest {
     pub expert_id: String,
     #[serde(default)]
     pub risk_confirmation: String,
+    /// Same as the `Idempotency-Key` header. Taken out before the request is
+    /// stored or fingerprinted, so a retry compares only what it asks for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
 }
 fn default_mode() -> String {
     "model".into()
@@ -302,10 +306,33 @@ fn default_mode() -> String {
 fn default_sandbox() -> String {
     "read-only".into()
 }
+/// One optional client key, from the `Idempotency-Key` header or the
+/// `idempotency_key` field; naming two different keys is ambiguous.
+fn idempotency_key(headers: &HeaderMap, field: Option<String>) -> Result<Option<String>, HttpError> {
+    let header = headers
+        .get("idempotency-key")
+        .map(|value| value.to_str().map(str::to_owned))
+        .transpose()
+        .map_err(|_| bad("Idempotency-Key must be 1-128 visible ASCII characters"))?;
+    let key = match (header, field) {
+        (Some(header), Some(field)) if header != field => {
+            return Err(bad("Idempotency-Key header and idempotency_key field differ"))
+        }
+        (header, field) => header.or(field),
+    };
+    if key.as_deref().is_some_and(|key| {
+        key.is_empty() || key.len() > 128 || !key.bytes().all(|b| b.is_ascii_graphic())
+    }) {
+        return Err(bad("Idempotency-Key must be 1-128 visible ASCII characters"));
+    }
+    Ok(key)
+}
 async fn start(
     State(st): State<Arc<ProductState>>,
-    Json(req): Json<TurnRequest>,
+    headers: HeaderMap,
+    Json(mut req): Json<TurnRequest>,
 ) -> Result<(StatusCode, Json<Value>), HttpError> {
+    let key = idempotency_key(&headers, req.idempotency_key.take())?;
     if req.message.trim().is_empty()
         || req.message.len() > 48_000
         || req.files.len() > 24
@@ -337,20 +364,37 @@ async fn start(
     if req.mode == "model" && crate::config::llm_config().api_key.is_empty() {
         return Err(bad("请先配置模型 API Key，或使用资料检查模式"));
     }
+    let fingerprint = super::tools::sha256(&serde_json::to_vec(&req).map_err(bad)?);
     let mut stored_request = serde_json::to_value(&req).map_err(bad)?;
     stored_request["actor_id"] = json!(st.auth.owner());
     stored_request["identity_mode"] = st.auth.capabilities()["mode"].clone();
     stored_request["risk_confirmation_present"] = json!(agent::current_turn_confirmation(&req));
-    let lease = st
-        .runtime
-        .begin_turn(&ws, &session, stored_request)
-        .map_err(|e| {
-            if matches!(e, crate::runtime_core::RuntimeError::SessionBusy) {
-                error(StatusCode::CONFLICT, e)
-            } else {
-                bad(e)
-            }
-        })?;
+    let begun = match &key {
+        Some(key) => st
+            .runtime
+            .begin_turn_keyed(&ws, &session, stored_request, key, &fingerprint),
+        None => st
+            .runtime
+            .begin_turn(&ws, &session, stored_request)
+            .map(TurnStart::Started),
+    };
+    let lease = match begun.map_err(|e| match e {
+        crate::runtime_core::RuntimeError::SessionBusy => error(StatusCode::CONFLICT, e),
+        crate::runtime_core::RuntimeError::IdempotencyConflict => {
+            error(StatusCode::UNPROCESSABLE_ENTITY, e)
+        }
+        _ => bad(e),
+    })? {
+        TurnStart::Started(lease) => lease,
+        // A retry: report the stored turn and its result; nothing runs again.
+        TurnStart::Existing(record) => {
+            return Ok((
+                StatusCode::OK,
+                Json(json!({"turn_id":record.turn_id,"session_id":session,"replayed":true,
+                    "status":record.status,"result":record.result})),
+            ))
+        }
+    };
     lease.emit("authorization", json!({"actor_id":st.auth.owner(),"sandbox":req.sandbox,
         "risk_confirmation_present":agent::current_turn_confirmation(&req),"confirmation_scope":"current_turn",
         "professional_signoff":false})).map_err(bad)?;
