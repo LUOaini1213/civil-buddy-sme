@@ -1,0 +1,205 @@
+{
+ "schema": "tender_link.dev.v1",
+ "label": "DEV (round 3) - the failing inputs of the two 2026-09-27 reviews of PR #68, plus the implementer's own counter-probes. Used while building; not held out. Every case is SYNTHETIC (fictional clauses, no real tender).",
+ "wrapped_file": "each case's text is written to <id>.md and read as a tender; cites name that file",
+ "cases": [
+  {
+   "id": "R3A1",
+   "origin": "post-review",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.13 Crates delivered in containers shall weigh no more than 1,500 kg each.",
+   "kinds": ["per_package_limit"],
+   "optional_kinds": ["crating"],
+   "container_limit_kg": null,
+   "package_limit_kg": 1500,
+   "note": "on 923ed38 read as a 1,500 kg container gross limit (a false gap on every plan)"
+  },
+  {
+   "id": "R3A2",
+   "origin": "post-review",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.13 The mobile crane capacity for container offloading is limited to 8 tonnes.",
+   "kinds": ["per_package_limit"],
+   "container_limit_kg": null,
+   "package_limit_kg": 8000,
+   "note": "a crane's capacity is a lift limit; on 923ed38 read as an 8,000 kg container limit"
+  },
+  {
+   "id": "R3A3",
+   "origin": "post-review",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.13 Each container load shall not exceed 20 t and each A-frame shall not exceed 2 t.",
+   "kinds": ["gross_mass", "per_package_limit"],
+   "optional_kinds": ["handling"],
+   "container_limit_kg": 20000,
+   "package_limit_kg": 2000,
+   "note": "on 923ed38 both figures were container limits [2000, 20000]"
+  },
+  {
+   "id": "R3A4",
+   "origin": "post-review",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 The total mass of panels in each container shall not exceed 5 t.",
+   "kinds": ["gross_mass"],
+   "container_limit_kg": 5000,
+   "note": "a limit per container on its contents, not per panel; on 923ed38 a 5,000 kg per-package limit. Basis not scored (the panels' mass: cargo or gross is a person's reading)"
+  },
+  {
+   "id": "R3A5",
+   "origin": "post-review",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 The weight of panels in any container, including stillages and dunnage, shall not exceed 18 t.",
+   "kinds": ["gross_mass"],
+   "optional_kinds": ["handling"],
+   "container_limit_kg": 18000,
+   "note": "the review's '... including stillages, ... 18 t', written out; on 923ed38 an 18,000 kg per-package limit"
+  },
+  {
+   "id": "R3A6",
+   "origin": "post-review",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.13 The loaded weight of any one crate, stillage or container shall not exceed 25 t.",
+   "kinds": ["unplaced"],
+   "optional_kinds": ["handling", "crating"],
+   "container_limit_kg": null,
+   "note": "one limit for a crate, a stillage and a container: a person reads it; on 923ed38 a 25,000 kg per-package limit"
+  },
+  {
+   "id": "R3B1",
+   "origin": "post-review",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Each 40HQ shall not exceed 26 t.",
+   "kinds": ["container_type", "gross_mass"],
+   "container_limit_kg": 26000,
+   "type": "40HQ",
+   "note": "on 923ed38 container_type only; 26 t appeared nowhere"
+  },
+  {
+   "id": "R3B2",
+   "origin": "post-review",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Max. gross wt. per 40HQ: 26,500kg.",
+   "kinds": ["container_type", "gross_mass"],
+   "container_limit_kg": 26500,
+   "basis": "gross",
+   "type": "40HQ",
+   "note": "on 923ed38 container_type only (and an uncited 'no gross-mass clause' row)"
+  },
+  {
+   "id": "R3B3",
+   "origin": "post-review",
+   "text": "SECTION 5 DELIVERY\n\n5.2 Max payload 20 mt per 40HQ.",
+   "kinds": ["container_type", "gross_mass"],
+   "container_limit_kg": 20000,
+   "basis": "cargo",
+   "type": "40HQ",
+   "note": "lower-case 'mt' in a sentence about mass is tonnes; on 923ed38 dropped"
+  },
+  {
+   "id": "R3B4",
+   "origin": "post-review",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Containers: the maximum permissible weight is 44,000 lbs gross per container.",
+   "kinds": ["gross_mass"],
+   "container_limit_kg": 19958.1,
+   "basis": "gross",
+   "note": "44,000 lb x 0.45359237 = 19,958.06 kg; on 923ed38 no clause at all"
+  },
+  {
+   "id": "R3B5",
+   "origin": "post-review",
+   "text": "SECTION 5 DELIVERY\n\n5.10 The VGM of each container shall be declared and shall not exceed the MGW on the CSC plate.",
+   "kinds": ["unplaced"],
+   "container_limit_kg": null,
+   "note": "a limit with no figure: a quoted row for a person; on 923ed38 silent"
+  },
+  {
+   "id": "R3B6",
+   "origin": "post-review",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\nTable 4-1 Container limits\n\n| Item | Max gross mass (t) |\n|---|---|\n| Loaded 40HQ container | 5 |",
+   "kinds": ["container_type", "gross_mass"],
+   "container_limit_kg": 5000,
+   "type": "40HQ",
+   "cite": {"gross_mass": "Table 4-1, row 1"},
+   "note": "a bare number under a '(t)' header is 5 t; on 923ed38 container_type only"
+  },
+  {
+   "id": "R3B7",
+   "origin": "post-review",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.11 Deliveries to site are limited to 08:00 to 17:00 on weekdays; vehicles no longer than 12 m.",
+   "kinds": ["site_access"],
+   "container_limit_kg": null,
+   "note": "on 923ed38 no clause at all"
+  },
+  {
+   "id": "R3B8",
+   "origin": "post-review",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\nTable 4-1 Site logistics\n\n| Ref | Requirement |\n|---|---|\n| 4.11 | Deliveries to site are limited to 08:00 to 17:00 on weekdays; vehicles no longer than 12 m. |",
+   "kinds": ["site_access"],
+   "container_limit_kg": null,
+   "cite": {"site_access": "Table 4-1, row 4.11"},
+   "note": "the same as a table row; on 923ed38 no clause at all"
+  },
+  {
+   "id": "R3N1",
+   "origin": "implementer-counter-probe",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.8 Panels shall be shipped in 40HQ containers; units 30 mt long shall be split.",
+   "kinds": ["container_type"],
+   "container_limit_kg": null,
+   "type": "40HQ",
+   "note": "lower-case 'mt' before 'long' is metres, not a mass"
+  },
+  {
+   "id": "R3N2",
+   "origin": "implementer-counter-probe",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Each container shall be unloaded with the site crane of 50 t.",
+   "kinds": ["unplaced"],
+   "container_limit_kg": null,
+   "note": "a crane between 'each container' and the figure: never a container limit"
+  },
+  {
+   "id": "R3N3",
+   "origin": "implementer-counter-probe",
+   "text": "SECTION 9 GENERAL\n\n9.22 Refuse containers on each floor shall not exceed 1,100 litres.",
+   "kinds": [],
+   "container_limit_kg": null,
+   "note": "a bin, not a shipping container: no row"
+  },
+  {
+   "id": "R3N4",
+   "origin": "implementer-counter-probe",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.13 Clauses 4.10 to 4.12 apply to every delivery.",
+   "kinds": [],
+   "container_limit_kg": null,
+   "note": "clause numbers are no delivery hours"
+  },
+  {
+   "id": "R3N5",
+   "origin": "implementer-counter-probe",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Each stillage loaded into a container shall not exceed 1.5 t.",
+   "kinds": ["per_package_limit"],
+   "optional_kinds": ["handling"],
+   "container_limit_kg": null,
+   "package_limit_kg": 1500,
+   "note": "the stillage is the subject; the container after it does not make it a container limit"
+  },
+  {
+   "id": "R3N6",
+   "origin": "implementer-counter-probe",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Loaded 40HQ containers shall weigh no more than 26 t each.",
+   "kinds": ["container_type", "gross_mass"],
+   "container_limit_kg": 26000,
+   "type": "40HQ",
+   "note": "a trailing 'each' after the figure: the container is the subject"
+  },
+  {
+   "id": "R3N7",
+   "origin": "implementer-counter-probe",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Each container shall carry no more than 8 stillages of 2 t each.",
+   "kinds": ["unplaced"],
+   "optional_kinds": ["handling"],
+   "container_limit_kg": null,
+   "note": "trailing 'each' with a stillage between the container and the figure: a person reads it (review of #68)"
+  },
+  {
+   "id": "R3N8",
+   "origin": "implementer-counter-probe",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 The maximum gross mass of each loaded container is 20 short tons.",
+   "kinds": ["gross_mass"],
+   "container_limit_kg": 18143.7,
+   "basis": "gross",
+   "note": "20 short tons x 907.18474 = 18,143.69 kg"
+  }
+ ]
+}

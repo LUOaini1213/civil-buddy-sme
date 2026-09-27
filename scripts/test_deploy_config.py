@@ -248,6 +248,22 @@ class DocTests(unittest.TestCase):
         self.assertRegex(routes[-1], r"(?i)render", routes)
         self.assertNotIn("满载演示", text)
 
+    def test_nginx_example_keeps_the_token_out_of_its_logs(self) -> None:
+        """The example used nginx's default access log, whose $request holds the one-time ?token= link, while the
+        text promised the token stays out of proxy logs (review 2026-09-27)."""
+        text = read(ROOT / "docs" / "deploy-minimal.md")
+        block = re.search(r"```nginx\n(.*?)```", text, re.S).group(1)
+        code = "\n".join(line.split("#")[0] for line in block.splitlines())       # comments may name variables
+        fmt = re.search(r"log_format\s+(\w+)\s+'([^']*)'\s*;", code)
+        self.assertIsNotNone(fmt, "a log_format without the query string")
+        for variable in (r"\$request\b(?!_)", r"\$request_uri", r"\$args", r"\$arg_", r"\$query_string", r"\$is_args",
+                         r"\$http_authorization", r"\$http_cookie"):
+            self.assertNotRegex(fmt.group(2), variable)
+        self.assertRegex(code, r"access_log\s+\S+\s+" + fmt.group(1) + r"\s*;")
+        self.assertEqual(1, len(re.findall(r"access_log", code)), "one access_log, the filtered one")
+        self.assertRegex(code, r"error_log\s+\S+\s+crit\s*;")
+        self.assertRegex(code, r"proxy_read_timeout\s+1[2-9]\d?s\s*;")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -98,10 +98,14 @@ CHECKS = (
     Check("tender-packing-link", ("scripts/test_tender_packing_link.py",), timeout=600),
     # how the link reads clauses: nothing silently dropped, per-package limits apart, cites as written, the DEV set floors
     Check("tender-link-clauses", ("scripts/test_tender_link_clauses.py",), timeout=600),
+    # the same reader on the sealed held-out set written blind on 2026-09-26: floors = its first scored run (README there)
     Check("tender-link-sealed", ("test/benchmarks/tender_link_sealed/score_sealed.py", "--check"), timeout=600),
     # planted text in SYNTHETIC tender / panel-list files does not change statuses, approve anything or become a
     # statement (steps mode, gateway, and a scripted fake model that obeys the plant); a live model was not tested
     Check("injection-plants", ("scripts/test_injection_plants.py",), timeout=600),
+    # the sealed held-out English verdict set and the planted-instruction set, written blind on 2026-09-26: floors =
+    # PR #72's first scored run (README there); the obeying-fake-model row is printed, not pinned
+    Check("safety-sealed", ("test/benchmarks/safety_sealed/score_sealed.py", "--check"), timeout=600),
     Check("real-tender", ("scripts/test_real_tender.py",), timeout=1200),
     # Offline, model-free, a second or two each - and until 2026-09-20 run by nothing: not by ci.yml,
     # not by this registry, not by the acceptance glob. They pin the parser the three bid posts stand on.
@@ -131,6 +135,9 @@ CHECKS = (
     Check("model-mode-link", ("scripts/test_model_mode_link.py",), timeout=300),
     # 12 frozen requests against a scripted OpenAI-compatible server on 127.0.0.1 (no network, no key)
     Check("model-mode-eval", ("scripts/eval_model_mode.py", "--check"), timeout=300),
+    # model mode on the sealed held-out link requests and injections (written blind 2026-09-26); floors = the first
+    # scored run after merging #67 (README there)
+    Check("model-mode-sealed", ("test/benchmarks/model_mode_sealed/score_sealed.py", "--check"), timeout=600),
     Check("post-scorecard", ("scripts/eval_post_scorecard.py", "--all-pilots"), timeout=300),
     Check("workbench-model-turn", ("scripts/test_workbench_model_turn.py",), timeout=300),
     Check("steps-job-files", ("scripts/test_steps_job_files.py",)),
@@ -145,13 +152,17 @@ CHECKS = (
     Check("english-requests-heldout", ("test/benchmarks/english_requests/score.py", "--check")),
     Check("link-confirmation", ("scripts/test_link_confirmation_regressions.py",), timeout=300),
     Check("verdict-bench", ("scripts/eval_verdicts.py", "--check")),
+    # round-3 guard fixes on their DEV set: verdict bypasses, record-guard negations, whole-sentence claim corrections
+    Check("guards-round3", ("scripts/test_guards_round3.py",)),
     Check("number-provenance-bench", ("scripts/eval_number_provenance.py", "--check")),
     Check("runtime-threads", ("scripts/test_runtime_threads.py",)),
     Check("worktree-bg", ("scripts/test_worktree_bg.py",)),
     Check("app-launcher", ("scripts/test_app_launcher.py",)),
     Check("workbench-settings", ("scripts/test_workbench_settings.py",)),
     Check("access-guard", ("scripts/test_access_guard.py",)),
+    # the link from a browser (upload + /demo, token-gated) and the page a visitor without a token lands on
     Check("web-tender-link", ("scripts/test_web_link.py",), timeout=600),
+    # docker-compose, the Lightsail override, Caddyfile, launch script and guides say what they promise
     Check("deploy-config", ("scripts/test_deploy_config.py",)),
     Check("workbench-uploads", ("scripts/test_workbench_uploads.py",)),
     Check("document-text", ("scripts/test_document_text.py",)),
@@ -193,6 +204,7 @@ CHECKS = (
     Check("pack-ship-crates-structure", ("scripts/test_pack_ship_crates_structure.py",)),
     Check("table-quantity-cells", ("scripts/test_table_quantity_cells.py",)),
     Check("panel-list-reading", ("scripts/test_panel_list_reading.py",), timeout=300),
+    # the blind panel lists (SYNTHETIC, written 2026-09-26 before PR #69): first-run floors, see its README
     Check("panel-lists-sealed", ("test/benchmarks/panel_lists_sealed/score_sealed.py", "--check"), timeout=300),
     Check("workbench-needs-human", ("scripts/test_workbench_needs_human.py",)),
     Check("storage-parent", ("scripts/test_storage_ensure_run.py",)),

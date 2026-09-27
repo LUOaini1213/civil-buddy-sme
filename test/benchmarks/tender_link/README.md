@@ -69,3 +69,54 @@ the floors below.
 The "after" column is a DEV figure: the reader was tuned on these cases until they passed. The regex changes were
 written for the phrasings in this file, so expect lower numbers on unseen wording. That risk is why the safety net
 exists: a clause the reader cannot place goes to a person instead of disappearing.
+
+## Round 3: `dev_round3.json` (DEV, 2026-09-27)
+
+22 more SYNTHETIC cases, in their own file so the 90 above keep their numbers. R3A1-R3B8 (origin `post-review`) are
+the failing inputs of the two reviews of PR #68: a crate, crane or A-frame limit read as the container's gross
+limit; "the total mass of panels in each container" read as a per-panel limit; and limits that went silent -
+"Each 40HQ shall not exceed 26 t", "Max. gross wt.", "20 mt per 40HQ", "44,000 lbs", a VGM / MGW sentence with no
+figure, a bare "5" under a "Max gross mass (t)" header, delivery hours and vehicle length. The long clauses in the
+reviews ("... including stillages, ... 18 t", "any one crate, stillage or container ... 25 t") were written out
+in full by the builder. R3N1-R3N8 (origin `implementer-counter-probe`) are the builder's own checks that the new
+rules do not over-reach: "30 mt long" is metres, a crane after "each container" is never a container limit, a
+refuse container is not a shipping one, "Clauses 4.10 to 4.12" are no delivery hours, "8 stillages of 2 t each"
+stays with a person.
+
+```bash
+python scripts/bench_tender_link.py --set test/benchmarks/tender_link/dev_round3.json --verbose
+```
+
+| metric | before (`923ed38`, main) | after (round 3) |
+|---|---|---|
+| kind recall | 11/26 | 26/26 |
+| extra kinds | 5 | 0 |
+| silently lost (no kind and no person row) | 14 | 0 |
+| container limit read exactly | 1/10 | 10/10 |
+| false container limit (crate, crane, A-frame ...) | 3 | 0 |
+| per-package limit read | 1/4 | 4/4 |
+| basis (gross / cargo) | 0/4 | 4/4 |
+| container decision | 6/6 | 6/6 |
+| cites | 0/2 | 2/2 |
+| false "covered" | 1 (R3A2: a crane's 8 t "covered" as a container limit) | 0 |
+| "not placed" rows on cases labelled with no kind | 0 | 0 |
+
+The 90 cases above score the same before and after round 3 (98/98, 32/32, 11/11, 28/28, 18/18, 22/22, 0 false).
+Both are DEV numbers.
+
+## Round 3, reviewer: `dev_round3_review.json` (DEV, 2026-09-28)
+
+17 SYNTHETIC cases (origin `reviewer-round3`) written by the independent reviewer of PR #76 to attack the round-3
+reader: a trailing "each" in the second half of a sentence, lists of subjects, pounds sterling, "20.000 kg" and a
+zero-width space inside a figure, the same limit written twice ("20 t (44,092 lbs)"), bare numbers under "(lbs)" and
+five-digit ones under "(kg)", drawing scales and ratios that look like delivery hours, plus counter-probes. Fixed on
+this set, so these are DEV numbers too.
+
+| metric | `923ed38` (main) | `8282779` (round 3) | after the review |
+|---|---|---|---|
+| kind recall | 11/20 | 12/20 | 20/20 |
+| silently lost | 9 | 8 | 0 |
+| container limit read exactly | 4/7 | 2/7 | 7/7 |
+| false container limit | 5 | 5 | 0 |
+| false "covered" | 0 | 1 | 0 |
+| extra kinds | 6 | 6 | 0 |
