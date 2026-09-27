@@ -224,7 +224,7 @@
 - **最小验收：** 合成 CPM 8天；基线8天、资源11天、PPC50%；重开一致。
 - **限制：** 统一日历、整工作日；实际日期仅记录；不是完整 MSP/P6 引擎。建议需明确确认，旧参数/方法/版本冲突拒绝；包导入创建新副本并重置签认，资源约束核验不重新证明最优性。
 - **维护/验证证据：** 上一轮离线、HTTP及浏览器记录与本轮新增专项分开列示，见文末。
-- **来源：** [官方仓库](https://github.com/LUOaini1213/civil-buddy)；[本项目排程说明](planning-workbench.md)；[许可](https://github.com/LUOaini1213/civil-buddy/blob/main/LICENSE)。本轮变更在工作分支，公开默认分支可能尚未同步。
+- **来源：** [官方仓库](https://github.com/LUOaini1213/civil-buddy-sme)；[本项目排程说明](planning-workbench.md)；[许可](../../LICENSE)。本轮变更在工作分支，公开默认分支可能尚未同步。
 
 ### N16 OR-Tools CP-SAT
 

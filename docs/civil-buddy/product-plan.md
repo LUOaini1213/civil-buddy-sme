@@ -6,7 +6,7 @@
 |----|----|
 | 产品 | Civil Buddy |
 | 版本 | 2026-09-12 · 专业文书实现更新；§13 保留 2026-08-19 联网审阅记录 |
-| 仓库 | https://github.com/LUOaini1213/civil-buddy |
+| 仓库 | https://github.com/LUOaini1213/civil-buddy-sme |
 | 岗 / 大类 | **66 / 16**（`workbench/seed.json`） |
 | 总判 | **部分合格**的内部起草搭子，不是签认/递交机器人 |
 | 纪律 | **不定时限 · 不准空转**。墙钟和睡眠评测环不是交付 |

@@ -29,6 +29,14 @@ stay with people (`[TO FILL]`); nothing is booked or submitted.
 > ([examples/facade-demo](examples/facade-demo/README.md)); no contractor's document or number is in
 > this repository.
 
+**Submitted version.** The version submitted for NUS-ISS shortlisting is release
+[v0.7.0](https://github.com/LUOaini1213/civil-buddy-sme/tree/v0.7.0) (commit `0c0e803`); the figures and
+file:line references in the submitted PDFs were measured there. Since then `main` has added a unified Rust
+workbench (PR #1) and a `/demo` page and a Lightsail guide (PR #2); none of these are in the PDFs. The façade
+demo's figures are unchanged. Smaller differences on `main`: the Rust workbench refuses a bare `confirm_ok`, the
+Python surfaces also accept one English sign-off sentence, the English bid-book has no Chinese rows, and the
+tender parse keeps the liquidated-damages and retention rows for a person.
+
 ## Try it: one command, offline, no key
 
 ```bash
@@ -39,7 +47,7 @@ Python 3.11. No model key, no network, no account. It writes drafts into a throw
 (a new temporary folder, or `--job <new folder>`) and ends with `PASS demo_facade`. Flow 1 is the linked run; flows 2–4
 run tender review, packing and site paperwork on their own.
 
-**Clause → plan → statement.** Abridged output of flow 1 (`main` at `cab9249`):
+**Clause → plan → statement.** Abridged output of flow 1 (current `main`; the figures are the same at `v0.7.0`):
 
 ```text
 == 1 Tender <-> packing, linked: the ITT's logistics clauses, the plan under them, the English statements
@@ -52,7 +60,7 @@ run tender review, packing and site paperwork on their own.
     S3 Clause 4.9 · gross_mass · partial · heaviest container 6,472.8 kg gross (2,582.8 cargo + 3,890.0 tare) vs limit 20,000 kg, margin 13,527.2
     S4 Clause 4.10 · securing · human_required · not modelled -> competent person (lashing)
     S5 Clause 4.7 · handling · human_required · not modelled -> logistics
-    S6 Clause 4.7 · crate_structure · human_required · 24 of 24 crates pending detailed design (待详设)
+    S6 Clause 4.7 · crate_structure · human_required · 24 of 24 crates pending detailed design
     S7 Clause 4.11 · delivery_sequence · human_required · not modelled -> project manager
 ```
 
@@ -87,21 +95,21 @@ These are printed by `scripts/demo_facade.py`, not added for this page:
   stillages / upright transport / no stacking (S5) and the delivery sequence (S7) go to a person.
   "not modelled: A-frame stillages (the ITT asks for them). That needs the contractor's stillage size,
   tare and capacity."
-- **Crate structure is not designed.** 24 of 24 crates are *pending detailed design* (待详设); the
+- **Crate structure is not designed.** 24 of 24 crates are *pending detailed design*; the
   engine does not invent a pass.
 - **Handling notes do not change the plan.** Glass / upright / no-stack notes have no effect on the
   plan, in English or in Chinese.
 - **The tender parse lists 0 of the ITT's 12 façade specification clauses** (PMU and VMU mock-ups, heat
   soak, site water test, PE-endorsed calculations, warranty, A-frame delivery, the four logistics
-  clauses, insurance), and shows no liquidated-damages or retention row. The four logistics clauses are
-  read by the link instead.
+  clauses, insurance). The four logistics clauses are read by the link instead. The liquidated-damages
+  (S$5,000 per day) and retention (5%) rows are kept as unclassified rows for a person to check.
 - **Nothing is booked or submitted.** `submit_blocked` stays `true`; a person confirms the loading plan
   and re-confirms every statement a re-run names.
 
 The gross mass is the engine's per-container cargo plus an approximate knowledge-base tare (40HQ
 3,890 kg); dunnage, lashing and stillage mass are excluded, and the signed VGM governs. More limits
-(there is no dedicated linked-run MCP tool or gateway endpoint; the bid-book body has Chinese rows in chapter 3 and
-Annex B; no live-model run) are listed in [examples/facade-demo/README.md](examples/facade-demo/README.md)
+(there is no dedicated linked-run MCP tool or gateway endpoint; the UI and most post templates are in Chinese;
+no live-model run) are listed in [examples/facade-demo/README.md](examples/facade-demo/README.md)
 and in §3.4 of the technical document.
 
 ## Safety model
@@ -117,7 +125,11 @@ Enforced in code, not in prompts; shipped as the security baseline (pull request
    loop the model's tools have no confirm field, and a copied sentence is replaced.
 3. **Only a person's typed sentence approves high-risk work.** The 19 high-risk posts in
    `workbench/seed.json` (structure, geotechnics, safety briefing, …) write nothing until a person types
-   `我明白，将由持证人员签认` ("I understand; a licensed person will sign"), and it covers that turn only.
+   `我明白，将由持证人员签认` or its one English equivalent, "I understand; a licensed person will sign
+   this off." (the Rust workbench accepts only the Chinese sentence), and it covers that turn only. The
+   sentence is asked for only when a high-risk post is selected or loaded; in the Rust workbench's default
+   automatic mode the model decides whether to load a post, and a sentence pasted on a line of its own
+   still approves (both are open items in [SECURITY.md](SECURITY.md)).
    The bid posts (bid-parse, bid-tech, bid-compliance) are **low risk** in `seed.json`: they draft without
    the sentence, but every draft carries `submit_blocked = true` and the qualification / rejection rows
    wait for a person.
@@ -142,7 +154,8 @@ Enforced in code, not in prompts; shipped as the security baseline (pull request
   run** from this repository. No result in this repository comes from a live model.
 - Operator guides: [minimal deployment](docs/deploy-minimal.md) and [Lightsail runbook](docs/deploy-aws-lightsail.md).
   The gateway also provides the token-protected `/demo` page for tender and panel-list uploads.
-  The [submission audit](docs/civil-buddy/submission-sync-20260927.md) lists recovered local features and known limits.
+  What each post-submission preview adds, and its known limits, is listed in the notes of the v0.8.0 preview
+  [releases](https://github.com/LUOaini1213/civil-buddy-sme/releases).
 
 ```bash
 git clone https://github.com/LUOaini1213/civil-buddy-sme && cd civil-buddy-sme
@@ -213,19 +226,20 @@ ordinary checks use scripted local models; no paid model or cloud deployment is 
 
 For a named user, provide `--user-id`, `--workspace` and `--token-file` together. Each instance owns
 one physical workspace and private state; this is **not a shared-process multi-tenant service**.
-The [handoff guide](docs/civil-buddy/release-handoff.md) covers login, restart, project packages and
+The [handoff guide](docs/civil-buddy/release-handoff.md) (in Chinese) covers login, restart, project packages and
 remaining real-business acceptance. The [SME integration record](docs/civil-buddy/sme-integration.md)
 distinguishes this source from the older competition repository and archived evaluation figures.
 
 ## Documents
 
 - [docs/submission/nus-iss-technical.md](docs/submission/nus-iss-technical.md) — the technical
-  document: architecture, the judging-criteria map, evaluation, AWS status, limitations (every file:line
-  and number re-checked at `a161251`).
-- [docs/submission/nus-iss-entry.md](docs/submission/nus-iss-entry.md) — the one-page entry sheet.
+  document as submitted at v0.7.0: architecture, the judging-criteria map, evaluation, AWS status,
+  limitations (every file:line and number re-checked at `a161251`).
+- [docs/submission/nus-iss-entry.md](docs/submission/nus-iss-entry.md) — the one-page entry sheet as
+  submitted at v0.7.0.
 - [examples/facade-demo/README.md](examples/facade-demo/README.md) — the synthetic fixtures and the
   linked run, flow by flow.
-- [docs/deploy-minimal.md](docs/deploy-minimal.md) — operator guide (Chinese).
+- [docs/deploy-minimal.md](docs/deploy-minimal.md) — operator guide.
 
 ## Folder map
 
@@ -247,7 +261,7 @@ workbench/                  unified Rust task host and compatibility routes
 ## Settings
 
 The table below describes the original Python entry points. The unified launcher's options and
-separate host/service configuration are documented in the handoff guide. Copy `.env.example` /
+separate host/service configuration are documented in the handoff guide (in Chinese). Copy `.env.example` /
 `demo/.env.example`; never commit keys.
 
 | Variable | Default | Effect |
@@ -267,7 +281,10 @@ separate host/service configuration are documented in the handoff guide. Copy `.
 As of `cab9249`, 98 of the 447 commits on `main` (22%) are authored as `Packing Assistant`
 (`git log --format=%an | sort | uniq -c`): changes drafted by an agent and committed under their own
 name, then reviewed by a person before landing on `main`. It is part of the human-in-the-loop process,
-not a second author.
+not a second author. The commits after `cab9249` (`0c0e803`, the v0.7.0 README commit; pull
+requests #1–#2 with their merges; later documentation commits) are all authored under the maintainer's
+name; pull requests #1–#2 were
+drafted by a Codex session, partly from earlier agent-drafted development commits.
 
 ## Licence
 

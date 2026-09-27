@@ -63,13 +63,12 @@ price in September 2026; check the price with the command in A1 before relying o
 1. Your AWS access, as the organisers' document describes. For Path A, the AWS CLI v2 configured for it; check:
    `aws sts get-caller-identity` prints your account, and `aws configure get region` (or `--region` on every
    command, as below).
-2. **The commit to deploy**: a full 40-character SHA that contains `deploy/lightsail/civil-admin.sh`. Today that is
-   the development repository (the showcase mirror does not carry the kit yet):
+2. **The commit to deploy**: a full 40-character SHA of a commit of this repository that contains
+   `deploy/lightsail/civil-admin.sh` (`main` carries the kit since PR #2; the submitted v0.7.0 does not):
 
    ```bash
    REPO=https://github.com/LUOaini1213/civil-buddy-sme.git
-   SHA=$(git ls-remote "$REPO" refs/heads/main | cut -f1)      # after this kit is merged into main
-   # before the merge: SHA=$(git ls-remote "$REPO" refs/heads/feat/web-link-and-lightsail | cut -f1)
+   SHA=$(git ls-remote "$REPO" refs/heads/main | cut -f1)
    echo "$SHA"                                                   # 40 hex characters
    ```
 
