@@ -27,11 +27,17 @@ services:
       # <repo>/demo/out, which is already a sandbox root; a volume there keeps it across `up --build` without
       # widening the sandbox (CIVIL_WORKTREE_ROOT would also grant writes under the worktree)
       - agent_out:/app/demo/out
+    # A gateway that exits (crash, OOM kill, host reboot) comes back on its own. Docker does not restart a
+    # container that is merely "unhealthy"; the healthcheck below reports it, and an orchestrator or an
+    # autoheal sidecar would have to act on it.
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
+      # imports and the SQLite open take a while on a small instance: failures in this window do not count
+      start_period: 30s
 
 volumes:
   packing_output:

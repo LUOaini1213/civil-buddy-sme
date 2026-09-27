@@ -31,7 +31,7 @@
 |------------|------|--------------------|
 | 人机协同规划：HITL 高风险写盘前人确认 | 高风险岗未确认 0 稿；确认句"我明白，将由持证人员签认"；成箱→HITL→拼柜 | `python scripts/demo_agent_middleware.py`（第三拍含 HITL）；`http://127.0.0.1:8000/workbench` |
 | AI 交互迭代：一句话自然语言入口 + 意图路由（chat/run/both） | NL→IntentSpec→白名单 tools；无 Key 时 policy fallback 功能不哑；每岗金句冻结（41 条）Python/Rust 双侧实跑守护 | 按上行方式起 :8765 后输入 `pack ...`；`python main.py --eval`（phase0 quick 12/12）；`python scripts/test_stack_parity.py` |
-| AI 纠偏管理：策略引擎（越权拒绝弹原因）+ 失败恢复（retry→`UNSPECIFIED` 审计链）+ 成本熔断 | Agent Middleware 四拍剧本：正常下单 → 越权被拒 → 工具挂掉自动恢复 → 成本超限熔断 | `python scripts/demo_agent_middleware.py` |
+| AI 纠偏管理：策略引擎（越权拒绝弹原因）+ 失败恢复（retry→`UNSPECIFIED` 审计链，演示脚本里的一拍，生产路径不自动重试工具）+ 成本熔断 | Agent Middleware 四拍剧本：正常下单 → 越权被拒 → 工具挂掉自动恢复 → 成本超限熔断 | `python scripts/demo_agent_middleware.py` |
 | AI 纠偏管理：模型不得替人下判断（2026-09-19） | 模型驱动回合外加确定性守卫：模型回复不得给出判定、复读回复收敛、报告里的数字必须指得回工具结果记录。守卫是确定性代码，不能计作模型理解正确 | `npm run check` 中的 `model-loop` · `verdict-bench` · `number-provenance-bench` |
 | 纠偏落到成稿：缺数不编造 | safety-brief 成稿 11 栏中毫米/电话为 `[A001]` 待填；各岗 TBD/UNSPECIFIED | `grep -n "A001" demo/kb/hse/safety-brief/outline.md`；或在 :8765 召唤安全交底专家看成稿待填栏 |
 
