@@ -592,8 +592,11 @@ def _topic_hits(clause: str) -> List[Tuple[int, int, str]]:
     cancel.check()      # the hot call of every phase: a timed-out tender.packing_link stops here, not minutes later
     taken = [False] * len(clause)
     hits: List[Tuple[int, int, str]] = []
+    folded = clause.casefold()
     for alias, key, ascii_alias, pattern in _ALIAS_PATTERNS:
-        if not ascii_alias and alias not in clause:
+        # a quick "its letters are not in this sentence" skip; casefold, not lower, so re.I's Unicode matches
+        # (the long s, the Kelvin sign) are not skipped
+        if (alias.casefold() not in folded) if ascii_alias else (alias not in clause):
             continue
         # Keep re.I's Unicode case behavior for English aliases, and keep the
         # original string for exact evidence offsets and longest-alias priority.
