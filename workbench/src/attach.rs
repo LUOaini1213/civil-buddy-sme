@@ -570,12 +570,20 @@ pub fn upload_originals(paths: &Paths, session: &str) -> Result<Vec<(PathBuf, St
             || p.file_stem().and_then(|s| s.to_str()) != Some(id) || safe_filename(name) != name {
             return Err("附件元数据无效".into());
         }
-        if !matches!(ext_of(name).as_str(), "pdf" | "docx" | "txt" | "md") { continue; }
+        if !ALLOWED_EXT.contains(&ext_of(name).as_str()) { return Err("附件类型无效".into()); }
         let bin = dir.join(format!("{id}.bin"));
         checked(&bin, &dir)?;
         let meta = fs::metadata(&bin).map_err(|_| "附件原文件不可读")?;
         if !meta.is_file() || meta.len() > MAX_BYTES as u64 {
             return Err("附件原文件无效或过大".into());
+        }
+        if !matches!(ext_of(name).as_str(), "pdf" | "docx" | "txt" | "md") {
+            let preview = dir.join(format!("{id}.txt"));
+            checked(&preview, &dir)?;
+            let meta = fs::metadata(&preview).map_err(|_| "附件摘录不可读")?;
+            if !meta.is_file() || meta.len() > MAX_BYTES as u64 {
+                return Err("附件摘录无效或过大".into());
+            }
         }
         originals.push((bin.canonicalize().map_err(|_| "附件路径不可读")?, name.to_string()));
         if originals.len() > MAX_FILES { return Err("附件数量超出限制".into()); }

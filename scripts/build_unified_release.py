@@ -41,6 +41,8 @@ EXTRA = (
     "examples/facade-demo/wah_briefing_input.txt",
     "scripts/demo_facade.py",
     "workbench/Cargo.toml", "workbench/Cargo.lock",
+    "workbench/scripts/run_tender_extract.py", "workbench/scripts/run_packing_sidecar.py",
+    "scripts/docker_smoke.sh",
     "scripts/build_workbench_release.py", "scripts/build_unified_release.py",
     "docs/civil-buddy/architecture/implementation.md",
     "docs/civil-buddy/acceptance/2026-09-21.json",

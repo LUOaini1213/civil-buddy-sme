@@ -1529,7 +1529,8 @@ fn parse_tender(ctx: &mut ToolCtx, args: &Value) -> String {
         Ok(files) => files,
         Err(err) => return format!("拒绝写盘：招标原附件读取失败：{err}"),
     };
-    if !originals.is_empty() {
+    if originals.iter().any(|(_, name)| matches!(Path::new(name).extension().and_then(|s| s.to_str())
+        .unwrap_or("").to_ascii_lowercase().as_str(), "pdf" | "docx" | "txt" | "md")) {
         let typed: Vec<String> = ["tender_text", "text", "excerpt", "source", "body"].iter()
             .map(|key| s(args, key)).filter(|text| !text.is_empty()).collect();
         let result = crate::packing_bridge::tender_extract_files(&typed.join("\n"), &project, &originals);

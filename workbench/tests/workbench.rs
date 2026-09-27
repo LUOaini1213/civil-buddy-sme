@@ -78,6 +78,29 @@ fn test_original_upload_metadata_cannot_escape_session() {
     let _ = std::fs::remove_dir_all(scratch);
 }
 
+#[test]
+fn test_bid_parse_mixed_uploads_keep_table_excerpt() {
+    use civil_workbench::{attach, packing_bridge};
+    let mut p = paths();
+    let scratch = std::env::temp_dir().join(format!("civil-mixed-tender-{}", uuid::Uuid::new_v4().simple()));
+    p.out_root = scratch.join("out");
+    p.data_dir = scratch.join("data");
+    let session = "mixed-tender";
+    attach::save_upload(&p, session, "tender.txt", b"INVITATION TO TENDER\nQuality 40%\nPrice 60%\nTime for Completion: 180 days").unwrap();
+    attach::save_upload(&p, session, "requirements.csv", b"requirement,value\nBCA workhead,CW02\n").unwrap();
+    let mut ctx = ToolCtx::new(p.clone(), "bid-parse", "bid", "low", true, session);
+    let out = packs::execute(&mut ctx, "bid-parse__extract", &json!({"project_name": "mixed synthetic"}));
+    if packing_bridge::tender_extract("Quality 40%", "test").is_ok() {
+        assert!(out.contains("已写入"), "{out}");
+        let table = std::fs::read_to_string(ctx.out_dir.join("招标解析表.md")).unwrap();
+        assert!(table.contains("CW02"), "table attachment was omitted: {table}");
+        assert!(table.contains("并非全文读取：requirements.csv"), "preview scope must be visible: {table}");
+    } else {
+        assert!(out.contains("拒绝写盘"), "{out}");
+    }
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
 async fn send(st: AppState, req: Request<Body>) -> (StatusCode, String) {
     let res = app(st).oneshot(req).await.unwrap();
     let status = res.status();

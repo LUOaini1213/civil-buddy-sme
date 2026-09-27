@@ -267,6 +267,9 @@ def extract_table(parsed: Optional[Mapping[str, Any]], *, project_name: str = "�
         if title.startswith("3 ") and not document:
             rows += _requirement_rows(p, {"qualification"}, facts)
         if title.startswith("4 "):
+            rows += [["信封/分投方式", str(item.get("text") or ""), str(item.get("locator") or "—"),
+                      "已检出", "按原文核对提交方式，不据此判定符合要求"]
+                     for item in ho.get("envelope_sources") or []]
             days = p.get("duration_days") if not document else None   # a document's first "N日历天" may be its 响应有效期
             if days is not None and not any(r[0].startswith("工期") or r[0].startswith("交货期") for r in rows if r[3] == "已检出"):
                 rows.insert(0, ["工期", f"{days} 日历天", "—", "已检出", "—"])

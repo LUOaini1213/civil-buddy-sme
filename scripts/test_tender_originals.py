@@ -64,6 +64,18 @@ class Originals(unittest.TestCase):
         self.assertIn("第二章 前附表 9.9", table)
         self.assertNotIn("前附表 空白项目", table)
 
+    def test_submission_envelope_keeps_original_wording_and_locator(self):
+        from packing_assistant.tools.tender_parse import parse_tender_text
+        wording = "Two Envelope: technical and price separately"
+        result = workbench_bid_extract(f"INVITATION TO TENDER\nQuality 40%\nPrice 60%\n{wording}", project_name="synthetic")
+        self.assertIn(wording, result["extract_table_markdown"])
+        self.assertEqual(result["handoff"]["envelope_sources"], [{"text": wording, "locator": "L4"}])
+        # A bidder's proposed submission method is not the tender's requirement.
+        mixed = parse_tender_text("招标要求工期60日历天；我们拟用双信封递交投标文件。")
+        self.assertNotIn("envelope_sources", mixed["handoff"])
+        no_scheme = workbench_bid_extract("招标要求工期60日历天。", project_name="synthetic")
+        self.assertNotIn("Two Envelope", no_scheme["extract_table_markdown"])
+
     def test_outside_path_corrupt_and_empty_originals_fail_without_table(self):
         path = self.root / "outside.bin"
         path.write_text(TENDER, encoding="utf-8")
@@ -88,10 +100,38 @@ class Originals(unittest.TestCase):
             archive.writestr("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
                              f"<w:body>{paragraphs}</w:body></w:document>")
         before = path.read_bytes()
-        bodies, names = reader.read_originals(self.payload(path, "招标文件.docx"))
+        bodies, names, previews = reader.read_originals(self.payload(path, "招标文件.docx"))
         self.assertEqual(names, ["招标文件.docx"])
+        self.assertEqual(previews, [])
         self.assertIn("300日历天", bodies[0])
         self.assertEqual(before, path.read_bytes())
+
+    def test_mixed_original_and_spreadsheet_keeps_visible_bounded_preview(self):
+        original = self.uploads / "tender.bin"
+        original.write_text(TENDER, encoding="utf-8")
+        sheet = self.uploads / "sheet.bin"
+        sheet.write_bytes(b"synthetic uploaded workbook bytes")
+        cached = self.uploads / "sheet.txt"
+        cached.write_text("BCA workhead CW02\n" + "original spreadsheet cell\n" * 1000, encoding="utf-8")
+        payload = self.payload(original)
+        payload["files"].append({"path": str(sheet), "name": "requirements.xlsx"})
+        code, result = self.run_sidecar(payload)
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["files_read"], ["招标文件.txt"])
+        self.assertEqual(result["files_previewed"], ["requirements.xlsx"])
+        self.assertIn("CW02", result["extract_table_markdown"])
+        self.assertIn("并非全文读取：requirements.xlsx", result["extract_table_markdown"])
+        self.assertEqual(sheet.read_bytes(), b"synthetic uploaded workbook bytes")
+
+    @unittest.skipIf(os.name == "nt", "Windows symlink privilege is not assumed")
+    def test_linked_spreadsheet_preview_is_refused(self):
+        original = self.uploads / "sheet.bin"
+        original.write_bytes(b"synthetic uploaded workbook")
+        outside = self.root / "private.txt"
+        outside.write_text(TENDER, encoding="utf-8")
+        original.with_suffix(".txt").symlink_to(outside)
+        with self.assertRaises(ValueError):
+            reader.read_originals(self.payload(original, "requirements.xlsx"))
 
     @unittest.skipIf(os.name == "nt", "Windows symlink privilege is not assumed")
     def test_symlink_original_is_refused(self):

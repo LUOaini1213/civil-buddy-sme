@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import shutil
 import struct
 import subprocess
 import sys
@@ -73,6 +75,9 @@ class UnifiedReleaseTests(unittest.TestCase):
             names = set(package.namelist())
             for expected in ["bin/civil-workbench.exe", "workbench/src/main.rs", "workbench/src/product/tools.rs",
                              "workbench/Cargo.toml", "workbench/Cargo.lock", "scripts/start_unified_workbench.py",
+                             "workbench/scripts/run_tender_extract.py", "workbench/scripts/run_packing_sidecar.py",
+                             "frontend/index.html", "frontend/manifest.webmanifest", "frontend/icons/cb-icon.svg",
+                             "gateway/pages/demo.html", "examples/facade-demo/facade_itt_doc.md",
                              "start-workbench.bat", "packing_assistant/civil.py", *release.EXTRA]:
                 self.assertIn(expected, names)
             self.assertEqual(package.read(release.BINARY_NAME), self.binary.read_bytes())
@@ -108,6 +113,55 @@ class UnifiedReleaseTests(unittest.TestCase):
         with zipfile.ZipFile(archive) as package:
             self.assertFalse((set(private) | set(untracked)) & set(package.namelist()))
             self.assertIn(".env.example", package.namelist())
+
+    def test_extracted_package_reads_original_tender_without_a_checkout(self):
+        # Use real runtime sources for this package, then execute only its
+        # extracted script in an isolated interpreter. A PE stub stays unrun.
+        sources = list((ROOT / "packing_assistant").rglob("*.py")) + [
+            ROOT / "workbench/scripts/run_tender_extract.py",
+            ROOT / "workbench/scripts/run_packing_sidecar.py",
+            ROOT / "workbench/seed.json",
+            ROOT / "contract/intents.v1.json",
+            ROOT / "contract/projects.v1.json",
+            ROOT / "contract/kb_boosts.v1.json",
+        ]
+        sources += [path for name, path in release.legacy.release_inputs(ROOT).items()
+                    if name.startswith(("knowledge/", "knowledge_base/"))]
+        for source in sources:
+            if "__pycache__" in source.parts:
+                continue
+            target = self.root / source.relative_to(ROOT)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+        self.git("add", ".")
+        self.git("-c", "commit.gpgsign=false", "-c", "core.hooksPath=" + str(self.folder / "no-hooks"),
+                 "commit", "-qm", "real synthetic reader fixture")
+        archive, _, _ = self.build()
+        extracted = self.folder / "extracted"
+        with zipfile.ZipFile(archive) as package:
+            package.extractall(extracted)
+        uploads = self.folder / "uploads"
+        uploads.mkdir()
+        original = uploads / "a1b2c3.bin"
+        original.write_text("合成招标文件，非真实工程。\n" + "施工资料仅供记录。\n" * 3500
+                            + "招标要求工期89日历天。\n", encoding="utf-8")
+        before = hashlib.sha256(original.read_bytes()).hexdigest()
+        env = {k: v for k, v in os.environ.items() if not k.upper().startswith(
+            ("CIVIL_", "PACKING_", "OPENAI_", "DEEPSEEK_", "LLM_", "PYTHONPATH", "PYTHONHOME"))}
+        env.update(PACKING_AGENT_ROOT=str(extracted), PYTHONUTF8="1", PYTHON_DOTENV_DISABLED="1")
+        payload = {"tender_text": "Only this short synthetic prompt was shown to the model.",
+                   "upload_dir": str(uploads), "files": [{"path": str(original), "name": "招标文件.txt"}]}
+        process = subprocess.run([sys.executable, "-I", str(extracted / "workbench/scripts/run_tender_extract.py")],
+                                 cwd=extracted, env=env, input=json.dumps(payload).encode(),
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45)
+        self.assertEqual(0, process.returncode, process.stderr.decode("utf-8", "replace"))
+        result = json.loads(process.stdout)
+        self.assertTrue(result["ok"])
+        self.assertEqual(["招标文件.txt"], result["files_read"])
+        self.assertEqual(89, result["duration_days"])
+        self.assertIn("89日历天", result["extract_table_markdown"])
+        self.assertTrue(result["submit_blocked"])
+        self.assertEqual(before, hashlib.sha256(original.read_bytes()).hexdigest())
 
     def test_dirty_selected_source_or_missing_required_source_fails_before_output(self):
         self.write("packing_assistant/civil.py", "uncommitted runtime edit\n")
