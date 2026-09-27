@@ -6,6 +6,7 @@ no way to put a tender and a panel list in front of it.
 
     POST /api/tender/link           multipart: tender (.md/.docx/.pdf) + panel_list (.xlsx/.csv) [+ session_id,
                                     container_type, project_name] -> statements, sha256s, what went stale
+                                    (no session_id: a new session of its own, returned as session_id)
     POST /api/tender/link/demo      no input: the SYNTHETIC examples/facade-demo files, rev A then rev B
     GET  /api/tender/link/file/...  one of the four deliverables of a job
     GET  /demo                      the English page for both
@@ -24,6 +25,7 @@ record stays submit_blocked, confirmed_by_person false.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import secrets
@@ -51,8 +53,14 @@ DEMO_TENDER, DEMO_REV_A, DEMO_REV_B = "facade_itt_doc.md", "facade_panels.xlsx",
 TENDER_TYPES = {".md": "text", ".docx": "docx", ".pdf": "pdf"}
 PANEL_TYPES = {".xlsx": "xlsx", ".csv": "text"}
 MB = 1024 * 1024
-#: an Office file is a zip; its members are what openpyxl / the docx reader inflate
-MAX_UNZIPPED = 100 * MB
+#: an Office file is a zip; its members are what openpyxl / the docx reader inflate. The largest panel list in the
+#: repository unpacks to 0.4 MB; 20 MB leaves room for a Word tender with pictures and keeps two parses on a 2 GB box.
+MAX_UNZIPPED = 20 * MB
+#: rows of a panel list (all sheets, or lines of a CSV), counted in the bytes before openpyxl sees them. The largest
+#: list in the repository has 573 rows; openpyxl alone takes ~5 s on 5,000 rows and ~13 s on 10,000 on a laptop.
+MAX_PANEL_ROWS = 5000
+#: cells of a panel list: 5,000 rows of 20 columns. A few rows of 16,000 columns cost openpyxl as much as many rows.
+MAX_PANEL_CELLS = 100_000
 KEEP_JOBS_PER_SESSION = 10
 KEEP_JOBS_TOTAL = 200
 KEEP_DEMO_SESSIONS = 5
@@ -74,6 +82,13 @@ def max_tender_bytes() -> int:
 
 def max_panel_bytes() -> int:
     return _limit_mb("CIVIL_LINK_MAX_PANEL_MB", 5)
+
+
+def max_panel_rows() -> int:
+    try:
+        return max(1, int(os.getenv("CIVIL_LINK_MAX_PANEL_ROWS") or MAX_PANEL_ROWS))
+    except ValueError:
+        return MAX_PANEL_ROWS
 
 
 def max_request_bytes() -> int:
@@ -121,11 +136,18 @@ def _session_lock(session: str) -> threading.Lock:
         return _SESSION_LOCKS.setdefault(session, threading.Lock())
 
 
+#: names Windows opens as a device whatever the extension (CON.md is the console, not a file)
+_DEVICE_STEM = re.compile(r"^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\..*)?$", re.I)
+
+
 def _safe_name(filename: str, ext: str, fallback: str) -> str:
-    """The client's file name, reduced to [A-Za-z0-9._-], with the extension we checked. Never a path."""
+    """The client's file name, reduced to [A-Za-z0-9._-], with the extension we checked. Never a path, never a
+    Windows device name."""
     stem = Path(str(filename or "").replace("\\", "/")).name
     stem = stem[: -len(ext)] if stem.lower().endswith(ext) else Path(stem).stem
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")[:80]
+    if _DEVICE_STEM.match(stem):
+        stem += "_"
     return (stem or fallback) + ext
 
 
@@ -161,6 +183,95 @@ def _check_bytes(data: bytes, kind: str, label: str) -> None:
         raise Refusal(413, "too_large", f"the {label} unpacks to more than {MAX_UNZIPPED // MB} MB")
 
 
+#: the sheet elements that decide what openpyxl builds: a row (its number), a cell (its column), the sheet's stated
+#: size, and a merged range (openpyxl makes one object per merged cell). Any namespace prefix.
+_XML_EVENT = re.compile(rb"<(?:[A-Za-z_][\w.-]*:)?(row|c|dimension|mergeCell)(?=[\s>/])([^>]*)>")
+_XML_R = re.compile(rb"""(?:^|\s)r\s*=\s*["']\s*([A-Za-z]{0,3})\s*(\d+)""")
+_XML_REF = re.compile(rb"""(?:^|\s)ref\s*=\s*["']([^"']*)["']""")
+_XML_CORNER = re.compile(rb"\$?([A-Za-z]{0,3})\$?(\d*)")
+#: rows x columns of the grid openpyxl reads, gaps included: it pads every row to the widest column and every gap
+#: between two row numbers with empty rows. 5,000 rows of 200 columns; a far cell costs as much as a full sheet.
+MAX_PANEL_GRID = 1_000_000
+
+
+def _column(letters: bytes) -> int:
+    n = 0
+    for ch in letters.upper():
+        n = n * 26 + ch - 64
+    return n
+
+
+def _check_rows(data: bytes, kind: str, label: str) -> None:
+    """A panel list with more rows (or cells) than one linked run can use is refused before any parser opens it.
+    A CSV's lines are counted in the bytes (CR, LF and CRLF all end a line for the csv reader). In a workbook every
+    part is scanned (a stream, at most MAX_UNZIPPED), not only xl/worksheets/: the workbook's relationships may put a
+    sheet anywhere. Counted: row and cell elements, the highest row number and column (a 2 KB sheet with one cell in
+    XFD1048576 makes openpyxl walk a million padded rows), the stated dimension and the merged area."""
+    rows_cap = max_panel_rows()
+    too_many = Refusal(413, "too_many_rows", f"the {label} has more than {rows_cap:,} rows; split it and link each part")
+    if kind == "text":
+        lines = len(re.findall(rb"\r\n|\r|\n", data))
+        if lines + (0 if data.endswith((b"\n", b"\r")) else 1) > rows_cap:
+            raise too_many
+        return
+    cells_cap = max(MAX_PANEL_CELLS, rows_cap * 20)
+    grid_cap = max(MAX_PANEL_GRID, cells_cap)
+
+    def too(what: str) -> Refusal:
+        return Refusal(413, "too_many_rows", f"the {label} {what}; delete what lies outside the table, or split it "
+                                             "and link each part")
+
+    rows = cells = merged = 0
+    with zipfile.ZipFile(BytesIO(data)) as z:
+        for info in z.infolist():
+            if info.is_dir():
+                continue
+            row_no = top_row = top_col = in_row = 0
+            tail = b""
+            with z.open(info) as member:
+                while True:
+                    chunk = member.read(1 << 20)
+                    window = tail + chunk
+                    # a tag split across two reads: everything from the last '<' waits for the next read
+                    cut = window.rfind(b"<") if chunk else len(window)
+                    cut = len(window) if cut <= 0 else cut
+                    for m in _XML_EVENT.finditer(window, 0, cut):
+                        tag, attrs = m.group(1), m.group(2)
+                        if tag == b"row":
+                            rows += 1
+                            numbers = [int(n) for _, n in _XML_R.findall(attrs)]
+                            row_no = max(numbers) if numbers else row_no + 1
+                            top_row, in_row = max(top_row, row_no), 0
+                        elif tag == b"c":
+                            cells += 1
+                            in_row += 1
+                            refs = _XML_R.findall(attrs)
+                            top_col = max([top_col, in_row] + [_column(c) for c, _ in refs if c])
+                            top_row = max([top_row] + [int(n) for _, n in refs])
+                        else:
+                            ref = _XML_REF.search(attrs)
+                            corners = [_XML_CORNER.fullmatch(p.strip()) for p in (ref.group(1) if ref else b"").split(b":")]
+                            spots = [(_column(c.group(1)), int(c.group(2) or 0)) for c in corners if c]
+                            if tag == b"dimension":
+                                top_col = max([top_col] + [c for c, _ in spots])
+                                top_row = max([top_row] + [r for _, r in spots])
+                            elif len(spots) == 2:
+                                (c1, r1), (c2, r2) = spots
+                                merged += (abs(c2 - c1) + 1) * (abs(r2 - r1) + 1)
+                    tail = window[cut:]
+                    if rows > rows_cap or top_row > rows_cap:
+                        raise too_many
+                    if cells > cells_cap:
+                        raise too(f"has more than {cells_cap:,} cells")
+                    if top_row * top_col > grid_cap:
+                        raise too(f"reaches row {top_row:,} and column {top_col:,}, more than {grid_cap:,} cells "
+                                  "to read")
+                    if merged > cells_cap:
+                        raise too(f"merges more than {cells_cap:,} cells")
+                    if not chunk:
+                        break
+
+
 async def _read_upload(form: Any, field: str, types: Dict[str, str], limit: int, label: str) -> Tuple[str, str, bytes]:
     upload = form.get(field)
     if not isinstance(upload, UploadFile):
@@ -173,6 +284,8 @@ async def _read_upload(form: Any, field: str, types: Dict[str, str], limit: int,
     if len(data) > limit:
         raise Refusal(413, "too_large", f"the {label} is larger than {limit // MB} MB")
     _check_bytes(data, types[ext], label)
+    if types is PANEL_TYPES:
+        _check_rows(data, types[ext], label)
     return ext, name, data
 
 
@@ -232,6 +345,14 @@ def _prune_idle(root: Path) -> None:
     for old in everything[:-KEEP_JOBS_TOTAL]:
         if old.parent.name not in protected:
             shutil.rmtree(old, ignore_errors=True)
+    for session in sessions:
+        # every upload without a session_id has a folder of its own: once its last job is pruned, the empty folder
+        # goes too, or the web-link root grows by one folder per upload (demo sessions are kept by count above)
+        if session.name not in protected and not session.name.startswith("demo-") and session.is_dir():
+            try:
+                session.rmdir()             # only an empty folder; one that still holds a job stays
+            except OSError:
+                pass
 
 
 def _write_input(job: Path, name: str, data: bytes) -> Path:
@@ -246,6 +367,46 @@ def _statement(s: Dict[str, Any]) -> Dict[str, Any]:
     return {"id": s["id"], "clause": s.get("clause"), "kind": s["kind"], "title": KIND_TITLE.get(s["kind"], s["kind"]),
             "status": s["status"], "owner": s["owner"], "figure": _figure_text(s.get("figures") or {}),
             "text": s["text"], "sha256": s["sha256"]}
+
+
+#: what a browser is told when the tool fails, by error code. The engine's own reason is in Chinese and can carry a
+#: server path, so it goes to the job's log (run-error.log, never served) and the server log, not into the reply.
+_FAILURE_TEXT = {
+    "timeout": "it took longer than {timeout:g} s and was stopped. A panel list of a few hundred rows can take that "
+               "long; link a shorter list, or try again when the server is less busy",
+    "invalid_args": "{what}. A file may be damaged, protected by a password, not what its extension says, or laid out "
+                    "in a way the link does not read; open it on your computer, save it again and upload it again",
+    "permission_denied": "the server refused to open one of the uploaded files",
+    "circuit_open": "the link failed several times in a row and is paused; try again in a minute",
+    "cancelled": "the run was cancelled",
+}
+#: the one part of a tool reason that is safe and useful to pass on: which uploaded file could not be read
+_UNREADABLE = re.compile(r"^(the (?:tender|panel list) [A-Za-z0-9._-]{1,90} could not be read)")
+_LOG = logging.getLogger("civil.web_link")
+
+
+def _failure_text(code: str, result: Dict[str, Any], engine: Any) -> str:
+    """Fixed English text for a failed tool call: nothing of the raw reason but the name of an unreadable file."""
+    spec = getattr(engine, "tools", {}).get("tender.packing_link")
+    text = _FAILURE_TEXT.get(code, "the link reported an error ({code}); the reason is in the job's log")
+    which = _UNREADABLE.match(str(result.get("detail") or result.get("reason") or ""))
+    return text.format(timeout=float(getattr(spec, "timeout_s", 60) or 60), code=re.sub(r"[^a-z_]", "", code)[:40],
+                       what=which.group(1) if which else "the two files could not be used")
+
+
+def _log_failure(job: Path, what: str, result: Dict[str, Any]) -> None:
+    """The raw reason, for whoever runs the server: the server log and run-error.log in the job folder."""
+    raw = str(result.get("detail") or result.get("reason") or "")[:2000]
+    _LOG.warning("web link %s failed in job %s: %s %s", what, job.name, result.get("error_code"), raw)
+    try:
+        from packing_assistant.sandbox import guarded_write_bytes
+
+        line = f"{datetime.now(timezone.utc).isoformat()} {what}: {result.get('error_code')} {raw}\n"
+        log = job / "run-error.log"
+        before = log.read_bytes() if log.is_file() else b""
+        guarded_write_bytes(log, before + line.encode("utf-8"))
+    except Exception:  # noqa: BLE001 - the log is a convenience; the refusal still goes out
+        _LOG.exception("web link: run-error.log not written in job %s", job.name)
 
 
 def _run_job(session: str, job: Path, tender: Path, panel: Path, uploaded: Dict[str, str],
@@ -271,8 +432,9 @@ def _run_job(session: str, job: Path, tender: Path, panel: Path, uploaded: Dict[
         result = engine.execute("tender.packing_link", args, expert_id="bid-parse", intent="run",
                                 run_id=run_id)
     if not result.get("ok"):
-        raise Refusal(422, str(result.get("error_code") or "link_failed"),
-                      "the link did not run: " + str(result.get("detail") or result.get("reason") or "")[:300])
+        code = str(result.get("error_code") or "link_failed")
+        _log_failure(job, "tender.packing_link", result)
+        raise Refusal(422, code, "the link did not run: " + _failure_text(code, result, engine))
     data = result["data"]
     out = job / "out"
     files = []
@@ -280,8 +442,9 @@ def _run_job(session: str, job: Path, tender: Path, panel: Path, uploaded: Dict[
         wrote = engine.execute("write_deliverable", {"path": str(out / item["name"]), "text": item["text"]},
                                intent="run", run_id=run_id)
         if not wrote.get("ok"):
+            _log_failure(job, "write_deliverable " + item["name"], wrote)
             raise Refusal(500, str(wrote.get("error_code") or "write_failed"),
-                          f"{item['name']} was not written: {wrote.get('detail') or wrote.get('reason')}")
+                          f"{item['name']} could not be written on the server; the reason is in the job's log")
         files.append({"name": item["name"], "url": f"/api/tender/link/file/{session}/{job.name}/{item['name']}"})
     record = data["record"]
     changes = record.get("changes_since_previous")
@@ -350,6 +513,9 @@ def _locked_run(session: str, work) -> Any:
                     _SESSION_USERS[session] -= 1
                     if not _SESSION_USERS[session]:
                         del _SESSION_USERS[session]
+                        # every upload without a session_id has a session of its own now: the lock map must not
+                        # grow with them. Registration happens under this guard, so nobody else holds this lock.
+                        _SESSION_LOCKS.pop(session, None)
                     _prune(link_root())
             finally:
                 _RUNS.release()
@@ -421,7 +587,9 @@ async def api_tender_link(request: Request):
         except Exception as e:  # noqa: BLE001 - Starlette's multipart errors: too many parts, bad framing
             raise Refusal(400, "bad_form", f"the form could not be read: {str(e)[:120]}") from None
         try:
-            session = str(form.get("session_id") or "web").strip()
+            # no session_id: a session of its own, returned in the reply (a shared default would compare one
+            # caller's upload with another caller's previous job)
+            session = str(form.get("session_id") or "").strip() or "web-" + secrets.token_hex(8)
             if not SESSION_RE.match(session) or session.startswith("demo-"):
                 raise Refusal(400, "bad_session", "session_id: 1-64 of A-Z a-z 0-9 _ - (not starting with demo-)")
             container_type = str(form.get("container_type") or "").strip()
