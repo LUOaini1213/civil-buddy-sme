@@ -1,0 +1,152 @@
+/* Shared Civil Buddy chrome. Page layouts keep their own scoped styles. */
+.cb-app-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 24px;
+  padding: 14px 24px 0;
+  min-width: 0;
+  background: var(--cb-panel);
+  color: var(--cb-text);
+  border-bottom: 1px solid var(--cb-line);
+  font-family: var(--cb-font);
+}
+.cb-app-header .cb-app-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--cb-text);
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+.cb-app-brand > span:last-child, .cb-app-brand > div { min-width: 0; }
+.cb-app-brand small {
+  display: block;
+  margin-top: 2px;
+  color: var(--cb-text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.cb-app-header .cb-app-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  color: var(--cb-on-accent);
+  background: var(--cb-blue);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0;
+}
+.cb-app-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+.cb-app-header .cb-app-nav {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  flex: 0 0 100%;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+.cb-app-header .cb-app-nav a {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 42px;
+  padding: 0 14px;
+  margin: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 7px 7px 0 0;
+  background: transparent;
+  color: var(--cb-text-muted);
+  font: 13px/1.4 var(--cb-font);
+  white-space: nowrap;
+  text-decoration: none;
+}
+.cb-app-header .cb-app-nav a:hover {
+  color: var(--cb-text);
+  background: var(--cb-panel-soft);
+}
+.cb-app-header .cb-app-nav a[aria-current="page"] {
+  color: var(--cb-blue-ink);
+  border-bottom-color: var(--cb-blue);
+  background: var(--cb-blue-soft);
+  font-weight: 600;
+}
+.cb-app-actions button, .top-btn {
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--cb-line);
+  border-radius: var(--cb-radius-sm);
+  background: var(--cb-panel-soft);
+  color: var(--cb-text-muted);
+  font: 12px/1.4 var(--cb-font);
+  cursor: pointer;
+}
+.cb-app-actions button:hover, .top-btn:hover {
+  color: var(--cb-text);
+  border-color: var(--cb-text-muted);
+}
+.cb-app-actions button:disabled, .top-btn:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+.cb-app-header :focus-visible {
+  outline: 2px solid var(--cb-focus);
+  outline-offset: -2px;
+}
+.cb-voice-status, .cb-voice-interim {
+  font: 12px/1.6 var(--cb-font);
+  overflow-wrap: anywhere;
+}
+.cb-voice-status:not(:empty) {
+  margin: 10px 0 0;
+  padding: 9px 12px;
+  border: 1px solid var(--cb-line);
+  border-radius: var(--cb-radius-sm);
+  background: var(--cb-panel-soft);
+  color: var(--cb-text-muted);
+}
+.cb-voice-status[data-kind="warn"]:not(:empty) {
+  color: var(--cb-orange-ink);
+  border-color: color-mix(in srgb, var(--cb-orange) 35%, var(--cb-line));
+  background: var(--cb-orange-soft);
+}
+.cb-voice-status[data-kind="ok"]:not(:empty) {
+  color: var(--cb-green-ink);
+  background: var(--cb-green-soft);
+}
+.cb-voice-interim:not(:empty) { margin: 6px 0 0; color: var(--cb-text-muted); }
+.cb-voice-status:empty, .cb-voice-interim:empty { margin: 0; padding: 0; border: 0; }
+#btnVoice.is-rec { color: var(--cb-red); border-color: var(--cb-red); background: var(--cb-red-soft); }
+@media (max-width: 768px) {
+  .cb-app-header { gap: 10px; padding: 12px 14px 0; }
+  .cb-app-header .cb-app-nav { gap: 2px; }
+  .cb-app-header .cb-app-nav a { min-height: 44px; padding: 0 12px; }
+  .cb-app-actions button, .top-btn { min-height: 40px; }
+}
+@media (max-width: 480px) {
+  .cb-app-brand small { font-size: 10px; }
+  .cb-app-actions { gap: 5px; }
+  .cb-app-header.top .cb-app-actions { flex: 0 0 100%; justify-content: flex-start; margin: 0; }
+  .cb-app-header.top .cb-app-actions .pill { margin-left: auto; order: 1; }
+}

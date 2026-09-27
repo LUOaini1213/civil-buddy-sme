@@ -28,19 +28,21 @@ impl Drop for Guard {
     }
 }
 
-pub fn begin(sid: &str) -> (Arc<AtomicBool>, Arc<Notify>) {
+pub fn try_begin(sid: &str) -> Result<(Arc<AtomicBool>, Arc<Notify>), &'static str> {
     let flag = Arc::new(AtomicBool::new(false));
     let notify = Arc::new(Notify::new());
-    if let Ok(mut guard) = map().lock() {
-        guard.insert(
+    let mut guard = map().lock().map_err(|_| "session lock unavailable")?;
+    if guard.contains_key(sid) {
+        return Err("session is already active or cancelling");
+    }
+    guard.insert(
             sid.to_string(),
             Slot {
                 flag: flag.clone(),
                 notify: notify.clone(),
             },
-        );
-    }
-    (flag, notify)
+    );
+    Ok((flag, notify))
 }
 
 pub fn end(sid: &str, flag: &Arc<AtomicBool>) {

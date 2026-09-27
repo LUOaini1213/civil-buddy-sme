@@ -13,7 +13,8 @@ from typing import Any, Dict, Optional
 from packing_assistant.jurisdiction import infer_jurisdiction
 
 _ROOT = Path(__file__).resolve().parents[2]
-_OUT = _ROOT / "demo" / "out"
+from packing_assistant.runtime.paths import default_out_root
+_OUT = default_out_root(_ROOT)
 DEFAULT_PROJECT = "幕墙项目投标应答（草稿）"
 DROPPED = "更早对话已压缩，细节标 [A001] / UNSPECIFIED，不要假装读过。"
 

@@ -1,5 +1,6 @@
 const UNKNOWN = 'UNSPECIFIED';
 const SIGNOFF = '我明白，将由持证人员签认';
+const SIGNOFFS = [SIGNOFF, 'I understand; a licensed person will sign this off.'];
 export const FIELDS = [
   ['container_id','集装箱号'],['package_id','箱号'],['package_type','包装类型'],['material_id','物料编号'],['name','品名'],['spec','规格'],
   ['package_count','包装数','integer'],['quantity','数量（原单位）','integer'],['units_per_package','每包装数量','integer'],['unit','原始单位'],
@@ -263,7 +264,7 @@ export function startLogisticsApp(document, options={}) {
   }
   async function calculate(){
     if(state.busy || !requireProject() || !clean())return;if(!state.project.confirmed){notify('请先核对并确认当前版本的台账。',true);return;}
-    if($('confirmation').value!==SIGNOFF){notify(`计算前请填写：${SIGNOFF}`,true);return;}
+    if(!SIGNOFFS.includes($('confirmation').value)){notify(`计算前请填写：${SIGNOFF}`,true);return;}
     const max=Number($('maxContainers').value),mode=$('packingMode').value,container=$('containerType').value;
     if(!Number.isInteger(max) || max<1 || max>40){notify('最多柜数必须是 1–40 的整数。',true);return;}
     const id=projectId(),revision=state.project.revision;
@@ -278,7 +279,7 @@ export function startLogisticsApp(document, options={}) {
     const header=response.headers.get('content-disposition') || '',match=/filename="?([^";]+)"?/i.exec(header);const name=(match?.[1] || `logistics.${format}`).split(/[\\/]/).pop().replace(/[\x00-\x1f]/g,'');
     if(options.download){options.download(blob,name);return;}const url=URL.createObjectURL(blob),anchor=element('a');anchor.href=url;anchor.download=name;document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
   }
-  async function exportProject(){if(state.busy || !requireProject() || !clean())return;if($('confirmation').value!==SIGNOFF){notify(`导出前请填写：${SIGNOFF}`,true);return;}const format=$('exportFormat').value;return perform('正在校验并导出当前版本…',false,async(requestData,current)=>{const response=await requestData(`/api/logistics/projects/${projectId()}/export`,json({expected_revision:state.project.revision,format,confirmation:$('confirmation').value}),true);const blob=await response.blob();if(!current())return;download(response,blob,format);notify('已生成并开始下载当前版本文件。');});}
+  async function exportProject(){if(state.busy || !requireProject() || !clean())return;if(!SIGNOFFS.includes($('confirmation').value)){notify(`导出前请填写：${SIGNOFF}`,true);return;}const format=$('exportFormat').value;return perform('正在校验并导出当前版本…',false,async(requestData,current)=>{const response=await requestData(`/api/logistics/projects/${projectId()}/export`,json({expected_revision:state.project.revision,format,confirmation:$('confirmation').value}),true);const blob=await response.blob();if(!current())return;download(response,blob,format);notify('已生成并开始下载当前版本文件。');});}
   async function importProject(){if(state.busy || !clean())return;const file=$('importFile').files?.[0];if(!file || !/\.zip$/i.test(file.name)){notify('请选择项目 ZIP 文件。',true);return;}const body=new FormData();body.append('file',file);return perform('正在校验项目包并创建新副本…',true,async requestData=>{const data=await requestData('/api/logistics/import',{method:'POST',body});acceptProject(data.project);notify('项目包已导入为新副本，请重新核对并确认台账。');void refreshProjects();});}
   async function loadLinkedProposal(id){if(!/^[a-f0-9]{32}$/.test(id) || !state.project)return;const project=projectId(),revision=state.project.revision;return perform('正在读取待确认修改提案…',false,async requestData=>{const data=await requestData(`/api/logistics/proposals/${id}`);if(data.project?.id!==project)throw new Error('提案属于其他项目。');if(data.project.revision!==revision)throw new Error('提案已过期，请重新提出修改。');state.proposal={...data,proposal_id:data.proposal_id || id,projectId:project,revision};renderProposal();notify('已载入对话提案，核对后才能应用。');});}
   async function initialize(){

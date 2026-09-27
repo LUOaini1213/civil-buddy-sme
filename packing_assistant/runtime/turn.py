@@ -2,7 +2,9 @@
 
     steps   rule routing + the deterministic pipeline; never calls a model (the default, so a
             machine that merely has a key in its environment does not start talking to it)
-    model   the model-driven loop (runtime/model_loop.py)
+    model   the model-driven loop (runtime/model_loop.py); a tender <-> packing link request and a request routed to
+            a fixed workflow run deterministically first, as in steps (``deterministic_first``), and for the link
+            the model then only explains the record
     auto    model when a model is configured and reachable, steps otherwise
 
 Set it with ``civil --mode``, ``/mode`` in the TUI, ``CIVIL_AGENT_MODE``, or ``agent_mode`` in
@@ -32,6 +34,32 @@ def resolve_mode(requested: str = "") -> Tuple[str, str]:
     if asked == "model":
         return "steps", "agent_mode=model，但没有配置模型 Key（CIVIL_API_KEY / CIVIL_API_BASE / CIVIL_MODEL）；本轮按 steps 执行。"
     return "steps", ""
+
+
+def deterministic_first(text: str, *, skill: str = "", intent: str = "") -> Tuple[str, str]:
+    """In model mode, what runs before (or instead of) the model loop, and the intent the rules read.
+
+    "link"      a tender <-> packing link request (task_router.wants_link) that asks for the run: the deterministic
+                link runs exactly as in steps mode (same tool, same statuses, same stops), then the model only
+                explains the record (model_loop.explain_link). Measured 2026-09-26 on local qwen2.5:3b: given the
+                request directly the model planned in 40GP against a 40HQ clause and never reached the link (0 of 6).
+    "workflow"  a request the rules route to a fixed workflow (tender-review): it runs in steps, as the workbench
+                already does (demo/chat_service.py, routed_model ... and not workflow)
+    ""          the model loop gets the request
+    The intent is "chat" when the rules read a question, so a question in model mode cannot write (the workbench
+    already passes its own intent); otherwise "" (the loop decides, as before)."""
+    from packing_assistant.runtime.task_router import route_task, wants_link
+
+    route = route_task(text)
+    asked = route.get("intent") or ""
+    read_only = "chat" if asked == "chat" else ""
+    if intent == "chat" or (skill and skill != "bid-parse"):
+        return "", read_only
+    if wants_link(text) and asked != "chat":
+        return "link", read_only
+    if route.get("workflow") and not route.get("ambiguous"):
+        return "workflow", read_only
+    return "", read_only
 
 
 def run_turn(text: str, *, session_id: str = "", skill: str = "", confirm: bool = False,
@@ -84,7 +112,12 @@ def run_turn(text: str, *, session_id: str = "", skill: str = "", confirm: bool 
         out: Dict[str, Any] = {}
         if is_cancelled():
             raise os_sandbox.WorkerCancelled("本轮已取消。")
-        if chosen == "model":
+        first = ""
+        if chosen == "model" and not (cad_context or planning_context or logistics_context):
+            first, routed_intent = deterministic_first(text, skill=skill, intent=intent)
+            if not first:              # what runs deterministically first gets the intent steps mode would give it
+                intent = intent or routed_intent
+        if chosen == "model" and not first:
             from packing_assistant.runtime.model_loop import run_model_agent
 
             out = run_model_agent(text, session_id=session_id, expert_id=skill, p0_confirmed=confirm,
@@ -97,7 +130,7 @@ def run_turn(text: str, *, session_id: str = "", skill: str = "", confirm: bool 
             elif asked == "auto" and out.get("error_code") == "model_unavailable" and not out.get("tools_run"):
                 notice = "模型接口不可用（" + str(out.get("reply") or "")[:80] + "）；本轮按 steps 执行。"
                 chosen = "steps"
-        if chosen != "model":
+        if chosen != "model" or first:
             if is_cancelled():
                 raise os_sandbox.WorkerCancelled("本轮已取消。")
             if logistics_context:
@@ -115,6 +148,14 @@ def run_turn(text: str, *, session_id: str = "", skill: str = "", confirm: bool 
             else:
                 out = run_agent(material or text, session_id=session_id, expert_id=skill, p0_confirmed=confirm,
                                 cancel_event=cancel_event, force_intent=intent or None)
+            if first == "link" and not is_cancelled():
+                from packing_assistant.runtime.model_loop import explain_link
+
+                out = explain_link(text, out, session_id=session_id, cancel_event=cancel_event)
+                if out.get("mode_notice"):
+                    notice = " ".join(n for n in (notice, out.pop("mode_notice")) if n)
+            elif first:                # a fixed workflow: no model took part
+                out["agent_mode"], out["deterministic_first"] = "steps", first
     except (os_sandbox.WorkerCancelled, cancel.RunCancelled):
         out = cancelled_result(locals().get("out"))
     except os_sandbox.WorkerError as exc:

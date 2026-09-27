@@ -16,15 +16,28 @@ jobs:
   # 评委下载运行的正是这个 exe，它的测试不能只靠本机想起来才跑。
   rust:
     runs-on: ubuntu-latest
+    env:
+      PYTHON_DOTENV_DISABLED: "1"
+      CIVIL_PYTHON: python
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Deterministic Python worker dependencies
+        run: python -m pip install -r requirements-dev.txt -r requirements-documents.txt -r requirements-engineering.txt
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: workbench
       - name: cargo test
         working-directory: workbench
-        run: cargo test --locked
+        run: cargo test --locked -- --test-threads=1
+      - name: Build the host and verify authenticated restart and handoff
+        run: |
+          cargo build --locked --manifest-path workbench/Cargo.toml --bin civil-workbench
+          python scripts/test_unified_runtime_http.py --binary workbench/target/debug/civil-workbench
 
   smoke:
     runs-on: ubuntu-latest

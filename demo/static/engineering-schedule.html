@@ -1,15 +1,34 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8">
+  <meta name="theme-color" content="#17181a">
+  <script src="/static/theme.js?v=unified1"></script>
+  <link rel="stylesheet" href="/static/theme.css?v=unified1">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>施工计划 · Civil Buddy</title>
   <link rel="icon" href="/static/icons/cb-icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/vendor/frappe-gantt-1.2.2/frappe-gantt.css">
-  <link rel="stylesheet" href="/static/engineering-schedule.css">
+  <link rel="stylesheet" href="/static/engineering-schedule.css?v=unified1">
   <script type="module" src="/static/engineering-schedule.js"></script>
+
+  <link rel="stylesheet" href="/static/workbench-shell.css?v=unified1">
 </head>
 <body>
-  <header><a class="brand" href="/">CB <span>Civil Buddy</span></a><nav><a href="/engineering/planning">关键路径与资源排程</a><a href="/engineering">工程计算</a><a href="/">返回工作台</a></nav></header>
+  <header class="cb-app-header">
+    <a class="cb-app-brand" href="/static/index.html" aria-label="返回 Civil Buddy 工作台"><span class="cb-app-mark" aria-hidden="true">CB</span><span>Civil Buddy<small>日期计划</small></span></a>
+    <div class="cb-app-actions"><button type="button" data-cb-theme-toggle>切换主题</button></div>
+    <nav class="cb-app-nav" aria-label="工作台导航">
+      <a href="/static/index.html">工作台</a>
+      <a href="/static/agent.html">Agent</a>
+      <a href="/packing">装箱拼柜</a>
+      <a href="/cad">CAD</a>
+      <a href="/engineering">工程计算</a>
+      <a href="/engineering/planning">施工计划</a>
+      <a href="/engineering/schedule" aria-current="page">日期计划</a>
+      <a href="/engineering/routes">现场路线</a>
+    </nav>
+  </header>
   <main>
     <div class="heading"><div><p class="eyebrow">CONSTRUCTION SCHEDULE</p><h1>让施工计划看得清，改得动</h1><p>填写任务日期、完成进度与依赖关系，保存后可以重新打开。</p></div><span class="tag">计划草稿</span></div>
     <p id="notice" role="status" aria-live="polite">先新建任务，或载入明确标注的合成演示计划。</p>

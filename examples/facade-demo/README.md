@@ -75,8 +75,10 @@ prints what each flow extracted and where a person must sign, and exits 1 if a f
 1 linked (above), 2 tender review, 3 packing, 4 site documents.
 
 The work-at-height briefing is a high-risk post: it writes nothing until a licensed person types
-「我明白，将由持证人员签认」. The script never types it. That person reruns with
-`--sign "我明白，将由持证人员签认"` (the same as `civil exec --confirm`, or the dialog in `civil desktop`).
+「我明白，将由持证人员签认」 or its one English equivalent, "I understand; a licensed person will sign this off."
+(exactly, for that turn only). The script never types it. That person reruns with
+`--sign "I understand; a licensed person will sign this off."` (or the Chinese sentence; the same as
+`civil exec --confirm`, or the dialog in `civil desktop`).
 
 By hand, in any empty folder: `civil init`, copy the files into an `inputs/` sub-folder (files in the
 folder's top level are pasted into every draft), then the two linked requests above, `civil exec "解析招标 facade_itt_doc.md"`,
@@ -95,7 +97,7 @@ The script computes these from the drafts instead of claiming them; on 2026-09-2
   notes at all (the script packs a copy with the notes removed as the control): the notes (glass,
   upright, no stacking) do not change it, and A-frame stillages are not modelled — that needs the
   contractor's real stillage size, tare and capacity;
-- every crate's structure check reads 待详设: the engine does not invent a pass;
+- every crate's structure check reads "pending detailed design" (待详设): the engine does not invent a pass;
 - the briefing body is generic (its cover still reads 待填); only the sign-off gate is façade-ready.
 
 `facade_itt_doc.md` carries the same clauses as the ITT used in the 2026-09-26 repo study, plus the four

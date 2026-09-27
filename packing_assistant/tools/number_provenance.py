@@ -290,11 +290,15 @@ def untraced(draft: str, evidence: Iterable[str], *, rounding: bool = True, perc
     return sorted(flagged, key=lambda item: item["start"])
 
 
-def notice(flagged: Sequence[Dict[str, Any]]) -> str:
-    """The line appended to a reply whose numbers could not all be traced."""
+def notice(flagged: Sequence[Dict[str, Any]], *, english: bool = False) -> str:
+    """The line appended to a reply whose numbers could not all be traced (in English for an English request)."""
     if not flagged:
         return ""
-    items = "、".join(dict.fromkeys(str(item["text"]).strip() for item in flagged))
+    names = dict.fromkeys(str(item["text"]).strip() for item in flagged)
+    if english:
+        return ("⚠ These numbers or clause references have no source in this turn's tool results, the user's words or "
+                "the files read; do not use them unchecked: " + ", ".join(names))
+    items = "、".join(names)
     return f"⚠ 以下数字或条款号在本轮的工具结果、用户原文和已读资料里找不到出处，未经核对不得使用：{items}"
 
 

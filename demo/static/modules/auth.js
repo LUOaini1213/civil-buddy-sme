@@ -7,9 +7,10 @@ export const TOKEN_COOKIE = "cb_token";
 export function createAuth({ win, doc, prompt } = {}) {
   const ask = prompt || ((message) => (win && typeof win.prompt === "function" ? win.prompt(message) : null));
   let promptOpen = false;
+  let namedSession = false;
 
   function hasToken() {
-    return String(doc.cookie || "").split(";").some((c) => c.trim().startsWith(`${TOKEN_COOKIE}=`));
+    return namedSession || String(doc.cookie || "").split(";").some((c) => c.trim().startsWith(`${TOKEN_COOKIE}=`));
   }
 
   function setToken(tok) {
@@ -37,6 +38,12 @@ export function createAuth({ win, doc, prompt } = {}) {
     const guarded = async function cbFetch(input, init) {
       const res = await rawFetch(input, init);
       const url = typeof input === "string" ? input : (input && input.url) || "";
+      if (res.headers?.get("x-civil-identity-mode") === "named_single_user_instance" && res.status !== 401) namedSession = true;
+      if (res.status === 401 && url.startsWith("/api/") && res.headers?.get("x-civil-login") === "/auth/login") {
+        namedSession = false;
+        win.location.assign("/auth/login");
+        return res;
+      }
       if (res.status === 401 && url.startsWith("/api/") && !(init && init.cbRetried)) {
         if (await askToken("口令缺失或不对")) return cbFetch(input, { ...(init || {}), cbRetried: true });
       }

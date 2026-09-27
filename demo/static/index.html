@@ -7,37 +7,21 @@
   <link rel="manifest" href="/static/manifest.webmanifest" />
   <link rel="icon" href="/static/icons/cb-icon.svg" type="image/svg+xml" />
   <title>Civil Buddy</title>
-  <!-- ux(round11) 主题/大字早应用：持久化值先于首帧落地，防 FOUC（VS Code settings pattern，附录 J）
-       ux(round14)：暗色为默认主题（未选择时不再跟随系统；浅色仍可显式切换，参考图深炭色基线） -->
-  <script>
-  (function () {
-    var d = document.documentElement, KEY_T = "cb_theme_v1", KEY_L = "cb_large_v1";
-    function read(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
-    window.cbApplyTheme = function (t) {
-      if (t === "light") d.setAttribute("data-theme", "light");
-      else d.setAttribute("data-theme", "dark"); /* round14：dark 为默认（含未设置/未知值） */
-      var m = document.querySelector('meta[name="theme-color"]');
-      var dark = d.getAttribute("data-theme") !== "light";
-      if (m) m.setAttribute("content", dark ? "#17181a" : "#2563eb");
-    };
-    window.cbThemeSaved = function () { return read(KEY_T) || ""; };
-    window.cbLargeSaved = function () { return read(KEY_L) === "1"; };
-    cbApplyTheme(read(KEY_T) || "dark");
-    if (read(KEY_L) === "1") d.classList.add("cb-large");
-  })();
-  </script>
-  <link rel="stylesheet" href="/static/styles.css?v=voice1" />
+  <script src="/static/theme.js?v=unified1"></script>
+  <link rel="stylesheet" href="/static/theme.css?v=unified1" />
+  <link rel="stylesheet" href="/static/styles.css?v=unified1" />
+  <link rel="stylesheet" href="/static/workbench-shell.css?v=unified1" />
 </head>
 <body>
-  <header class="top">
-    <div class="brand">
-      <span class="mark">CB</span>
+  <header class="top cb-app-header">
+    <div class="brand cb-app-brand">
+      <span class="mark cb-app-mark">CB</span>
       <div>
         <strong>Civil Buddy</strong>
         <small>内部讨论草稿 · 不是签认件</small>
       </div>
     </div>
-    <div class="top-meta">
+    <div class="top-meta cb-app-actions">
       <!-- ux(round8) 汉堡键：≤768 显示，展开「会话/岗位」侧栏（.rail.mobile-open，附录 G） -->
       <button type="button" id="railToggle" class="top-btn" aria-label="展开或收起会话与岗位栏" aria-expanded="false">栏目</button>
       <!-- ux(round11) 主题/大字开关：cb_theme_v1 / cb_large_v1 持久化；图标=文字（附录 J） -->
@@ -60,6 +44,16 @@
         </div>
       </div>
     </div>
+    <nav class="cb-app-nav" aria-label="工作台导航">
+      <a href="/static/index.html" aria-current="page">工作台</a>
+      <a href="/static/agent.html">Agent</a>
+      <a href="/packing">装箱拼柜</a>
+      <a href="/cad">CAD</a>
+      <a href="/engineering">工程计算</a>
+      <a href="/engineering/planning">施工计划</a>
+      <a href="/engineering/schedule">日期计划</a>
+      <a href="/engineering/routes">现场路线</a>
+    </nav>
   </header>
   <input type="file" id="cbBackupFile" accept=".zip,application/zip" hidden />
 
@@ -91,6 +85,16 @@
           <p class="cb-empty-desc">说明要完成的任务，工作台帮你选择岗位。也可自行点名；示例只预填，不会自动发送。</p>
           <p class="cb-empty-note" id="cbAvailability" role="status">正在检测可用能力…</p>
           <div class="cb-empty-cards">
+            <a href="/static/agent.html" class="cb-empty-card tone-strong" style="text-decoration:none;color:inherit">
+              <span class="cb-empty-ico" aria-hidden="true">AI</span>
+              <span class="cb-empty-k">Agent 工程工作台</span>
+              <span class="cb-empty-v">打开工程文件夹，让模型读取资料、调用工具并生成可追溯的文档修改</span>
+            </a>
+            <a id="cbPackingEntry" href="/packing" class="cb-empty-card tone-blue" style="text-decoration:none;color:inherit">
+              <span class="cb-empty-ico" aria-hidden="true">装</span>
+              <span class="cb-empty-k">装箱拼柜工作台</span>
+              <span class="cb-empty-v">上传装箱清单，预览成箱方案，人工确认后查看拼柜 3D 与重心</span>
+            </a>
             <a href="/logistics" class="cb-empty-card tone-blue" style="text-decoration:none;color:inherit">
               <span class="cb-empty-ico" aria-hidden="true">箱</span>
               <span class="cb-empty-k">箱单识别与物流材料</span>
@@ -145,11 +149,17 @@
         </div>
       </div>
       <form id="form" class="composer">
-        <label class="confirm">
-          高风险任务确认：请键入「我明白，将由持证人员签认」
-          <input type="text" id="confirmOk" autocomplete="off" spellcheck="false" placeholder="普通提问无需填写" />
-        </label>
-        <div class="composer-note">AI 草稿 · 不签认</div>
+        <div class="composer-heading">
+          <span class="composer-note">AI 草稿 · 待人工核对</span>
+          <span class="composer-shortcut">Enter 发送 · Shift+Enter 换行</span>
+        </div>
+        <details id="riskDisclosure" class="composer-risk">
+          <summary>高风险任务确认 <span>普通提问无需填写</span></summary>
+          <label class="confirm" for="confirmOk">
+            <span>请完整键入：<strong>我明白，将由持证人员签认</strong> 或 <strong>I understand; a licensed person will sign this off.</strong></span>
+            <input type="text" id="confirmOk" autocomplete="off" spellcheck="false" placeholder="我明白，将由持证人员签认" />
+          </label>
+        </details>
         <!-- ux(round19)：点名岗位贴着输入框（公理①一个输入框）。空时整条隐藏；
              #summonBar / #clearExperts 的 id 不可删——renderSummon 与其回调读它们。 -->
         <div class="summon-bar" id="summonBar" hidden></div>
@@ -158,7 +168,7 @@
         <div class="composer-shell">
           <button type="button" id="composerPlus" class="composer-plus" aria-label="打开快捷指令面板" title="快捷指令">+</button>
           <div class="input-wrap">
-            <textarea id="input" rows="1" aria-label="任务内容" placeholder="描述任务，或 /快捷指令 · @选择岗位；Enter 发送 / Shift+Enter 换行"></textarea>
+            <textarea id="input" rows="1" aria-label="任务内容" placeholder="描述任务，输入 / 指令或 @ 岗位"></textarea>
             <div id="cmdMenu" class="cb-at-menu cb-cmd-menu" hidden role="listbox" aria-label="快捷指令"></div>
             <div id="atMenu" class="cb-at-menu" hidden role="listbox" aria-label="岗位补全"></div>
           </div>
@@ -346,7 +356,7 @@
   <script src="/static/tickets.js?v=ui9"></script>
   <script src="/static/chat-stream.js?v=1"></script>
   <script type="module" src="/static/app.js?v=modules1"></script>
-  <script src="/static/voice.js?v=3"></script>
+  <script src="/static/voice.js?v=4"></script>
   <script src="/static/studio.js?v=ui4"></script>
 </body>
 </html>

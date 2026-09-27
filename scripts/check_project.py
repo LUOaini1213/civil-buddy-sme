@@ -29,8 +29,6 @@ CHECKS = (
     Check("js-syntax", ("scripts/test_js_syntax.py",)),
     Check("vue-bindings", ("scripts/test_vue_bindings.py",)),
     Check("chat-stream", ("scripts/test_chat_stream.cjs",), "node"),
-    Check("ui-modules", ("scripts/test_modules.cjs",), "node"),
-    Check("ui-dom", ("scripts/e2e/ui_dom.cjs",), "node"),
     Check("cad-geometry", ("scripts/test_cad_geometry.py",)),
     Check("cad-selection", ("scripts/test_cad_selection.py",)),
     Check("cad-imports", ("scripts/test_cad_imports.py",)),
@@ -51,6 +49,17 @@ CHECKS = (
     Check("engineering-ui", ("scripts/test_engineering_ui.cjs",), "node"),
     Check("engineering-agent", ("scripts/test_engineering_agent.py",)),
     Check("engineering-api", ("scripts/test_engineering_api.py",), timeout=300),
+    Check("ui-modules", ("scripts/test_modules.cjs",), "node"),  # demo/static/modules/*.js on their own
+    Check("agent-ui", ("scripts/test_agent_ui.cjs",), "node"),
+    Check("document-worker", ("scripts/test_document_worker.py",)),
+    Check("source-retrieval", ("scripts/test_source_retrieval.py",)),
+    Check("host-worker", ("scripts/test_host_worker.py",)),
+    Check("unified-acceptance-oracle", ("scripts/test_unified_acceptance.py",)),
+    Check("unified-launcher", ("scripts/test_unified_launcher.py",)),
+    Check("domain-service", ("scripts/test_domain_service.py",), timeout=300),
+    Check("unified-packing", ("scripts/test_unified_packing.py",)),
+    Check("unified-release", ("scripts/test_unified_release.py",)),
+    Check("ui-dom", ("scripts/e2e/ui_dom.cjs",), "node"),  # real page + real backend in jsdom
     Check("engineering-planning", ("scripts/test_engineering_planning.py",)),
     Check("planning-exchange", ("scripts/test_planning_exchange.py",)),
     Check("planning-workbench", ("scripts/test_planning_workbench.py",), timeout=180),
@@ -87,6 +96,11 @@ CHECKS = (
     Check("facade-demo", ("scripts/test_facade_demo.py",)),
     # the partner's problem: tender and packing as one run that stays linked (tender_packing_link.py)
     Check("tender-packing-link", ("scripts/test_tender_packing_link.py",), timeout=600),
+    # how the link reads clauses: nothing silently dropped, per-package limits apart, cites as written, the DEV set floors
+    Check("tender-link-clauses", ("scripts/test_tender_link_clauses.py",), timeout=600),
+    # planted text in SYNTHETIC tender / panel-list files does not change statuses, approve anything or become a
+    # statement (steps mode, gateway, and a scripted fake model that obeys the plant); a live model was not tested
+    Check("injection-plants", ("scripts/test_injection_plants.py",), timeout=600),
     Check("real-tender", ("scripts/test_real_tender.py",), timeout=1200),
     # Offline, model-free, a second or two each - and until 2026-09-20 run by nothing: not by ci.yml,
     # not by this registry, not by the acceptance glob. They pin the parser the three bid posts stand on.
@@ -111,6 +125,10 @@ CHECKS = (
     Check("civil-config", ("scripts/test_civil_config.py",)),
     Check("civil-workspace", ("scripts/test_civil_workspace.py",)),
     Check("model-loop", ("scripts/test_model_loop.py",)),
+    # model mode on the link: deterministic first, the model only explains; its claims checked against the record
+    Check("model-mode-link", ("scripts/test_model_mode_link.py",), timeout=300),
+    # 12 frozen requests against a scripted OpenAI-compatible server on 127.0.0.1 (no network, no key)
+    Check("model-mode-eval", ("scripts/eval_model_mode.py", "--check"), timeout=300),
     Check("post-scorecard", ("scripts/eval_post_scorecard.py", "--all-pilots"), timeout=300),
     Check("workbench-model-turn", ("scripts/test_workbench_model_turn.py",), timeout=300),
     Check("steps-job-files", ("scripts/test_steps_job_files.py",)),
@@ -121,6 +139,8 @@ CHECKS = (
     Check("example-plugin", ("-m", "packing_assistant.civil", "plugin", "validate", "examples/plugins/site-forms")),
     Check("task-intent-bench", ("scripts/eval_task_intent.py", "--check")),
     Check("english-intents", ("scripts/test_english_intents.py",)),
+    Check("link-routing-bench", ("scripts/eval_link_routing.py", "--check")),
+    Check("link-confirmation", ("scripts/test_link_confirmation_regressions.py",), timeout=300),
     Check("verdict-bench", ("scripts/eval_verdicts.py", "--check")),
     Check("number-provenance-bench", ("scripts/eval_number_provenance.py", "--check")),
     Check("runtime-threads", ("scripts/test_runtime_threads.py",)),
@@ -180,14 +200,18 @@ FULL_CHECKS = (
     Check("office-job", ("scripts/test_office_job.py",)),
     Check("pipeline", ("scripts/test_p0_p1_p2_full.py",), timeout=600),
     Check("shadow-eval", ("scripts/eval_workteams_cli.py", "--tiny-only"), timeout=600),
-    Check("rust", ("test", "--locked", "--offline", "--manifest-path", "workbench/Cargo.toml"), "cargo", 900),
+    # Scripted-provider fixtures change process-wide configuration; keep them sequential.
+    Check("rust", ("test", "--locked", "--offline", "--manifest-path", "workbench/Cargo.toml", "--", "--test-threads=1"), "cargo", 1200),
+    Check("rust-build", ("build", "--locked", "--offline", "--manifest-path", "workbench/Cargo.toml", "--bin", "civil-workbench"), "cargo", 900),
+    Check("unified-runtime", ("scripts/test_unified_runtime_http.py", "--binary",
+          "workbench/target/debug/civil-workbench" + (".exe" if os.name == "nt" else "")), timeout=900),
 )
 
 
 def check_environment() -> dict[str, str]:
     """Do not load personal model credentials or use paid model calls in checks."""
     env = dict(os.environ)
-    for key in ("CIVIL_API_KEY", "OPENAI_API_KEY", "LLM_API_KEY", "DEEPSEEK_API_KEY", "ZAI_API_KEY"):
+    for key in ("CIVIL_API_KEY", "OPENAI_API_KEY", "LLM_API_KEY", "DEEPSEEK_API_KEY", "ZAI_API_KEY", "JEV_API_KEY", "TYPESAFE_API_KEY"):
         env.pop(key, None)
     env.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHON_DOTENV_DISABLED="1", PYTHONOPTIMIZE="0",
                CIVIL_JOB_ROOT=str(ROOT / "output" / "check-project" / "jobs"))

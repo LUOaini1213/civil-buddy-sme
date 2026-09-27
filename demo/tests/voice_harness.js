@@ -140,11 +140,33 @@ function makePage(opts) {
   });
   const click = () => { els.btnVoice.click(); };
   const tap = async (ms) => { click(); await advance(ms || 1); };
-  return { log, els, advance, flush, snap, click, tap, rec: () => FakeRecorder.last, speech: () => FakeRecognition.last, now: () => now };
+  return { log, els, advance, flush, snap, click, tap, cancel: () => window.CivilBuddyVoice.cancel(), rec: () => FakeRecorder.last, speech: () => FakeRecognition.last, now: () => now };
 }
 
 const READY = { available: true, state: "ready", load_error: "" };
 const scenarios = {
+  async cancelled_server_result_is_ignored() {
+    let requestId = "";
+    const p = makePage({ fetch: (u, i, t) => {
+      if (u.includes("status")) return [200, { ...READY, supports_cancel: true }];
+      if (u.endsWith("/cancel")) return [200, { status: "cancelled" }];
+      requestId = i.headers["X-Civil-ASR-ID"];
+      return t.wait(1000).then(() => [200, { text: "迟到结果", elapsed_seconds: 1 }]);
+    } });
+    await p.tap(); await p.tap(); await p.tap(); await p.advance(2000);
+    return { requestId, after: p.snap(), log: p.log };
+  },
+  async cancelled_mic_start_releases_late_stream() {
+    const p = makePage({ micDelay: 500, fetch: () => [200, READY] });
+    p.click(); await p.flush(); p.cancel(); await p.advance(1000);
+    return { after: p.snap(), log: p.log };
+  },
+  async cancelled_browser_result_is_ignored() {
+    const p = makePage({ speech: true, fetch: () => [404, {}] });
+    await p.tap(); const lateResult = p.speech().onresult, lateEnd = p.speech().onend;
+    p.cancel(); lateResult({ resultIndex: 0, results: [Object.assign([{ transcript: "旧会话" }], { isFinal: true })] }); lateEnd();
+    await p.advance(100); return { after: p.snap(), log: p.log };
+  },
   async server_fill_never_send() {
     const p = makePage({ initialText: "先写的", fetch: (u) => (u.includes("status") ? [200, READY] : [200, { text: "脚手架的连墙件", elapsed_seconds: 1.2 }]) });
     await p.tap();

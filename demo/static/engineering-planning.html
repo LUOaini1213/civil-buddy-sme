@@ -1,15 +1,34 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="utf-8">
+  <meta name="theme-color" content="#17181a">
+  <script src="/static/theme.js?v=unified1"></script>
+  <link rel="stylesheet" href="/static/theme.css?v=unified1">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>施工计划与关键路径 · Civil Buddy</title>
   <link rel="icon" href="/static/icons/cb-icon.svg">
   <link rel="stylesheet" href="/static/vendor/frappe-gantt-1.2.2/frappe-gantt.css">
-  <link rel="stylesheet" href="/static/engineering-planning.css">
+  <link rel="stylesheet" href="/static/engineering-planning.css?v=unified1">
   <script type="module" src="/static/engineering-planning.js"></script>
+
+  <link rel="stylesheet" href="/static/workbench-shell.css?v=unified1">
 </head>
 <body>
-  <header class="site-header"><a class="brand" href="/">CB <span>Civil Buddy</span></a><nav aria-label="工作台导航"><a href="/engineering">工程计算</a><a href="/cad">CAD 工作台</a><a href="/engineering/schedule">日期甘特图</a></nav></header>
+  <header class="cb-app-header">
+    <a class="cb-app-brand" href="/static/index.html" aria-label="返回 Civil Buddy 工作台"><span class="cb-app-mark" aria-hidden="true">CB</span><span>Civil Buddy<small>施工计划</small></span></a>
+    <div class="cb-app-actions"><button type="button" data-cb-theme-toggle>切换主题</button></div>
+    <nav class="cb-app-nav" aria-label="工作台导航">
+      <a href="/static/index.html">工作台</a>
+      <a href="/static/agent.html">Agent</a>
+      <a href="/packing">装箱拼柜</a>
+      <a href="/cad">CAD</a>
+      <a href="/engineering">工程计算</a>
+      <a href="/engineering/planning" aria-current="page">施工计划</a>
+      <a href="/engineering/schedule">日期计划</a>
+      <a href="/engineering/routes">现场路线</a>
+    </nav>
+  </header>
   <main>
     <div class="hero"><div><p class="eyebrow">CONSTRUCTION PLANNING</p><h1>看清依赖，掌握下一步</h1><p class="muted">工作日排程 · 关键路径 · 资源与每周履约</p></div><span class="draft-badge">施工计划草稿</span></div>
     <p id="notice" class="notice" role="status" aria-live="polite">从真实任务开始，或载入明确标注的合成示例。工期与资源用量由你确认。</p>
@@ -66,7 +85,7 @@
       <div class="section-heading"><h2 id="exchangeTitle">导入与交接</h2><span class="muted small">保留原文件；导入产生本地草稿</span></div>
       <div class="exchange-grid">
         <div><label>计划文件<input id="importFile" type="file" accept=".json,.csv,.xlsx,.xml,.mpp,.xer,.pmxml"></label><button id="importPlan">检查导入文件</button><p id="importHint" class="muted small">JSON、CSV、XLSX、MS Project XML；MPP / P6（XER、PMXML）取决于服务器可用的转换组件。导入后先核对日历与依赖。</p></div>
-        <div><label>导出格式<select id="exportFormat"><option value="json">JSON 计划数据</option><option value="csv">CSV 任务表</option><option value="xlsx">Excel 工作簿</option><option value="xml">MS Project XML</option></select></label><label>签认提示：完整输入“我明白，将由持证人员签认”<input id="confirmation" autocomplete="off" placeholder="我明白，将由持证人员签认"></label><button id="exportPlan">导出当前计划</button><p class="muted small">交换文件包含计划输入与计算日期；完整交接请选择下方项目包。</p></div>
+        <div><label>导出格式<select id="exportFormat"><option value="json">JSON 计划数据</option><option value="csv">CSV 任务表</option><option value="xlsx">Excel 工作簿</option><option value="xml">MS Project XML</option></select></label><label>签认提示：完整输入“我明白，将由持证人员签认（或 / or: I understand; a licensed person will sign this off.）”<input id="confirmation" autocomplete="off" placeholder="我明白，将由持证人员签认（或 / or: I understand; a licensed person will sign this off.）"></label><button id="exportPlan">导出当前计划</button><p class="muted small">交换文件包含计划输入与计算日期；完整交接请选择下方项目包。</p></div>
       </div>
       <div class="import-review"><h3>完整项目包</h3><p id="bundleStatus" class="muted small">保存计划后可导出项目包，包含基线、周承诺、保留的历史与已上传原文件。</p><div class="toolbar"><button id="exportBundle">导出已保存项目包</button><label class="grow">导入同事的项目包<input id="bundleFile" type="file" accept=".zip"></label><button id="importBundle">导入为新副本</button></div><p class="muted small">导入使用新编号，不覆盖现有项目；签认确认需重新输入。资源方案保留原计算记录，核对约束，但不重新证明最优性。</p><div id="missingSourcePanel" hidden><label>补齐缺失的原文件<input id="missingSourceFile" type="file"></label><button id="attachSource">核对摘要并补齐原件</button></div></div>
       <div id="importPreview" class="import-review" hidden>

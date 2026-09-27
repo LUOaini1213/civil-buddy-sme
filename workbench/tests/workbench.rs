@@ -67,7 +67,7 @@ async fn test_health_flags_match_routes() {
         ("context", "/api/context?session_id=demo01"),
     ];
     for (flag, uri) in flags {
-        assert_eq!(health["capabilities"][flag], true, "{flag} {body}");
+        assert_eq!(health["capabilities"][flag], flag != "session_backup", "{flag} {body}");
         let method = if uri.starts_with("/api/upload") || uri.contains("/cancel") {
             "POST"
         } else {
@@ -250,7 +250,7 @@ async fn test_health_flags_match_routes() {
                     "project_name": stamp,
                     "jurisdiction": "CN",
                     "brief": "写一份项目日报",
-                    "confirm_ok": true
+                    "confirm_ok": true, "confirm_text": "我明白，将由持证人员签认"
                 })
                 .to_string(),
             ))
@@ -4183,7 +4183,7 @@ async fn test_harness_expert_api_and_shadow() {
                     "project_name": "T5",
                     "jurisdiction": "SG",
                     "brief": "Quality 33%\nPrice 67%\nBCA workhead CW01\nTwo Envelope",
-                    "confirm_ok": true
+                    "confirm_ok": true, "confirm_text": "我明白，将由持证人员签认"
                 })
                 .to_string(),
             ))
@@ -4210,7 +4210,7 @@ async fn test_harness_expert_api_and_shadow() {
                     "expert_id": "cost",
                     "project_name": "T5",
                     "brief": "drainage m 120",
-                    "confirm_ok": true
+                    "confirm_ok": true, "confirm_text": "我明白，将由持证人员签认"
                 })
                 .to_string(),
             ))
@@ -4481,7 +4481,7 @@ async fn test_harness_tender_question_no_write() {
                     "session_id": "wb-http-q-bid",
                     "expert_id": "bid-parse",
                     "brief": "评标是什么",
-                    "confirm_ok": true
+                    "confirm_ok": true, "confirm_text": "我明白，将由持证人员签认"
                 })
                 .to_string(),
             ))

@@ -32,7 +32,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.formparsers import MultiPartException, MultiPartParser
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIRMATION = "我明白，将由持证人员签认"
+from packing_assistant.runtime.civil_config import CONFIRM as CONFIRMATION, CONFIRM_EN, is_confirmation  # noqa: E402
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_JSON_BYTES = 512 * 1024
 TTL_SECONDS = 30 * 60
@@ -454,8 +454,8 @@ def export_model(model: dict, format: str) -> tuple[bytes, str, str]:
 async def cad_export(request: Request):
     body = await read_json(request, ExportIn)
     require_export_permission()
-    if body.confirmation != CONFIRMATION:
-        raise HTTPException(403, "导出前请完整键入：" + CONFIRMATION)
+    if not is_confirmation(body.confirmation, strip=False):
+        raise HTTPException(403, "导出前请完整键入：" + CONFIRMATION + "（或 / or: " + CONFIRM_EN + "）")
     model = MODELS.get(body.model_id)
     data, media_type, filename = await run_in_threadpool(compute, export_model, model, body.format)
     return Response(data, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
@@ -582,8 +582,8 @@ async def cad_project_open(project_id: str, version: int | None = None):
 async def cad_project_export(project_id: str, request: Request):
     body = await read_json(request, ProjectExportIn)
     require_export_permission()
-    if body.confirmation != CONFIRMATION:
-        raise HTTPException(403, "导出前请完整键入：" + CONFIRMATION)
+    if not is_confirmation(body.confirmation, strip=False):
+        raise HTTPException(403, "导出前请完整键入：" + CONFIRMATION + "（或 / or: " + CONFIRM_EN + "）")
     payload = await run_in_threadpool(project_compute, project_store().export_bundle, project_id, body.expected_revision)
     return Response(payload, media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="cad-project.zip"',
                     "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})

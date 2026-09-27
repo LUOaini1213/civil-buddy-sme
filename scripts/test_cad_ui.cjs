@@ -441,7 +441,7 @@ test('saving a draft never archives an unrequested model, and a clean model vers
     assert.match(doc.ids.notice.textContent, /模型尚未归档/); assert.equal(doc.ids.exportProject.disabled, true);
     doc.ids.saveVersion.click(); await waitFor(() => saves.length === 2 && !state.busy);
     assert.equal(saves[1].model_id, 'model-one'); assert.equal(saves[1].expected_revision, 1); assert.equal(saves[1].project_id, project.id);
-    assert.equal(state.projectDirty, false); assert.equal(doc.ids.agentProjectLink.href, '/?cad_project_id=' + project.id);
+    assert.equal(state.projectDirty, false); assert.equal(doc.ids.agentProjectLink.href, '/static/index.html?cad_project_id=' + project.id);
     doc.ids.exportConfirmation.value = '我明白，将由持证人员签认'; doc.ids.exportConfirmation.emit('input'); assert.equal(doc.ids.exportProject.disabled, false);
     doc.ids.parameterRows.children[0].children[1].value = '4'; doc.ids.parameterRows.children[0].children[1].emit('input');
     assert.equal(doc.ids.exportProject.disabled, true); assert.equal(doc.ids.agentProjectLink.attributes['aria-disabled'], 'true');

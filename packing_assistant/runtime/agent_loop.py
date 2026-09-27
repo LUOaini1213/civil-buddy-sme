@@ -18,7 +18,8 @@ from packing_assistant.runtime.tool_engine import ToolEngine, get_engine
 from packing_assistant.understand import understand
 
 _ROOT = Path(__file__).resolve().parents[2]
-_OUT = _ROOT / "demo" / "out"
+from packing_assistant.runtime.paths import default_out_root
+_OUT = default_out_root(_ROOT)
 
 
 def _out_root() -> Path:
@@ -32,7 +33,7 @@ def _out_root() -> Path:
     return _OUT
 
 
-CONFIRM = "我明白，将由持证人员签认"
+from packing_assistant.runtime.civil_config import CONFIRM, CONFIRM_EN  # noqa: E402,F401  (one definition)
 FORBIDDEN = ("可以投标", "可以开工", "中标率")
 _PIPE_KEYS = (
     "matrix",
@@ -111,6 +112,32 @@ def _named_container_type(text: str, *files: Any) -> List[str]:
     return sorted(_container_codes(rest))
 
 
+_LINK_QUESTION_EN = (
+    "This reads as a question about the tender <-> packing link, so nothing was run and nothing was written. The linked "
+    "run reads the tender's logistics clauses, plans the named panel list in the container type the clause names, and "
+    "writes one English statement per clause, each tied to its clause and to the plan figure behind it; what the plan "
+    "does not model (securing, handling, delivery sequence) is left [TO CONFIRM] for the named person. To run it, name "
+    "one tender document and one panel list and ask for it, for example: \"Check facade_panels.xlsx against the "
+    "logistics clauses of facade_itt_doc.md\".")
+_QUESTION_EN = ("Nothing was run and nothing was written: no draft was asked for in this turn. To get one, ask for it (for "
+                "example \"Draft the ... for ...\"). The reference notes below are the post's own and are in Chinese.")
+
+
+def _chat_reply(text: str, expert_id: str, prefix: str = "") -> str:
+    """The answer to a question. An English one gets an English lead and no internal slot line; a question about
+    the link gets an English answer only."""
+    from packing_assistant.runtime.reply_language import english_request
+    from packing_assistant.runtime.task_router import wants_link
+
+    if not english_request(text):
+        return _explain(text, expert_id, prefix)
+    if (expert_id or "bid-parse") == "bid-parse" and wants_link(text):
+        return _LINK_QUESTION_EN
+    body = _explain(text, expert_id, prefix)
+    kept = [line for line in body.splitlines() if not line.startswith(("本会话槽：", "这是提问。"))]
+    return _QUESTION_EN + "\n\n" + "\n".join(kept).strip()
+
+
 def _link_inputs(text: str) -> Any:
     """(tender, panel list) for a tender <-> packing link request, a sentence saying what is missing, or None when
     the request is not one. Only a request that asks for the link gets it: a tender named beside a bill of
@@ -124,9 +151,12 @@ def _link_inputs(text: str) -> Any:
     documents = [p for p in files_named_in(text, (".docx", ".pdf", ".txt", ".md")) if p not in tables]
     if len(tables) == 1 and len(documents) == 1:
         return documents[0], tables[0]
+    from packing_assistant.runtime.reply_language import english_request
+
+    zh = "" if english_request(text) else "招标与装柜联动需要在任务里各点名一份招标文件和一份装箱单。"
     return ("Linking the tender to the packing needs exactly one tender document (.docx / .pdf / .md / .txt) and one "
             f"panel list (.xlsx / .csv) named in the request; this one names {len(documents)} document(s) and "
-            f"{len(tables)} table(s). 招标与装柜联动需要在任务里各点名一份招标文件和一份装箱单。Nothing was written.")
+            f"{len(tables)} table(s). {zh}Nothing was written.")
 
 
 def _with_named_documents(text: str, *, whole: bool = False) -> str:
@@ -224,12 +254,13 @@ def _plan_calls(
 
     exp = get_expert(expert_id) if expert_id else None
     from packing_assistant.runtime.civil_config import high_risk_unconfirmed, hitl_reply
+    from packing_assistant.runtime.reply_language import english_request
 
     if exp and high_risk_unconfirmed(risk=exp.risk, confirmed=p0_confirmed):
         return {
             "hitl": True,
             "calls": [],
-            "reply": hitl_reply(exp.name),
+            "reply": hitl_reply(exp.name, english=english_request(text)),
         }
     sid = _safe_sid(session_id)
     out_dir = _out_root() / sid / (exp.id if exp else "ops")
@@ -281,7 +312,9 @@ def _plan_calls(
             if len(codes) > 1:
                 return {"hitl": False, "calls": [], "stop_code": "ambiguous_container_type",
                         "stop": f"The request names more than one container type ({', '.join(codes)}); the planner plans one "
-                                f"type x N at a time: name one. 任务里写了不止一种柜型（{'、'.join(codes)}），请只写一种。Nothing was written."}
+                                f"type x N at a time: name one. "
+                                + ("" if english_request(text) else f"任务里写了不止一种柜型（{'、'.join(codes)}），请只写一种。")
+                                + "Nothing was written."}
             calls.append({"name": "tender.packing_link", "tool_label": "tender.packing_link",
                           "arguments": {"tender_path": str(tender), "packing_list": str(table),
                                         "previous_path": str(out_dir / LINK_FILE),
@@ -438,7 +471,8 @@ def run_agent(
             "wrote": False,
             "submit_blocked": True,
         }
-    from packing_assistant.runtime.civil_config import CONFIRM, decide_gate, load_config
+    from packing_assistant.runtime.civil_config import CONFIRM, CONFIRM_EN, decide_gate, load_config
+    from packing_assistant.runtime.reply_language import english_request
 
     packing_list = _named_packing_list(text) if exp and exp.id == "pack-ship" else ""
     if packing_list and intent == "chat" and force_intent not in {"chat", "run", "both"}:
@@ -666,7 +700,7 @@ def run_agent(
                 messages.append({"role": "assistant", "content": out["reply"]})
                 return _finish()
             if intent == "chat":
-                reply = _explain(text, eid, ctx_prefix)
+                reply = _chat_reply(text, eid, ctx_prefix)
                 if _cancel_requested():
                     return _finish_cancelled()
                 messages.append({"role": "assistant", "content": reply})
@@ -689,7 +723,9 @@ def run_agent(
             if gate == "hitl":
                 sched.transition(run, "waiting_hitl")
                 who = f"{exp.name} " if exp else ""
-                reply = f"approval={cfg.approval}：{who}写盘须确认句「{CONFIRM}」。本轮未写盘。"
+                reply = (f"approval={cfg.approval}: {who or 'this post '}writes only after a person types the sign-off sentence "
+                         f"\"{CONFIRM_EN}\" (or 「{CONFIRM}」) in this turn. Nothing was written."
+                         if english_request(text) else f"approval={cfg.approval}：{who}写盘须确认句「{CONFIRM}」。本轮未写盘。")
                 messages.append({"role": "assistant", "content": reply})
                 bus.emit(run.run_id, "hitl", {"required": True})
                 out["reply"] = reply

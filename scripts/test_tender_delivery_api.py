@@ -130,7 +130,7 @@ def main() -> int:
     bb = jd.get("bidbook_markdown") or ""
     assert "DRAFT" in bb and "NOT FOR" in bb
     assert "6. Logistics & Packing Evidence" in bb
-    assert "can_fit" in bb
+    assert "all crates placed" in bb     # the plan's can_fit, in words
 
     # T052: same session pack-ship copies delivery can_fit; xyz never invented.
     pk = client.post(

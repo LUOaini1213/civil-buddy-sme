@@ -70,9 +70,10 @@ class PackIn(eng.RevisionIn):
 
 
 def store():
+    import os
     from demo.config import REPO_ROOT
     from packing_assistant.logistics.records import LogisticsStore
-    return LogisticsStore(REPO_ROOT)
+    return LogisticsStore(Path(os.environ.get("CIVIL_DOMAIN_WORKSPACE", str(REPO_ROOT))))
 
 
 def project_at(ident, revision):
@@ -114,8 +115,8 @@ def public_proposal(ident):
 
 def permission(phrase):
     cad.require_export_permission()
-    if phrase != cad.CONFIRMATION:
-        raise HTTPException(403, "请完整输入签认确认句：" + cad.CONFIRMATION)
+    if not cad.is_confirmation(phrase, strip=False):
+        raise HTTPException(403, "请完整输入签认确认句：" + cad.CONFIRMATION + "（或 / or: " + cad.CONFIRM_EN + "）")
 
 
 def cached(cache, ident):

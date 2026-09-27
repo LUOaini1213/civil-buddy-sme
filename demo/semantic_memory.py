@@ -21,6 +21,7 @@ except ImportError:  # The desktop app also imports demo modules directly.
     import projects
     import task_memory
 
+from packing_assistant.runtime.civil_config import CONFIRM_PATTERN
 from packing_assistant.sandbox import assert_open, assert_write
 
 SCHEMA = "civil.semantic-memory.v1"
@@ -29,7 +30,7 @@ MAX_ITEMS = 16
 _SECRET = secrets.token_bytes(32)
 _KINDS = {"goal", "decision", "constraint", "unresolved", "result"}
 _CORRECTION = re.compile(r"更正|纠正|修正|更新|改为|改成|修改为|调整为|作废|撤销|取消此前|不是[^\n]{0,60}而是|(?:此前|之前)[^\n]{0,40}(?:有误|错误)|以[^\n]{1,60}为准")
-_DENIED = re.compile(r"我明白，将由持证人员签认|confirm_ok|p0_confirmed|已获授权|可以开工|可以投标|已通过审查|api[_ -]?key|authorization|bearer\s+|private[_ -]?key|密码|密钥", re.I)
+_DENIED = re.compile(CONFIRM_PATTERN + r"|i\s*understand\s*[;,]\s*a\s+licensed\s+person\s+will\s+sign\s+this\s+off|confirm_ok|p0_confirmed|已获授权|可以开工|可以投标|已通过审查|api[_ -]?key|authorization|bearer\s+|private[_ -]?key|密码|密钥", re.I)
 _NUMBER = re.compile(r"[+\-]?\d+(?:[.,]\d+)*(?:[eE][+\-]?\d+)?|[零〇一二两三四五六七八九十百千万亿]+(?=\s*(?:天|日|月|年|人|台|吨|米|元|个|份|层|次|小时|分钟|%|％))")
 _SYSTEM = (
     "Summarize only the supplied historical source ranges into JSON: "

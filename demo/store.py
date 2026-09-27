@@ -6,10 +6,10 @@ from pathlib import Path
 from catalog_seed import CATEGORIES as SEED_CATEGORIES
 from catalog_seed import EXPERTS as SEED_EXPERTS
 from catalog_seed import Expert
-from config import DEMO_ROOT
+from config import DATA_ROOT
 from kbio import ensure_expert_kb, ensure_kb_root, folder_stats, format_bytes, valid_id
 
-DATA = DEMO_ROOT / "data" / "user_catalog.json"
+DATA = DATA_ROOT / "user_catalog.json"
 
 
 def _empty_user() -> dict:

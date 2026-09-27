@@ -126,13 +126,19 @@ def _jvm_path():
 
 
 def capabilities():
-    packages = all(importlib.util.find_spec(name) is not None for name in ("mpxj", "jpype"))
+    try:
+        packages = all(importlib.util.find_spec(name) is not None for name in ("mpxj", "jpype"))
+    except (ImportError, ValueError):
+        packages = False
     jvm, reason = False, "未安装可选 mpxj / JPype1 依赖；尚未启用 MPP/P6 导入。"
     if packages:
         try:
             jvm = Path(_jvm_path()).is_file()
             reason = "" if jvm else "没有找到可用 JVM；不会自动安装系统 Java。"
-        except (OSError, RuntimeError) as exc:
+        # JPype's JVMNotFoundException/JVMNotSupportedException derive from
+        # ValueError. A present package with no loadable runtime is an optional
+        # capability miss, not a failure of JSON/CSV/XLSX/XML interchange.
+        except (ImportError, OSError, RuntimeError, ValueError):
             reason = "没有找到可用 JVM；不会自动安装系统 Java。"
     return {"imports": ["json", "csv", "xlsx", "xml"], "exports": ["json", "csv", "xlsx", "xml"],
             "mpxj": {"available": packages and jvm, "packages_available": packages, "jvm_available": jvm,

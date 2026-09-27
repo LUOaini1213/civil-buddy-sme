@@ -1,7 +1,27 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>工程计算 · Civil Buddy</title><link rel="icon" href="/static/icons/cb-icon.svg"><link rel="stylesheet" href="/static/engineering.css"><script src="/static/engineering.js" type="module"></script></head>
+<html lang="zh-CN"><head>
+  <meta charset="utf-8">
+  <meta name="theme-color" content="#17181a">
+  <script src="/static/theme.js?v=unified1"></script>
+  <link rel="stylesheet" href="/static/theme.css?v=unified1"><meta name="viewport" content="width=device-width,initial-scale=1"><title>工程计算 · Civil Buddy</title><link rel="icon" href="/static/icons/cb-icon.svg"><link rel="stylesheet" href="/static/engineering.css?v=unified1"><script src="/static/engineering.js" type="module"></script>
+  <link rel="stylesheet" href="/static/workbench-shell.css?v=unified1">
+</head>
 <body>
-<header><a class="brand" href="/">CB <span>Civil Buddy</span></a><nav><a href="/cad">CAD 截面与建模</a><a href="/engineering/planning">施工排程</a><a href="/engineering/routes">场内路线</a><a href="/logistics">物流材料</a><a href="/">工作台</a></nav></header>
+<header class="cb-app-header">
+    <a class="cb-app-brand" href="/static/index.html" aria-label="返回 Civil Buddy 工作台"><span class="cb-app-mark" aria-hidden="true">CB</span><span>Civil Buddy<small>工程计算</small></span></a>
+    <div class="cb-app-actions"><button type="button" data-cb-theme-toggle>切换主题</button></div>
+    <nav class="cb-app-nav" aria-label="工作台导航">
+      <a href="/static/index.html">工作台</a>
+      <a href="/static/agent.html">Agent</a>
+      <a href="/packing">装箱拼柜</a>
+      <a href="/logistics">物流材料</a>
+      <a href="/cad">CAD</a>
+      <a href="/engineering" aria-current="page">工程计算</a>
+      <a href="/engineering/planning">施工计划</a>
+      <a href="/engineering/schedule">日期计划</a>
+      <a href="/engineering/routes">现场路线</a>
+    </nav>
+  </header>
 <main>
   <div class="heading"><div><p class="eyebrow">ENGINEERING WORKSPACE</p><h1>把参数，变成可核对的结果</h1><p>本地计算 · 输入留档 · 版本对比</p></div><span id="capability" role="status">正在检测工具</span></div>
   <div id="notice" class="notice" role="status" aria-live="polite">选择工具，填写已确认参数，或使用明确标注的合成样例。</div>
@@ -32,7 +52,7 @@
     <div id="diffFields" hidden><h2>IFC 版本对比</h2><p class="muted">按 GlobalId 对齐构件，比较属性、几何、类型及关系。两版应保持相同 IFC schema。</p><label>原版 IFC（最多 8 MiB）<input id="oldIfc" type="file" accept=".ifc"></label><label>新版 IFC（最多 8 MiB）<input id="newIfc" type="file" accept=".ifc"></label><button id="diffExample">使用合成变更样例</button><p id="diffSources" class="muted">尚未选择文件</p></div>
     <div class="runbar"><button id="run" class="primary">开始计算</button><button id="cancel" hidden>取消</button></div><p id="inputState" class="muted">尚未计算</p>
     </section>
-    <section class="panel output"><div class="row"><h2>分析结果</h2><span id="engine" class="muted"></span></div><p id="resultState" class="notice" hidden></p><div id="result"><div class="empty">计算完成后显示图表、构件编号和输入来源。</div></div><details id="rawResult" hidden><summary>完整计算记录</summary><pre id="resultJson"></pre></details><details class="export"><summary>导出计算记录</summary><p class="muted">保留工作台现有导出签认规则。导出文件包含计算来源，不构成签认结论。</p><label for="confirmation">完整输入：我明白，将由持证人员签认</label><input id="confirmation" autocomplete="off"><button id="export" disabled>导出 JSON 记录</button></details></section>
+    <section class="panel output"><div class="row"><h2>分析结果</h2><span id="engine" class="muted"></span></div><p id="resultState" class="notice" hidden></p><div id="result"><div class="empty">计算完成后显示图表、构件编号和输入来源。</div></div><details id="rawResult" hidden><summary>完整计算记录</summary><pre id="resultJson"></pre></details><details class="export"><summary>导出计算记录</summary><p class="muted">保留工作台现有导出签认规则。导出文件包含计算来源，不构成签认结论。</p><label for="confirmation">完整输入：我明白，将由持证人员签认（或 / or: I understand; a licensed person will sign this off.）</label><input id="confirmation" autocomplete="off"><button id="export" disabled>导出 JSON 记录</button></details></section>
   </div>
   <footer>开源引擎：Pynite · sectionproperties · IfcOpenShell / IfcTester / IfcDiff · Frappe Gantt。<a href="/static/engineering-notices.txt">版本与开源声明</a></footer>
 </main></body></html>

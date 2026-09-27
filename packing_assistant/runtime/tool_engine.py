@@ -434,6 +434,36 @@ def _tender_packing_link(args: Dict[str, Any]) -> Any:
                     container_type=str(args.get("container_type") or "") or None)
 
 
+def _read_link_record(args: Dict[str, Any]) -> Any:
+    """The latest tender <-> packing link record as labelled facts (tender_packing_link.link_record_view): this
+    session's own record, else the newest one in the job folder's output. Reads only, and takes no path, so a model
+    cannot point it at another file; a question about the clauses or the plan is answered from what it returns."""
+    import json
+
+    from packing_assistant.runtime import agent_loop
+    from packing_assistant.runtime.workspace_ctx import current_worktree
+    from packing_assistant.tender_packing_link import latest_link_record, link_record_view
+
+    root = agent_loop._out_root()
+    sid = str(args.get("session_id") or "")
+    path = latest_link_record([root] if current_worktree() else [], root / agent_loop._safe_sid(sid) if sid else None)
+    if path is None:
+        return {"ok": False, "error_code": "no_link_record",
+                "reason": "No tender-packing link record in this job folder yet: run the link first (name one tender file and "
+                          "one panel list and ask for the logistics response)."}
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"ok": False, "error_code": "unreadable", "reason": f"{path.name} could not be read."}
+    if not isinstance(record, dict) or record.get("schema") != "tender.packing_link.v1":
+        return {"ok": False, "error_code": "unreadable", "reason": f"{path.name} is not a link record."}
+    try:
+        where = path.relative_to(root.parent.parent).as_posix()
+    except ValueError:
+        where = path.name
+    return link_record_view(record, where=where)
+
+
 def _tender_review(args: Dict[str, Any]) -> Any:
     from packing_assistant.tools.tender_review import review_draft
 
@@ -493,6 +523,7 @@ def default_engine() -> ToolEngine:
     eng.register("tender.parse", _tender_parse, writes=True)
     eng.register("tender.review", _tender_review, writes=False)
     eng.register("tender.packing_link", _tender_packing_link, expert_id="bid-parse", writes=False, timeout_s=60.0)
+    eng.register("read_link_record", _read_link_record, expert_id="bid-parse", writes=False, timeout_s=15.0)
     eng.register(
         "write_deliverable",
         _write_deliverable,

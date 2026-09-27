@@ -264,7 +264,7 @@ def run_tender_workflow(text, *, session_id, output_root, sources=None, confirme
     ``unreadable`` lists files that were pointed at and gave no text. They take no part in the
     comparison, and the drafts say so: a row they might have answered is 未能判断, not 未响应.
     """
-    from packing_assistant.runtime.civil_config import CONFIRM, decide_gate, load_config
+    from packing_assistant.runtime.civil_config import CONFIRM, CONFIRM_EN, decide_gate, load_config
     from packing_assistant.tools.tender_parse import (parse_tender_text, build_response_matrix,
         build_workbench_extract_table, build_tech_outline_from_handoff)
     from packing_assistant.tools.tender_review import gap_rows, review_draft
@@ -283,7 +283,7 @@ def run_tender_workflow(text, *, session_id, output_root, sources=None, confirme
         return {**empty, "state": "failed", "error_code": "permission_denied", "reply": "只读模式未生成协作文件"}
     if decide_gate(intent="run", risk="low", confirmed=confirmed is True, cfg=config) == "hitl":
         return {**empty, "ok": True, "state": "waiting_hitl", "hitl_pending": True,
-                "reply": "approval=untrusted：本轮协作写盘须确认句「" + CONFIRM + "」。本轮未写盘。"}
+                "reply": "approval=untrusted：本轮协作写盘须确认句「" + CONFIRM + "」（或 / or: " + CONFIRM_EN + "）。本轮未写盘。"}
     supplied = deepcopy(sources) if sources is not None else [{"source_id": "current-input", "title": "当前招标资料", "text": text, "kind": "user"}]
     if not isinstance(supplied, list) or not supplied or any(not isinstance(s, dict) or not isinstance(s.get("text"), str) for s in supplied):
         raise ValueError("来源必须包含明确正文")

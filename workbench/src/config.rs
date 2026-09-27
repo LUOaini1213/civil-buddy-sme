@@ -30,10 +30,17 @@ impl Paths {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| demo_root.clone());
         let kb_root = demo_root.join("kb");
-        let data_dir = demo_root.join("data");
+        let instance = env::var_os("CIVIL_STATE_ROOT").map(PathBuf::from);
+        let data_dir = instance
+            .as_ref()
+            .map(|p| p.join("legacy/data"))
+            .unwrap_or_else(|| demo_root.join("data"));
         let skill = repo_root.join("skills").join("civil-buddy");
         Self {
-            out_root: demo_root.join("out"),
+            out_root: instance
+                .as_ref()
+                .map(|p| p.join("domains"))
+                .unwrap_or_else(|| demo_root.join("out")),
             user_catalog: data_dir.join("user_catalog.json"),
             skill_hard_rules: skill.join("references").join("hard-rules.md"),
             fill_scheme_py: skill.join("scripts").join("fill_scheme_template.py"),
@@ -95,6 +102,11 @@ fn detect_demo_root() -> PathBuf {
 
 /// cwd `.env` fills gaps; exe-dir and repo `.env` next; `demo/.env` overrides a stale User-level key.
 pub fn load_env() {
+    if env::var("PYTHON_DOTENV_DISABLED").as_deref() == Ok("1")
+        || env::var("CIVIL_DOTENV_DISABLED").as_deref() == Ok("1")
+    {
+        return;
+    }
     let _ = dotenvy::dotenv();
     if let Ok(exe) = env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -175,7 +187,7 @@ where
     let model = if !model_explicit.is_empty() {
         model_explicit
     } else if base_url.to_ascii_lowercase().contains("deepseek") {
-        "deepseek-v4-flash".into()
+        "deepseek-flash".into()
     } else {
         "gpt-4o-mini".into()
     };
@@ -187,9 +199,9 @@ where
 }
 
 /* ux(round17) 运行时模型配置覆盖：让评委/试用者在界面里填 Key、切 DeepSeek / z.ai 等
-   OpenAI 兼容供应商，不必改 demo/.env 再重启进程。
-   边界：只存进程内存——不写盘、不进日志、不随会话落盘；进程退出即失效。
-   env 仍是缺省来源，清除覆盖即回退到 .env 口径。 */
+OpenAI 兼容供应商，不必改 demo/.env 再重启进程。
+边界：只存进程内存——不写盘、不进日志、不随会话落盘；进程退出即失效。
+env 仍是缺省来源，清除覆盖即回退到 .env 口径。 */
 static RUNTIME_LLM: RwLock<Option<LlmConfig>> = RwLock::new(None);
 
 pub fn set_runtime_llm(cfg: Option<LlmConfig>) {
@@ -276,7 +288,7 @@ mod llm_env_tests {
         let c = from_map(&m);
         assert_eq!(c.api_key, "sk-ds");
         assert!(c.base_url.contains("deepseek"), "{}", c.base_url);
-        assert_eq!(c.model, "deepseek-v4-flash");
+        assert_eq!(c.model, "deepseek-flash");
         assert!(llm_uses_thinking(&c.base_url));
     }
 

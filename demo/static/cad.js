@@ -1,4 +1,5 @@
 const CONFIRMATION = '我明白，将由持证人员签认';
+const CONFIRMATIONS = [CONFIRMATION, 'I understand; a licensed person will sign this off.'];
 const ROLES = { wall: '墙体', column: '柱子', slab: '楼板', section: '截面', ignore: '忽略' };
 const COLORS = { wall: '#8dcad8', column: '#52dbc3', slab: '#8aa4c5', section: '#52dbc3', ignore: '#708296' };
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -280,7 +281,7 @@ export async function startCadApp(doc = document) {
     $('fitView').disabled = !viewer || !state.model?.objects?.length;
     $('toggleEdges').disabled = $('fitView').disabled;
     $('exportConfirmation').disabled = (!state.model && !state.project) || state.busy;
-    const confirmed = $('exportConfirmation').value === CONFIRMATION;
+    const confirmed = CONFIRMATIONS.includes($('exportConfirmation').value);
     for (const button of all('[data-export]')) button.disabled = !state.canExport || !confirmed || !ready || (button.dataset.export === 'step' && !capability?.step_available);
     $('stepHint').textContent = capability?.step_available ? 'STEP 使用与预览相同的离散轮廓，不包含完整参数历史。' : `STEP 导出需安装可选内核：${capability?.step_install_command || '安装项目 CAD STEP 依赖后重新检测'}。采用与预览相同的离散轮廓，不包含完整参数历史。`;
     $('exportHint').textContent = !state.model ? '生成模型后可导出' : !ready ? '连接恢复后可导出' : state.dirty ? '参数尚未应用，导出已暂停' : !state.model.objects?.length ? '没有可导出的有效构件' : !confirmed ? '完整输入签认提示后可下载' : '模型及参数与当前预览一致';
@@ -325,7 +326,7 @@ export async function startCadApp(doc = document) {
     $('exportProject').disabled = !ready || state.busy || !state.project || state.projectDirty || !confirmed;
     const agentReady = !!state.project && !state.projectDirty && !state.busy;
     $('agentProjectLink').setAttribute('aria-disabled', String(!agentReady));
-    $('agentProjectLink').href = agentReady ? `/?cad_project_id=${encodeURIComponent(state.project.id)}` : '#';
+    $('agentProjectLink').href = agentReady ? `/static/index.html?cad_project_id=${encodeURIComponent(state.project.id)}` : '#';
     $('projectStatus').textContent = state.project ? `${state.project.name} · 修订 ${state.project.revision}${state.projectDirty ? ' · 有未保存更改' : ' · 已保存'}` : hasDoc ? '新项目 · 尚未保存' : projectListError || '尚未保存项目';
     doc.body.setAttribute('aria-busy', String(state.busy));
   }
@@ -805,7 +806,7 @@ export async function startCadApp(doc = document) {
   }
 
   async function exportProject() {
-    if (!state.project || state.projectDirty || state.busy || !serviceReady() || $('exportConfirmation').value !== CONFIRMATION) return;
+    if (!state.project || state.projectDirty || state.busy || !serviceReady() || !CONFIRMATIONS.includes($('exportConfirmation').value)) return;
     const { token, signal } = startRequest(); notice('正在打包原图、草稿和模型版本…');
     try {
       const response = await serviceFetch(`/api/cad/projects/${encodeURIComponent(state.project.id)}/export`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmation: $('exportConfirmation').value, expected_revision: state.project.revision }), signal });
@@ -932,7 +933,7 @@ export async function startCadApp(doc = document) {
   }
 
   async function exportModel(format) {
-    if (!state.canExport || !serviceReady() || $('exportConfirmation').value !== CONFIRMATION || (format === 'step' && !capability?.step_available)) return;
+    if (!state.canExport || !serviceReady() || !CONFIRMATIONS.includes($('exportConfirmation').value) || (format === 'step' && !capability?.step_available)) return;
     const modelId = state.modelId;
     const { token, signal } = startRequest(); notice('正在准备模型与参数下载…');
     try {

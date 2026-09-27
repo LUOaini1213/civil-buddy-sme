@@ -15,7 +15,7 @@ import re
 from uuid import uuid4
 import zipfile
 
-CONFIRM = "我明白，将由持证人员签认"
+from packing_assistant.runtime.civil_config import CONFIRM, CONFIRM_EN, scrub_confirmations  # noqa: E402,F401  (one definition)
 READ_TOOLS = frozenset({"cad_inspect", "cad_suggest_layers"})
 COMPUTE_TOOLS = frozenset({"cad_section_properties"})
 MUTATE_TOOLS = frozenset({"cad_build", "cad_modify", "cad_undo", "cad_export"})
@@ -24,7 +24,7 @@ TOOL_NAMES = READ_TOOLS | COMPUTE_TOOLS | MUTATE_TOOLS
 
 def operation(text: str, context: dict) -> str:
     """Classify only an explicit current request, never history or attachments."""
-    clean = text.replace(CONFIRM, "").strip(" \t\r\n，。；,;!")
+    clean = scrub_confirmations(text, "").strip(" \t\r\n，。；,;!")
     if re.search(r"[?？]|(?:吗|如何|怎么|是否|不要|不必|先不|暂不|不需要|别(?:生成|修改|改|导出|建模|撤销|动))", clean):
         return "cad_inspect"
     if re.fullmatch(r"(?:请)?(?:检查|查看|分析)(?:一下)?(?:这份|当前|已保存的)?(?:CAD|图纸|模型|项目)(?:情况|状态)?", clean, re.I):
@@ -187,7 +187,7 @@ def execute(context: dict, name: str, args: dict, *, user_text: str, session_id:
     updated = deepcopy(context)
     before = deepcopy(context["draft_config"])
     if name == "cad_modify":
-        clean = user_text.replace(CONFIRM, "").strip(" \t\r\n，。；,;!")
+        clean = scrub_confirmations(user_text, "").strip(" \t\r\n，。；,;!")
         updated["draft_config"] = apply_command(context["document"], before, clean)["config"]
     elif name == "cad_undo":
         if not context.get("undo_config"):
@@ -239,6 +239,6 @@ def reply_for(results: list[dict], context: dict) -> str:
         if result.get("dimensions"):
             lines.append("原图尺寸已保留；请在 CAD 页查看标注值与测量值，并明确绑定建模用途。")
         if result.get("error_code") == "approval_required":
-            lines.append("请在确认栏亲自输入：" + CONFIRM)
+            lines.append("请在确认栏亲自输入：" + CONFIRM + "（或 / or: " + CONFIRM_EN + "）")
     lines.append("[打开 CAD 项目](/cad?project_id=" + context["project"]["id"] + ")")
     return "\n\n".join(lines)

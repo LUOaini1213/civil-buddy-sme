@@ -6,7 +6,8 @@
  * object) and request (the navigation counter: current() / bump() — every open or new
  * session bumps it, and late responses compare against it).
  *
- *   storage, fetch, doc, el(id), relTime, addStatus, addMsg          environment and log lines
+ *   storage, fetch, doc, el(id), location, history, relTime, addStatus, addMsg
+ *                                                               environment and log lines
  *   reset   { toEmpty, contextReset, clearServerHitl, hideWelcome, detachActiveRun, uploadAbortAll,
  *             attachRender, draftRestore, paintContext, estimateLocalContext, renderSummon }
  *   apiError(res)
@@ -16,6 +17,17 @@
  */
 export const ACTIVE_SESSION_KEY = "cb_active_session_v1";
 export const PROJ_OPEN_KEY = "cb_proj_open_v1";
+
+function validCadProjectId(value) {
+  return typeof value === "string" && /^[0-9a-f]{32}$/.test(value) ? value : "";
+}
+
+/* An explicit CAD handoff selects a project for a new conversation, without restoring
+   whichever unrelated conversation was most recently open. */
+export function cadProjectFromUrl(href) {
+  try { return validCadProjectId(new URL(href).searchParams.get("cad_project_id")); }
+  catch (_) { return ""; }
+}
 
 /* A new local session id. crypto.randomUUID exists only in secure contexts (https / localhost);
    a phone on http://<LAN-ip> falls back to time + random. Pure, so the page can call it while
@@ -29,6 +41,40 @@ export function sessionId() {
 export function createSessionNav(deps) {
   const { state, runState, proj, request: navRequest, storage, doc, el, relTime, addStatus, addMsg, apiError, reset, paint, hooks } = deps; // `request` is a local in several functions
   const doFetch = deps.fetch;
+
+  function renderCadProject() {
+    let banner = el("cadProjectContext");
+    // A handoff URL must not reselect an old project after navigation or clearing it.
+    try {
+      const url = new URL(deps.location.href);
+      if (url.searchParams.has("cad_project_id") && url.searchParams.get("cad_project_id") !== state.cadProjectId) {
+        url.searchParams.delete("cad_project_id");
+        deps.history.replaceState(null, "", url);
+      }
+    } catch (_) { /* Non-browser tests do not own navigation. */ }
+    if (!state.cadProjectId) {
+      if (banner) banner.remove();
+      return;
+    }
+    const composer = el("input") && el("input").parentElement;
+    if (!composer) return;
+    if (!banner) {
+      banner = doc.createElement("div");
+      banner.id = "cadProjectContext";
+      banner.className = "status-line";
+      composer.prepend(banner);
+    }
+    banner.replaceChildren();
+    const link = doc.createElement("a");
+    link.href = "/cad?project_id=" + state.cadProjectId;
+    link.textContent = "当前 CAD 项目 · 返回三维模型";
+    banner.appendChild(link);
+    const clear = doc.createElement("button");
+    clear.type = "button";
+    clear.textContent = "取消选择";
+    clear.addEventListener("click", () => { reset.cancelVoice?.(); state.cadProjectId = ""; renderCadProject(); });
+    banner.appendChild(clear);
+  }
 
   function rememberSession(id) {
     try {
@@ -54,6 +100,7 @@ export function createSessionNav(deps) {
   }
 
   function newLocalSession() {
+    reset.cancelVoice?.();
     reset.clearServerHitl();
     navRequest.bump();
     reset.detachActiveRun();
@@ -65,6 +112,7 @@ export function createSessionNav(deps) {
     state.planningProjectId = "";
     state.logisticsProjectId = "";
     if (reset.renderToolProjects) reset.renderToolProjects();
+    else renderCadProject();
     state.session = sessionId();
     reset.uploadAbortAll(state.session);
     reset.attachRender();
@@ -254,6 +302,7 @@ export function createSessionNav(deps) {
   }
 
   async function openSession(s) {
+    reset.cancelVoice?.();
     const request = navRequest.bump();
     reset.detachActiveRun();
     reset.contextReset();
@@ -277,6 +326,12 @@ export function createSessionNav(deps) {
       reset.draftRestore();
       proj.cur = d.project_id || s.project_id || "";
       if (reset.restoreToolProjects) reset.restoreToolProjects(d);
+      else {
+        state.cadProjectId = validCadProjectId(d.cad_project_id);
+        state.planningProjectId = validCadProjectId(d.planning_project_id);
+        state.logisticsProjectId = validCadProjectId(d.logistics_project_id);
+        renderCadProject();
+      }
       state.summoned.clear();
       const enabledExperts = new Set(state.experts.filter((expert) => expert && expert.enabled !== false).map((expert) => expert.id));
       for (const id of Array.isArray(d.expert_ids) ? d.expert_ids : []) {
@@ -334,5 +389,5 @@ export function createSessionNav(deps) {
   }
 
   return { sessionId, rememberSession, rememberedSession, resumeSession, newLocalSession, openLoad, openSave,
-    loadThreads, renderProjects, renameProject, openSession, sessionsOf };
+    loadThreads, renderProjects, renameProject, openSession, sessionsOf, renderCadProject };
 }

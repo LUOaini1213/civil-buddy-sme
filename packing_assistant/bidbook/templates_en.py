@@ -40,7 +40,8 @@ EXEC_SUMMARY = """## 2. Executive Summary
 - **Scope in this draft:** requirement capture, compliance / deviation schedule,
   technical method, programme, and **tool-verified packing / shipping evidence**.
 - **Requirements extracted:** {n_req} · **covered by delivery tools:** {n_covered} ·
-  **readiness:** {readiness}
+  **internal readiness score:** {readiness} (0 to 1: a covered requirement counts 1, a partial one 0.5, one waiting
+  for a person 0.25, and gaps and rejection reviews count against; not a bid decision)
 - **Items still requiring SME / legal / commercial sign-off:** {n_open}
 
 We do **not** invent track record, BCA grades, test-report numbers or prices.
@@ -128,3 +129,91 @@ RESOURCES = """## 8. Resources, Track Record & Commercial
 
 Commercial figures are intentionally blank. Filling them is a human pricing act.
 """
+
+
+SYNTHETIC_BANNER = (
+    "> **SYNTHETIC.** The tender this draft answers is marked SYNTHETIC: it was written for testing, and nothing in "
+    "this draft concerns a real tender, project, contractor or price."
+)
+
+# The tender parser names its requirements, proposal locations and open actions in Chinese (one parser for CN and
+# SG). The English bid-book prints them through these tables; a label with no entry is printed as the parser gave it.
+# "必须专项/危大" is the parser's bucket for specialist method statements a tender names; 危大 (a mainland-China
+# regulatory category) has no Singapore meaning, so the English label leaves it out.
+REQUIREMENT_EN = {
+    "包装/装箱要求": "Packaging / crating requirements",
+    "集装箱/运输方式": "Containers / mode of transport",
+    "重量/货载限制": "Weight / payload limits",
+    "超长/异形运输": "Over-length / out-of-gauge transport",
+    "重心/绑扎/系固": "Centre of gravity / lashing / securing",
+    "交货期/工期": "Delivery period / contract period",
+    "资格/业绩": "Qualifications / track record",
+    "废标/实质性响应": "Rejection / substantive responsiveness",
+    "保险/单证/VGM": "Insurance / shipping documents / VGM",
+    "评分办法": "Evaluation method",
+    "投标有效期": "Tender validity",
+    "人员资格": "Personnel qualifications",
+    "注册/工作类别 (BCA workhead)": "Registration / BCA workhead",
+    "最高限价": "Price ceiling",
+    "质量标准": "Quality standard",
+    "质保期/缺陷责任期": "Warranty / defects liability period",
+    "付款条件": "Payment terms",
+    "★/必须满足项": "Mandatory (starred) item",
+    "否决/拒收条款": "Rejection clause",
+    "评分点": "Scoring point",
+    "保证金/保函": "Tender deposit / bank guarantee",
+    "电子标/加密/CA锁": "E-tender / encryption / digital certificate",
+    "必须专项/危大": "Specialist method statement named in the tender",
+    "暗标露名风险": "Anonymous-bid identification risk",
+}
+REQUIREMENT_PREFIX_EN = {"前附表要求：": "Appendix requirement: "}
+LOCATION_EN = {
+    "技术标 · 包装与装箱方案": "Technical proposal · packaging and crating",
+    "技术标 · 运输与装柜方案": "Technical proposal · transport and container plan",
+    "技术标 · 装柜重心与系固说明（CTU）": "Technical proposal · centre of gravity and securing (CTU Code)",
+    "技术标 · 工期与交付计划": "Technical proposal · programme and delivery plan",
+    "技术标 · 对应评分点章节": "Technical proposal · chapter for the scoring point",
+    "技术标 · 危大及招标点名专项": "Technical proposal · specialist method statements named in the tender",
+    "技术标 · 通用响应": "Technical proposal · general response",
+    "商务标 · 资格与业绩附件": "Commercial proposal · qualifications and track record annex",
+    "商务标 · 单证与合规附件": "Commercial proposal · documents and compliance annex",
+    "商务标 · 投标报价（对照最高限价）": "Commercial proposal · tender price (against the price ceiling)",
+    "商务标 · 合同条款响应（付款）": "Commercial proposal · contract terms (payment)",
+    "标书响应声明 / 偏离表": "Statement of compliance / deviation schedule",
+    "标书响应声明 / 偏离表（★项须逐条响应）": "Statement of compliance / deviation schedule (each starred item answered)",
+    "标书编制说明 / 评分对照表": "Bid preparation notes / scoring map",
+    "投标函 · 投标有效期": "Form of Tender · tender validity",
+    "投标函 · 质量承诺": "Form of Tender · quality commitment",
+    "投标函 / 合同条款响应 · 质保期": "Form of Tender / contract terms · warranty period",
+    "形式评审 · 电子标加密/CA锁（截止后补传无效）": "Formal check · e-tender encryption / digital certificate (late upload not accepted)",
+}
+ACTION_EN = {
+    "装柜证据未覆盖：调整方案或写偏离/澄清": "Not covered by the loading plan: change the plan, or write a deviation / clarification",
+    "部分证据已有：补齐 mid50/系固说明或人工复核": "Partly evidenced: add the centre-of-gravity / securing note, or have a person review it",
+    "废标/实质性响应：法务/标书负责人逐条核对": "Rejection / responsiveness clause: legal or the bid lead checks it line by line",
+    "附资质与类似业绩扫描件（人工）": "Attach the registration and similar-project records (a person does this)",
+    "项目经理确认交货期与到港节点": "Project manager confirms the delivery period and the arrival milestones",
+    "商务准备 VGM/保险/单证": "Commercial prepares the VGM, insurance and shipping documents",
+    "标书编制对照评分点": "Bid writer maps the response to the scoring points",
+    "项目经理/商务确认承诺值并写入投标函": "Project manager / commercial confirm the committed value and enter it in the Form of Tender",
+    "商务确认是否接受付款条件，不接受则写偏离": "Commercial decides whether the payment terms are accepted; if not, write a deviation",
+    "装柜结果不覆盖本条：交付负责人确认柜型/包装/竖放/不叠放/超限运输做法，做不到则写偏离":
+        "The loading plan does not cover this clause: the delivery lead confirms the container type, packaging, upright "
+        "transport, no stacking and out-of-gauge transport, or writes a deviation",
+    "人工补充证据后改状态": "A person adds the evidence, then changes the status",
+    "待处理": "To do",
+}
+STATUS_EN = {"covered": "Covered", "partial": "Partial", "gap": "Gap", "human_required": "Needs a person",
+             "review": "Under review", "pending": "Not started"}
+
+
+def en_label(text, table):
+    """The English label for a parser label, or the label as given when the table has none."""
+    value = str(text if text is not None else "")
+    if value in table:
+        return table[value]
+    if table is REQUIREMENT_EN:
+        for prefix, english in REQUIREMENT_PREFIX_EN.items():
+            if value.startswith(prefix):
+                return english + value[len(prefix):]
+    return value

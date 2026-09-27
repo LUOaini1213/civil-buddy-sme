@@ -38,8 +38,16 @@ _DEV = {
 }
 
 
+# A document-type heading names what the paper is, not the project: "INVITATION TO TENDER" is not a title.
+_GENERIC_HEADING = re.compile(
+    r"(?i)^(?:(?:invitation|instructions?)\s+to\s+tender(?:ers?)?|tender\s+documents?|conditions\s+of\s+(?:tender|contract)"
+    r"|form\s+of\s+tender|(?:table\s+of\s+)?contents|(?:section|part|appendix|annex|schedule|volume)\b)")
+_SYNTHETIC = re.compile(r"\bSYNTHETIC\b")
+
+
 def infer_project_title(text: str) -> str:
-    """Prefer a short Latin/title line; otherwise the demo default."""
+    """The first short Latin line that names the job (a document-type heading such as "INVITATION TO TENDER" or
+    "SECTION 1" is skipped); otherwise the demo default."""
     for raw in (text or "").splitlines():
         s = raw.strip().strip("#").strip()
         if not s:
@@ -48,9 +56,16 @@ def infer_project_title(text: str) -> str:
             continue
         if len(s) < 8 or len(s) > 140:
             continue
+        if _GENERIC_HEADING.match(s):
+            continue
         if re.search(r"[A-Za-z]", s):
             return s[:140]
     return "Sample Singapore Façade Tender"
+
+
+def is_synthetic(text: str) -> bool:
+    """The tender marks itself SYNTHETIC (the demo fixtures do, in capitals)."""
+    return bool(_SYNTHETIC.search(text or ""))
 
 
 def _fmt_mid50(mid: Any) -> str:
@@ -94,14 +109,14 @@ def _deviation_table(matrix: Dict[str, Any]) -> str:
         lines.append("| — | (no clauses extracted) | — | — | To confirm | — | — |")
         return "\n".join(lines) + "\n"
     for r in rows:
-        title = str(r.get("title") or r.get("req_id") or "").replace("|", "/")
+        title = T.en_label(r.get("title") or r.get("req_id") or "", T.REQUIREMENT_EN).replace("|", "/")
         ref = str(r.get("requirement_ref") or r.get("req_id") or "—").replace("|", "/")
         rtype = str(r.get("requirement_type") or "—")
         st = str(r.get("status") or "pending")
         dev = _DEV.get(st, "To confirm")
-        loc = str(r.get("proposal_location") or "—").replace("|", "/")
+        loc = T.en_label(r.get("proposal_location") or "—", T.LOCATION_EN).replace("|", "/")
         owner = str(r.get("owner") or "—")
-        lines.append(f"| {ref} | {title} | {rtype} | {st} | {dev} | {owner} | {loc} |")
+        lines.append(f"| {ref} | {title} | {rtype} | {T.STATUS_EN.get(st, st)} | {dev} | {owner} | {loc} |")
     return "\n".join(lines) + "\n"
 
 
@@ -115,7 +130,7 @@ def _logistics_chapter(packing_summary: Optional[Dict[str, Any]]) -> str:
     ]
     if not pack:
         lines += [
-            "Delivery packing was **not run** for this draft. Chapter 6 has no can_fit / mid50.",
+            "Delivery packing was **not run** for this draft. Chapter 6 has no loading-plan figures.",
             "",
         ]
         return "\n".join(lines)
@@ -127,18 +142,27 @@ def _logistics_chapter(packing_summary: Optional[Dict[str, Any]]) -> str:
         ]
     lines += [
         f"- **materials source:** {pack.get('materials_source') or '—'}",
-        f"- **can_fit:** {pack.get('can_fit')}",
+        f"- **all crates placed:** {_yes_no(pack.get('can_fit'))}",
         f"- **container type:** {pack.get('container_type') or '—'}",
         f"- **containers used:** {pack.get('containers_used')}",
-        f"- **N0* (tool lower bound):** {pack.get('n0')}",
-        f"- **ship_ok:** {pack.get('ship_ok')}",
-        f"- **mid50 (CTU mid-length mass share):** {_fmt_mid50(pack.get('mid50'))}",
-        f"- **phase:** {pack.get('phase') or '—'}",
+        f"- **lower bound (planner):** {pack.get('n0')}",
+        f"- **shipping check passed:** {_yes_no(pack.get('ship_ok'))}",
+        f"- **CTU mid-length mass share:** {_fmt_mid50(pack.get('mid50'))}",
+        f"- **planner phase:** {pack.get('phase') or '—'}",
         "",
         "Lashing design, VGM declaration and bill of lading remain `[TO FILL]`.",
         "",
     ]
     return "\n".join(lines)
+
+
+_ANNEX_A_LABELS = (("can_fit", "All crates placed"), ("container_type", "Container type"), ("containers_used", "Containers used"),
+                   ("n0", "Lower bound (planner)"), ("ship_ok", "Shipping check passed"),
+                   ("mid50", "CTU mid-length mass share"), ("phase", "Planner phase"))
+
+
+def _yes_no(value: Any) -> str:
+    return {True: "yes", False: "no"}.get(value, "—") if isinstance(value, bool) or value is None else str(value)
 
 
 def _annex_a(packing_summary: Optional[Dict[str, Any]]) -> str:
@@ -147,19 +171,13 @@ def _annex_a(packing_summary: Optional[Dict[str, Any]]) -> str:
     if not pack:
         lines.append("No packing_summary attached.")
         return "\n".join(lines) + "\n"
-    for k in (
-        "can_fit",
-        "container_type",
-        "containers_used",
-        "n0",
-        "ship_ok",
-        "mid50",
-        "phase",
-    ):
+    for k, label in _ANNEX_A_LABELS:
         v = pack.get(k)
         if k == "mid50":
             v = _fmt_mid50(v)
-        lines.append(f"- `{k}`: {v}")
+        elif k in ("can_fit", "ship_ok"):
+            v = _yes_no(v)
+        lines.append(f"- {label}: {v}")
     return "\n".join(lines) + "\n"
 
 
@@ -174,9 +192,10 @@ def _annex_b(open_actions: List[Dict[str, Any]]) -> str:
         lines.append("- None listed (commercial / legal sign-off still required).")
         return "\n".join(lines) + "\n"
     for a in open_actions:
+        status = str(a.get("status") or "")
         lines.append(
-            f"- **[{a.get('risk')}]** {a.get('title')} · {a.get('owner')} · "
-            f"`{a.get('status')}` — {a.get('action')}"
+            f"- **[{a.get('risk')}]** {T.en_label(a.get('title'), T.REQUIREMENT_EN)} · {a.get('owner')} · "
+            f"{T.STATUS_EN.get(status, status)} — {T.en_label(a.get('action'), T.ACTION_EN)}"
         )
     return "\n".join(lines) + "\n"
 
@@ -259,6 +278,7 @@ def build_sg_facade_bidbook(
         "",
         "> " + T.WATERMARK.format(**ctx),
         "",
+        *([T.SYNTHETIC_BANNER, ""] if is_synthetic(tender_text) else []),
         (
             "> P0 noted by operator — still a draft, not for GeBIZ."
             if p0_confirmed
@@ -296,6 +316,7 @@ def build_sg_facade_bidbook(
         "language": "en",
         "bidder": dict(bidder),
         "project_title": title,
+        "synthetic": is_synthetic(tender_text),
         "watermark": T.WATERMARK.format(**ctx),
         "headings": list(REQUIRED_HEADINGS),
         "markdown": markdown,

@@ -40,7 +40,7 @@ def contract_for(name: str, *, exclusive: bool = False) -> dict:
     properties = deepcopy(COMMON)
     output = obj({"ok": BOOL}, extra=True)
     required = ()
-    if exclusive and not name.startswith("pack-ship__") and name != "tender.packing_link":
+    if exclusive and not name.startswith("pack-ship__") and name not in {"tender.packing_link", "read_link_record"}:
         properties.update({key: deepcopy(MATERIAL) for key in MATERIAL_FIELDS})
         properties["has_trial_data"] = BOOL
         output = obj({"wrote": BOOL, "files": FILES, "submit_blocked": {"const": True},
@@ -72,6 +72,10 @@ def contract_for(name: str, *, exclusive: bool = False) -> dict:
         required = ("tender_path", "packing_list")
         output = obj({"ok": BOOL, "statements": {"type": "array"}, "record": MAP, "deliverables": {"type": "array"},
                       "submit_blocked": {"const": True}}, ("ok", "statements", "record", "deliverables", "submit_blocked"), extra=True)
+    elif name == "read_link_record":
+        # no path argument: the record is found by session, never named by the caller
+        output = obj({"ok": BOOL, "statements": {"type": "array"}, "counts": MAP, "submit_blocked": {"const": True},
+                      "confirmed_by_person": BOOL}, ("ok", "statements", "counts", "submit_blocked"), extra=True)
     elif name == "tender.review":
         properties.update(draft=TEXT, matrix={"type": ["object", "null"]},
                           tech_outline={"type": ["object", "null"]}, bidbook_markdown=TEXT)

@@ -17,6 +17,7 @@ import copy
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -354,6 +355,26 @@ class EndingTests(JobFolderCase):
         out = model_loop.run_model_agent(TASK, session_id="civil-cli", complete=dead)
         self.assertEqual((out["ok"], out["error_code"], out["wrote"]), (False, "model_unavailable", False))
         self.assertIn("无法连接模型接口", out["reply"])
+
+    def test_an_english_request_gets_english_instructions_and_english_guard_notices(self):
+        script = Script("About 5 containers will be needed; the lot is ready to ship.",
+                        "Roughly 5 containers will be needed; the lot is ready to ship.")
+        out = model_loop.run_model_agent("How many containers does this shipment need?", session_id="civil-cli", complete=script)
+        system = script.seen[0]["messages"][0]["content"]
+        self.assertIn("answer in English", system)
+        self.assertNotIn("用中文回答", system)
+        asked = script.seen[1]["messages"][-1]["content"]
+        self.assertTrue(asked.startswith("[System check]") and "5 containers" in asked and "ready to ship" in asked, asked)
+        body, warnings = out["reply"].split("⚠", 1)
+        self.assertEqual((out["provenance"]["untraced"], out["provenance"]["verdicts"]), (["5 containers"], ["ready to ship"]))
+        self.assertIn("(verdict removed: not this system's call)", body)
+        self.assertIn("These verdicts are not this system's to give", warnings)
+        self.assertIn("These numbers or clause references have no source", warnings)
+        self.assertIsNone(re.search(r"[一-鿿]", warnings), warnings)       # no Chinese notice on an English reply
+        chinese = Script("预计需要 5 个柜。", "大约需要 5 个柜。")
+        zh = model_loop.run_model_agent("这批货要几个柜", session_id="civil-cli", complete=chinese)
+        self.assertIn("用中文回答", chinese.seen[0]["messages"][0]["content"])      # a Chinese turn's prompt is unchanged
+        self.assertIn("找不到出处", zh["reply"])
 
     def test_forbidden_verdicts_are_scrubbed_from_the_reply(self):
         out = model_loop.run_model_agent("能投吗", session_id="civil-cli", complete=Script("资料齐全，可以投标。"))

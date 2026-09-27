@@ -1,0 +1,103 @@
+/* Shared appearance tokens for every Civil Buddy workbench. */
+/* === Civil Buddy UX tokens · ux(round1) · docs/ux/ux-design-spec.md ===
+   规范 token（--cb-* 命名空间）：与下方现有 :root 变量并存、不覆盖任何现有样式。
+   R11 主题轮起逐步切换引用：工程蓝/安全橙/合规红/中性灰阶。 */
+:root {
+  --cb-blue: #2563eb; --cb-blue-strong: #1d4ed8; --cb-blue-soft: #eff6ff;
+  --cb-orange: #ea580c; --cb-orange-soft: #fff7ed;
+  --cb-red: #dc2626; --cb-red-soft: #fef2f2;
+  --cb-green: #059669; --cb-green-soft: #ecfdf5;
+  --cb-gray-50: #f8fafc; --cb-gray-100: #f1f5f9; --cb-gray-200: #e2e8f0;
+  --cb-gray-400: #94a3b8; --cb-gray-500: #64748b; --cb-gray-900: #0f172a;
+  --cb-text: var(--cb-gray-900); --cb-text-muted: var(--cb-gray-500);
+  --cb-line: var(--cb-gray-200);
+  --cb-font: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --cb-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  --cb-fs-xs: 12px; --cb-fs-sm: 13px; --cb-fs-md: 14px; --cb-fs-lg: 16px;
+  --cb-fs-xl: 18px; --cb-fs-2xl: 22px; --cb-fs-3xl: 28px;
+  --cb-space-1: 4px; --cb-space-2: 8px; --cb-space-3: 12px; --cb-space-4: 16px;
+  --cb-space-5: 24px; --cb-space-6: 32px; --cb-space-7: 48px;
+  --cb-radius-sm: 6px; --cb-radius-md: 10px; --cb-radius-lg: 14px; --cb-radius-full: 999px;
+  --cb-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --cb-shadow-md: 0 4px 18px rgba(15, 23, 42, 0.10);
+  --cb-shadow-lg: 0 10px 32px rgba(15, 23, 42, 0.16);
+  /* === ux(round8) 窄屏断点/触控 token · 见 docs/ux/ux-design-spec.md 附录 G ===
+     三档：≤--cb-bp-mobile 手机竖屏 / ≤--cb-bp-tablet 平板 / ≥--cb-bp-desktop 桌面。
+     媒体查询条件不支持 var()，规则内用字面量并注释 token 名。 */
+  --cb-bp-mobile: 430px; --cb-bp-tablet: 768px; --cb-bp-desktop: 769px;
+  --cb-touch-min: 44px; /* 可点目标最小高度（Primer AAA pattern） */
+  --cb-touch-lg: 48px;  /* 审批卡主决策按钮高度 */
+  /* === ux(round11) 双主题语义 token（water.css pattern：同名变量明暗两套，见附录 J）=== */
+  --cb-bg: #f8fafc; --cb-panel: #ffffff; --cb-panel-soft: #f1f5f9;
+  --cb-line-soft: var(--cb-gray-100);
+  --cb-text-faint: #94a3b8; /* 仅装饰性弱文本（非正文，AA 豁免） */
+  --cb-blue-ink: #1d4ed8;   /* 14px 蓝色正文档（#2563eb 仅 5.17:1，ink 6.70:1） */
+  --cb-orange-ink: #c2410c; /* 14px 橙色正文档（#ea580c 仅 3.56:1，ink 5.18:1） */
+  --cb-green-ink: #047857;  /* 14px 绿色正文档（#059669 仅 3.77:1，ink 5.48:1） */
+  --cb-on-accent: #ffffff;  /* 彩色实底上的文字（暗色主题翻转为深底色） */
+  --cb-focus: #2563eb;      /* 键盘焦点环（:focus-visible） */
+  color-scheme: light;
+}
+
+/* === ux(round11) 暗色主题：灰阶 50/100/200 反转；工程蓝/安全橙/合规红/通过绿暗底提亮一档（附录 J）===
+   取值 = workbench 现行暗盘（零回归）；两处同构（显式选择 + 系统偏好回退），改动须同步。 */
+:root[data-theme="dark"] {
+  --cb-blue: #5b8def; --cb-blue-strong: #8db4ff; --cb-blue-soft: rgba(91, 141, 239, 0.16);
+  --cb-orange: #e6b84d; --cb-orange-soft: rgba(230, 184, 77, 0.14);
+  --cb-red: #f07178; --cb-red-soft: rgba(240, 113, 120, 0.14);
+  --cb-green: #3ecf8e; --cb-green-soft: rgba(62, 207, 142, 0.14);
+  /* ux(round14)：参考图对齐——中性炭黑三级灰阶（替代旧蓝灰盘），两级面板+一条淡边 */
+  --cb-gray-50: #17181a; --cb-gray-100: #1e2023; --cb-gray-200: #2a2d31;
+  --cb-gray-400: #858b95; --cb-gray-500: #a4aab4; --cb-gray-900: #e9eaec;
+  --cb-text: var(--cb-gray-900); --cb-text-muted: var(--cb-gray-500);
+  --cb-bg: #17181a; --cb-panel: #1e2023; --cb-panel-soft: #24262a;
+  --cb-line: #303338; --cb-line-soft: #26282c;
+  --cb-text-faint: #7d838d;
+  --cb-blue-ink: #8db4ff; --cb-orange-ink: #f0d48a; --cb-green-ink: #7ee7b0;
+  --cb-on-accent: #0c121a;
+  --cb-focus: #8db4ff;
+  --cb-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --cb-shadow-md: 0 4px 18px rgba(0, 0, 0, 0.45);
+  --cb-shadow-lg: 0 10px 32px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --cb-blue: #5b8def; --cb-blue-strong: #8db4ff; --cb-blue-soft: rgba(91, 141, 239, 0.16);
+    --cb-orange: #e6b84d; --cb-orange-soft: rgba(230, 184, 77, 0.14);
+    --cb-red: #f07178; --cb-red-soft: rgba(240, 113, 120, 0.14);
+    --cb-green: #3ecf8e; --cb-green-soft: rgba(62, 207, 142, 0.14);
+    --cb-gray-50: #17181a; --cb-gray-100: #1e2023; --cb-gray-200: #2a2d31;
+    --cb-gray-400: #858b95; --cb-gray-500: #a4aab4; --cb-gray-900: #e9eaec;
+    --cb-text: var(--cb-gray-900); --cb-text-muted: var(--cb-gray-500);
+    --cb-bg: #17181a; --cb-panel: #1e2023; --cb-panel-soft: #24262a;
+    --cb-line: #303338; --cb-line-soft: #26282c;
+    --cb-text-faint: #7d838d;
+    --cb-blue-ink: #8db4ff; --cb-orange-ink: #f0d48a; --cb-green-ink: #7ee7b0;
+    --cb-on-accent: #0c121a;
+    --cb-focus: #8db4ff;
+    --cb-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --cb-shadow-md: 0 4px 18px rgba(0, 0, 0, 0.45);
+    --cb-shadow-lg: 0 10px 32px rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+  }
+}
+/* ux(round11)：页面变量全部挂到 --cb-* 语义 token，随主题翻转；
+   ux(round14)：品牌色收敛为工程蓝（参考图"两级灰阶+一个品牌蓝"）；
+   --rail/--rail-ink（更深左侧栏，双主题恒定 chrome）。 */
+:root {
+  --ink: var(--cb-text);
+  --muted: var(--cb-text-muted);
+  --paper: var(--cb-bg);
+  --panel: var(--cb-panel);
+  --line: var(--cb-line);
+  --rail: #121316;
+  --rail-ink: #d6d8dc;
+  --accent: var(--cb-blue);
+  --accent-2: var(--cb-blue-strong);
+  --warn: var(--cb-orange-ink);
+  --ok: var(--cb-green-ink);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+html.cb-large { --cb-fs-xs: 13px; --cb-fs-sm: 15px; --cb-fs-md: 16px; --cb-fs-lg: 18px; }

@@ -1,0 +1,1 @@
+{"version":1,"skills":[{"id":"doc-word","name":"Word读改","description":"读取并修改既有DOCX段落和表格，保存验证副本"},{"id":"doc-spreadsheet","name":"Excel读改","description":"按类型修改XLSX单元格和范围，保留来源与公式重算状态"},{"id":"doc-pdf","name":"PDF读改","description":"按页取证、批注、文本表单和页面重排"},{"id":"doc-review","name":"文档复核","description":"检查跨文件证据、修改差异与实际验证状态"}]}

@@ -2,7 +2,7 @@
 """The native desktop app: everything it does (controller, no display needed) and the window itself.
 
   controller   opens a job folder, keeps the thread, runs a turn with live progress lines, asks for the
-               confirm sentence once and remembers the answer, lists what was written, reviews a document,
+               confirm sentence for each operation, lists what was written, reviews a document,
                switches mode and sandbox backend — and says plainly what it cannot do without a job folder
   window       a real Tk window driven end to end: type a task, the turn runs on a worker thread, the
                transcript and the file list fill in; the approval dialog takes the sentence and only the
@@ -24,7 +24,7 @@ os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 for name in ("DEEPSEEK_API_KEY", "OPENAI_API_KEY", "LLM_API_KEY", "CIVIL_API_KEY", "CIVIL_AGENT_MODE", "CIVIL_SANDBOX_BACKEND"):
     os.environ.pop(name, None)
 
-from packing_assistant.desktop.controller import CONFIRM, DesktopController, DesktopError  # noqa: E402
+from packing_assistant.desktop.controller import CONFIRM, CONFIRM_EN, DesktopController, DesktopError  # noqa: E402
 from packing_assistant.runtime import plugins, workspace  # noqa: E402
 
 DAILY = "整理日报，日期：2031年5月6日，部位：东桥3号墩，天气：晴，出勤：钢筋工12人"
@@ -96,7 +96,7 @@ class ControllerTests(JobCase):
         with self.assertRaises(DesktopError):
             controller.submit("   ")
 
-    def test_the_sentence_is_asked_once_and_the_answer_is_remembered(self):
+    def test_the_sentence_is_asked_once_per_operation_and_never_carried_forward(self):
         controller, asked = DesktopController(), []
         controller.open_job(str(self.job))
         refused = controller.submit(BRIEF, approve=lambda request: asked.append(request) or False)
@@ -105,14 +105,27 @@ class ControllerTests(JobCase):
         granted = controller.submit(BRIEF, approve=lambda request: asked.append(request) or True)
         self.assertTrue(granted["wrote"] and not granted["hitl_pending"], granted.get("reply"))
         self.assertEqual([r["name"] for r in asked], ["安全交底", "安全交底"])
-        self.assertTrue(controller.status()["confirmed"])
+        self.assertFalse(controller.status()["confirmed"])
         again = controller.submit(BRIEF, approve=lambda request: asked.append(request) or False)
-        self.assertTrue(again["wrote"])
-        self.assertEqual(len(asked), 2)                                  # not asked a third time in this thread
+        self.assertFalse(again["wrote"])
+        self.assertTrue(again["hitl_pending"])
+        self.assertEqual(len(asked), 3)                                  # a new operation needs a new decision
+        controller.switch_thread(controller.thread_id)
+        self.assertFalse(controller.submit(BRIEF, approve=lambda _r: False)["wrote"])
         typed = DesktopController()
         typed.open_job(str(self.job))
         typed.new_thread()
         self.assertTrue(typed.submit(BRIEF + "。" + CONFIRM)["wrote"])     # typing the sentence in the task counts too
+        self.assertFalse(typed.submit(BRIEF, approve=lambda _r: False)["wrote"])
+        english = DesktopController()
+        english.open_job(str(self.job))
+        english.new_thread()
+        self.assertTrue(english.submit(BRIEF + ". " + CONFIRM_EN)["wrote"])   # so does the English one
+        self.assertFalse(english.submit(BRIEF, approve=lambda _r: False)["wrote"])
+        lower = DesktopController()
+        lower.open_job(str(self.job))
+        lower.new_thread()
+        self.assertFalse(lower.submit(BRIEF + ". " + CONFIRM_EN.lower(), approve=lambda _r: False)["wrote"])
 
     def test_switches_are_validated_and_review_goes_through(self):
         controller = DesktopController()
@@ -227,6 +240,10 @@ class WindowTests(JobCase):
         self.assertFalse(app._ask_approval({"name": "安全交底", "risk": "high"}))
         app.root.after(200, self.answer(app, CONFIRM))
         self.assertTrue(app._ask_approval({"name": "安全交底", "risk": "high"}))
+        app.root.after(200, self.answer(app, CONFIRM_EN))
+        self.assertTrue(app._ask_approval({"name": "安全交底", "risk": "high"}))
+        app.root.after(200, self.answer(app, "No. " + CONFIRM_EN))       # the field holds the sentence alone
+        self.assertFalse(app._ask_approval({"name": "安全交底", "risk": "high"}))
 
         app.entry.insert("1.0", BRIEF)
         app.root.after(200, self.answer(app, CONFIRM))   # keeps looking until the blocked turn opens the dialog

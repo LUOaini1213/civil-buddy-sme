@@ -7,8 +7,9 @@ from pathlib import Path
 import sys
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -237,6 +238,67 @@ class ExchangeTests(unittest.TestCase):
                 with self.subTest(suffix=suffix), self.assertRaisesRegex(ImportError, "JVM"):
                     ex.import_plan(b"<P6/>" if suffix == "pmxml" else b"synthetic", "a." + suffix)
             process.assert_not_called()
+
+    def test_capabilities_without_jpype_preserve_native_formats_without_probing_java(self):
+        with patch.object(ex.importlib.util, "find_spec", side_effect=lambda name: None if name == "jpype" else object()), \
+             patch.object(ex, "_jvm_path") as finder, patch.object(ex.subprocess, "Popen") as process:
+            report = ex.capabilities()
+        self.assertEqual(report["imports"], ["json", "csv", "xlsx", "xml"])
+        self.assertEqual(report["exports"], ["json", "csv", "xlsx", "xml"])
+        self.assertFalse(report["mpxj"]["available"])
+        self.assertFalse(report["mpxj"]["packages_available"])
+        self.assertFalse(report["mpxj"]["jvm_available"])
+        self.assertIn("JPype1", report["mpxj"]["reason"])
+        finder.assert_not_called()
+        process.assert_not_called()
+
+    def test_capabilities_http_without_jvm_report_optional_unavailable_not_500(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from demo.planning_api import router
+
+        # Match JPype's public exception hierarchy without requiring this
+        # optional package or a JVM in the regression test environment.
+        class JVMNotFoundException(ValueError):
+            pass
+
+        class JVMNotSupportedException(ValueError):
+            pass
+
+        app = FastAPI()
+        app.include_router(router)
+        for failure in (JVMNotFoundException("no runtime"), JVMNotSupportedException("wrong runtime")):
+            finder = Mock(side_effect=failure)
+            with self.subTest(error=type(failure).__name__), \
+                 patch.dict(os.environ), \
+                 patch.dict(sys.modules, {"jpype": SimpleNamespace(getDefaultJVMPath=finder)}), \
+                 patch.object(ex.importlib.util, "find_spec", return_value=object()), \
+                 patch.object(ex.Path, "glob", return_value=iter(())), \
+                 patch.object(ex.subprocess, "Popen") as process, \
+                 TestClient(app) as client:
+                os.environ.pop("CIVIL_JAVA_HOME", None)
+                response = client.get("/api/engineering/planning/capabilities")
+                self.assertEqual(response.status_code, 200, response.text)
+                report = response.json()
+                self.assertTrue(report["cpm"])
+                self.assertEqual(report["formats"]["imports"], ["json", "csv", "xlsx", "xml"])
+                self.assertEqual(report["formats"]["exports"], ["json", "csv", "xlsx", "xml"])
+                mpxj = report["formats"]["mpxj"]
+                self.assertTrue(mpxj["packages_available"])
+                self.assertFalse(mpxj["jvm_available"])
+                self.assertFalse(mpxj["available"])
+                self.assertIn("JVM", mpxj["reason"])
+                self.assertFalse(mpxj["native_mpp_export"])
+                finder.assert_called_once_with()
+                process.assert_not_called()
+
+    def test_capabilities_with_unloadable_jpype_extension_remain_optional(self):
+        with patch.object(ex.importlib.util, "find_spec", return_value=object()), \
+             patch.object(ex, "_jvm_path", side_effect=ImportError("optional native extension missing")):
+            report = ex.capabilities()
+        self.assertFalse(report["mpxj"]["available"])
+        self.assertFalse(report["mpxj"]["jvm_available"])
+        self.assertEqual(report["exports"], ["json", "csv", "xlsx", "xml"])
 
     def test_resource_schedule_exports_actual_dates_and_rejects_capacity_violation(self):
         from packing_assistant.engineering.planning_optimize import optimize

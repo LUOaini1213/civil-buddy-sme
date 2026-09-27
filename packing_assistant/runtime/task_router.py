@@ -132,12 +132,60 @@ _LINK_EN = re.compile(
     r"|link(?:s|ed|ing)?\s+(?:the\s+|this\s+|our\s+)?(?:tender|itt|bid)\b(?:[^.?!]|\.(?=\w)){0,120}?\b(?:packing|panel|loading)\s+(?:list|plan)"
     r"|(?:pack|plan)\b(?:[^.?!]|\.(?=\w)){0,80}?\b(?:to|against|under)\s+the\s+(?:tender|itt)(?:[’']s)?\s+(?:clauses?|logistics|terms|requirements))\b")
 _FILE = re.compile(r"[\w.-]+\.(?:xlsx|xlsm|xls|csv|md|docx|pdf|txt)\b", re.I)
+# The other way in, for the wording an estimator actually uses ("Check facade_panels.xlsx against the shipping
+# requirements in facade_itt_doc.md", "Match the ITT against the panel list", "核对 X.xlsx 是否满足 Y.md 的物流条款"):
+# the request names one tender document and one panel / packing list, and asks to set one against the other. The
+# table must read as a packing list (its name or the words around it), and the document as the tender, so a BOQ or
+# a price schedule checked against a tender stays with its own post. Scored on test/benchmarks/link_routing/dev.json
+# (a DEV set: written before this rule and used to build it) by scripts/eval_link_routing.py.
+_TABLE_FILE = re.compile(r"[\w.-]+\.(?:xlsx|xlsm|xls|csv)\b", re.I)
+_DOC_FILE = re.compile(r"[\w.-]+\.(?:md|docx|pdf|txt)\b", re.I)
+_PACKING_WORD = re.compile(r"(?i)pack(?:ing)?|panel|loading|crate|container|shipping|shipment|logistic|cargo|stillage"
+                           r"|装箱|装柜|箱单|板块|面板|货物")
+_TENDER_WORD = re.compile(r"(?i)(?<![a-z])(?:tender|itt|bid|rfp|invitation)|招标|标书|投标")
+_LINK_CUE = re.compile(
+    r"(?i)\b(?:link(?:s|ed|ing)?|match(?:es|ed|ing)?|(?:cross-)?check(?:s|ed|ing)?|against|compl(?:y|ies|iance|iant)"
+    r"|meet(?:s|ing)?|clauses?|statements?|logistics\s+(?:section|response|requirements?)|shipping\s+requirements?)\b"
+    r"|联动|对照|核对|比对|匹配|满足|符合|条款|物流要求|运输要求|装柜要求|物流章节")
+# A link request put as "how do I ... / why is ... / what does ..." asks about the link; "does X meet Y?", "check
+# whether X meets Y" and "which statements does the plan support?" ask for it to be run.
+_ASKS_ABOUT = re.compile(r"(?i)(?:^|[.?!]\s+)\W*(?:how|why|what|when|where|who)\b|怎么|怎样|如何|为什么|为何|什么|是啥")
+_LINK_ACTION = re.compile(
+    r"(?i)(?:^|[，,:;.!?]\s*)\s*" + _EN_LEAD
+    + r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?"
+    r"(?:link|match|(?:cross-)?check|verify|answer)\b"
+    r"|^" + _PREFIX + r"(?:核对|对照|比对|匹配|把|用|按招标|招标装柜联动|投标装柜联动|标书装柜联动)")
+_LINK_CHECK_QUESTION = re.compile(
+    r"(?i)^\s*(?:do|does)\b.{0,500}\b(?:comply|meet|satisfy)\b"
+    r"|\bwhich\s+(?:bid\s+)?statements\b.{0,100}\bplan\b.{0,80}\bsupport\b"
+    r"|^装箱单.{0,500}(?:符合|满足).{0,500}吗[？?]?$")
+
+
+def _link_requests_execution(text: str) -> bool:
+    """A named link is a topic, not authorization. Promote only a positive action/check request."""
+    clean = _FILE.sub("〔文件〕", _positive_text(_QUOTED.sub("〔引用〕", text)))
+    if _READ_REQUEST.search(clean) or _ASKS_ABOUT.search(clean):
+        return False
+    return bool(_LINK_ACTION.search(clean) or _LINK_CHECK_QUESTION.search(clean))
+
+
+def _names_tender_and_list(text: str) -> bool:
+    tables = set(m.group() for m in _TABLE_FILE.finditer(text))
+    documents = set(m.group() for m in _DOC_FILE.finditer(text))
+    if len(tables) != 1 or len(documents) != 1:
+        return False
+    rest = _FILE.sub(" ", text)
+    (table,), (document,) = tables, documents
+    return bool((_PACKING_WORD.search(table) or _PACKING_WORD.search(rest))
+                and (_TENDER_WORD.search(document) or _TENDER_WORD.search(rest)))
 
 
 def wants_link(message: str) -> bool:
     """The request asks for the tender and the packing to be done as one linked run."""
     text = _positive_text(_QUOTED.sub("〔引用〕", message or ""))
-    return any(phrase in text for phrase in _LINK_ZH) or bool(_LINK_EN.search(text))
+    if any(phrase in text for phrase in _LINK_ZH) or _LINK_EN.search(text):
+        return True
+    return _names_tender_and_list(text) and bool(_LINK_CUE.search(_FILE.sub(" ", text)))
 
 
 def _positive_text(message: str) -> str:
@@ -269,8 +317,10 @@ def route_task(message: str, expert_ids: list[str] | None = None) -> dict:
     if not explicit and wants_link(text):
         ids = ["bid-parse"]
         result["reason"] = "招标与装柜联动：先读招标的物流条款，再按条款柜型用点名的装箱单真算，逐条写应答并记联动。"
-        if result["intent"] == "chat" and _FILE.search(text) and not _QUESTION.search(text):
-            result["intent"] = "run"      # "按招标 X.md 和 Y.xlsx 出物流应答" names its inputs: it asks for the run
+        if result["intent"] == "chat" and _FILE.search(text) and _link_requests_execution(text):
+            # "按招标 X.md 和 Y.xlsx 出物流应答" names its inputs: it asks for the run. So does "check whether Y.xlsx meets
+            # the clauses of X.md" or "does Y.xlsx comply with X.md?"; "how do I check Y.xlsx against X.md?" does not.
+            result["intent"] = "run"
     elif not explicit:
         comprehensive = (bool(re.search(r"招标|投标|技术标", text))
                          and bool(re.search(r"综合|全面|整体|成套|完整|全套|三岗", text))

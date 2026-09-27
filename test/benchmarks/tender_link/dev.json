@@ -1,0 +1,964 @@
+{
+ "schema": "tender_link.dev.v1",
+ "label": "DEV - used while building; not held out. Every case is SYNTHETIC (fictional clauses, no real tender).",
+ "wrapped_file": "each case's text is written to <id>.md and read as a tender; cites name that file",
+ "cases": [
+  {
+   "id": "P01",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n4.8.1 All unitised curtain wall panels shall be delivered to site in 40ft high-cube containers.",
+   "kinds": [
+    "container_type"
+   ],
+   "type": "40HQ",
+   "cite": {
+    "container_type": "Clause 4.8.1"
+   }
+  },
+  {
+   "id": "P02",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n(a) Containers: 40' HC only. 20' GP containers are not acceptable.",
+   "kinds": [
+    "container_type"
+   ],
+   "type": "40HQ",
+   "cite": {
+    "container_type": "item (a), line 4 of P02.md"
+   },
+   "note": "no numbered parent above (a): cited by its line"
+  },
+  {
+   "id": "P03",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\nPart C Clause 12 - Max. payload per container 18 tonnes.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 18000,
+   "basis": "cargo",
+   "cite": {
+    "gross_mass": "Part C Clause 12"
+   }
+  },
+  {
+   "id": "P04",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n4.9 The gross weight of each loaded container shall not exceed 26,000 kg including dunnage and packing materials.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 26000,
+   "basis": "gross",
+   "cite": {
+    "gross_mass": "Clause 4.9"
+   }
+  },
+  {
+   "id": "P05",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n4.10 Each stillage shall not exceed 1.5 t when loaded.",
+   "kinds": [
+    "per_package_limit"
+   ],
+   "container_limit_kg": null,
+   "package_limit_kg": 1500,
+   "optional_kinds": [
+    "handling"
+   ]
+  },
+  {
+   "id": "P06",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n4.11 Lashing and securing of cargo shall comply with the IMO/ILO/UNECE Code of Practice for Packing of Cargo Transport Units (CTU Code 2014).",
+   "kinds": [
+    "securing"
+   ],
+   "container_limit_kg": null
+  },
+  {
+   "id": "P07",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n4.12 Panels shall be packed in heat-treated timber crates marked in accordance with ISPM 15.",
+   "kinds": [
+    "crating"
+   ],
+   "container_limit_kg": null
+  },
+  {
+   "id": "P08",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n4.13 Deliveries shall be sequenced floor by floor to suit the installation programme.",
+   "kinds": [
+    "delivery_sequence"
+   ]
+  },
+  {
+   "id": "P09",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n4.14 The Subcontractor shall submit a packing and logistics plan for the Main Contractor's approval not later than 14 days prior to the first delivery.",
+   "kinds": [
+    "logistics_plan_submission"
+   ],
+   "container_limit_kg": null,
+   "optional_kinds": [
+    "delivery_sequence"
+   ]
+  },
+  {
+   "id": "P10",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n4.8 运输要求 Transport: 幕墙板块须以40尺高柜（40HQ）装运，每柜毛重不超过24吨（24,000 kg）。",
+   "kinds": [
+    "container_type",
+    "gross_mass"
+   ],
+   "type": "40HQ",
+   "container_limit_kg": 24000,
+   "basis": "gross"
+  },
+  {
+   "id": "P11",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\nTable 4-1 Logistics requirements\n\n| Clause | Item | Requirement |\n|---|---|---|\n| 4.8 | Container type | 40ft HC |\n| 4.9 | Max. gross mass per container | 25 t |\n| 4.10 | Lashing | CTU Code 2014 |",
+   "kinds": [
+    "container_type",
+    "gross_mass",
+    "securing"
+   ],
+   "type": "40HQ",
+   "container_limit_kg": 25000,
+   "basis": "gross",
+   "cite": {
+    "gross_mass": "Table 4-1, row 4.9",
+    "container_type": "Table 4-1, row 4.8",
+    "securing": "Table 4-1, row 4.10"
+   }
+  },
+  {
+   "id": "P12",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n4.15 Site access is restricted to vehicles not exceeding 12.2 m in length. No deliveries between 10 pm and 7 am. Loading bay height clearance 4.5 m.",
+   "kinds": [
+    "site_access"
+   ],
+   "container_limit_kg": null,
+   "type": "default"
+  },
+  {
+   "id": "P13",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n4.8 Containers shall be either 40ft general purpose or 40ft high cube at the Subcontractor's option.",
+   "kinds": [
+    "container_type"
+   ],
+   "type": "person",
+   "named": [
+    "40GP",
+    "40HQ"
+   ]
+  },
+  {
+   "id": "P14",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n4.16 The weight of any single crate shall not exceed 2,000 kg to suit the tower crane capacity (SWL 2.0 t at 45 m radius).",
+   "kinds": [
+    "per_package_limit"
+   ],
+   "container_limit_kg": null,
+   "package_limit_kg": 2000,
+   "optional_kinds": [
+    "crating"
+   ]
+  },
+  {
+   "id": "P15",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n4.17 Packing and containerisation: Not applicable. Panels will be collected ex-works by the Main Contractor's own transport.",
+   "kinds": [],
+   "container_limit_kg": null,
+   "optional_kinds": [
+    "unplaced"
+   ]
+  },
+  {
+   "id": "P16",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n4.8 Containers: 2 nos. 20' GP and 4 nos. 40' HC as per the logistics schedule in Appendix L.",
+   "kinds": [
+    "container_type"
+   ],
+   "type": "person"
+  },
+  {
+   "id": "P17",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\n4.9 Total cargo weight per 40ft container not to exceed 20 MT.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 20000,
+   "basis": "cargo",
+   "type": "person",
+   "optional_kinds": [
+    "container_type"
+   ],
+   "note": "'40ft' names a size without GP/HQ: the plan's type is a person's choice"
+  },
+  {
+   "id": "P18",
+   "origin": "blind-probe",
+   "text": "PART C - SPECIFICATION\nSECTION 4 - PACKING, DELIVERY AND LOGISTICS\n\nPart C Clause 12.3(b) Each delivery truck shall not carry more than 26 tonnes gross. Loaded containers shall not exceed 30,480 kg MGW.",
+   "kinds": [
+    "gross_mass",
+    "site_access"
+   ],
+   "container_limit_kg": 30480,
+   "basis": "gross",
+   "cite": {
+    "gross_mass": "Part C Clause 12.3(b)"
+   },
+   "note": "the truck's 26 t is a vehicle limit (site access / haulage), never the container's"
+  },
+  {
+   "id": "A1",
+   "origin": "post-blind",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.8 Containers: panels shall be shipped in 40HQ containers.\n\n4.9 Maximum weight per stillage (loaded): 1.5 t.",
+   "kinds": [
+    "container_type",
+    "per_package_limit"
+   ],
+   "container_limit_kg": null,
+   "package_limit_kg": 1500,
+   "optional_kinds": [
+    "handling"
+   ]
+  },
+  {
+   "id": "A2",
+   "origin": "post-blind",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.8 Containers: panels shall be shipped in 40HQ containers.\n\n4.9 The maximum gross weight of any single crate shall be 2,000 kg to suit the tower crane.",
+   "kinds": [
+    "container_type",
+    "per_package_limit"
+   ],
+   "container_limit_kg": null,
+   "package_limit_kg": 2000,
+   "optional_kinds": [
+    "crating"
+   ]
+  },
+  {
+   "id": "A3",
+   "origin": "post-blind",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.8 Containers: panels shall be shipped in 40HQ containers.\n\n4.9 The VGM of each loaded container shall not exceed 24,000 kg.",
+   "kinds": [
+    "container_type",
+    "gross_mass"
+   ],
+   "container_limit_kg": 24000,
+   "basis": "gross"
+  },
+  {
+   "id": "A4",
+   "origin": "post-blind",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.8 Containers: panels shall be shipped in 40HQ containers.\n\n4.9 Mass limit per loaded container: 20 t including tare.",
+   "kinds": [
+    "container_type",
+    "gross_mass"
+   ],
+   "container_limit_kg": 20000,
+   "basis": "gross"
+  },
+  {
+   "id": "A5",
+   "origin": "post-blind",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.8 Containers: panels shall be shipped in 40HQ containers.\n\n4.9 Max. gross weight per container 26 MT.",
+   "kinds": [
+    "container_type",
+    "gross_mass"
+   ],
+   "container_limit_kg": 26000,
+   "basis": "gross"
+  },
+  {
+   "id": "A6",
+   "origin": "post-blind",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.8 Containers: panels shall be shipped in 40HQ containers.\n\n(b) The gross mass of each loaded container shall not exceed 20,000 kg including the container tare.",
+   "kinds": [
+    "container_type",
+    "gross_mass"
+   ],
+   "container_limit_kg": 20000,
+   "basis": "gross",
+   "cite": {
+    "gross_mass": "Clause 4.8(b)"
+   },
+   "note": "(b) stands under 4.8, the last numbered clause above it"
+  },
+  {
+   "id": "A7",
+   "origin": "post-blind",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.8 Containers: panels shall be shipped in 40HQ containers.\n\n4.9 The gross mass of each loaded container shall not exceed 20,000 kg including tare.\n\n4.10 Each crate shall not exceed 1,500 kg gross weight for site handling.",
+   "kinds": [
+    "container_type",
+    "gross_mass",
+    "per_package_limit"
+   ],
+   "container_limit_kg": 20000,
+   "basis": "gross",
+   "package_limit_kg": 1500,
+   "optional_kinds": [
+    "crating"
+   ],
+   "cite": {
+    "gross_mass": "Clause 4.9",
+    "per_package_limit": "Clause 4.10"
+   }
+  },
+  {
+   "id": "V1",
+   "origin": "verify",
+   "text": "4.9 Container gross mass: the gross mass of each loaded container, including the container tare, shall not exceed 20,000 kg to suit the site hoisting and road haulage arrangements.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 20000,
+   "basis": "gross",
+   "cite": {
+    "gross_mass": "Clause 4.9"
+   }
+  },
+  {
+   "id": "V2",
+   "origin": "verify",
+   "text": "4.9 Container weight: the loaded container weight including tare shall not exceed 6 tonnes.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 6000,
+   "basis": "gross",
+   "cite": {
+    "gross_mass": "Clause 4.9"
+   }
+  },
+  {
+   "id": "V3",
+   "origin": "verify",
+   "text": "4.9 Each loaded container shall weigh no more than 6,000 kg including tare.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 6000,
+   "basis": "gross",
+   "cite": {
+    "gross_mass": "Clause 4.9"
+   }
+  },
+  {
+   "id": "V4",
+   "origin": "verify",
+   "text": "4.9 The VGM of every container shall not exceed 20,000 kg.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 20000,
+   "basis": "gross",
+   "cite": {
+    "gross_mass": "Clause 4.9"
+   }
+  },
+  {
+   "id": "V5",
+   "origin": "verify",
+   "text": "4.9 Loaded containers heavier than 20 t will not be accepted at site.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 20000,
+   "basis": null,
+   "cite": {
+    "gross_mass": "Clause 4.9"
+   }
+  },
+  {
+   "id": "V6",
+   "origin": "verify",
+   "text": "4.9 The total weight of each container load shall not exceed 20,000 kg.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 20000,
+   "basis": null,
+   "cite": {
+    "gross_mass": "Clause 4.9"
+   }
+  },
+  {
+   "id": "V7",
+   "origin": "verify",
+   "text": "4.9 Maximum container weight 20,000 kg.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 20000,
+   "basis": null,
+   "cite": {
+    "gross_mass": "Clause 4.9"
+   }
+  },
+  {
+   "id": "C01",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.1 Unitised panels shall be shipped in 40' high cube containers.",
+   "kinds": [
+    "container_type"
+   ],
+   "type": "40HQ"
+  },
+  {
+   "id": "C02",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.2 All curtain wall units shall be delivered in 40HC containers.",
+   "kinds": [
+    "container_type"
+   ],
+   "type": "40HQ"
+  },
+  {
+   "id": "C03",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.3 The Subcontractor shall use 20-foot general purpose containers for brackets and anchors.",
+   "kinds": [
+    "container_type"
+   ],
+   "type": "20GP"
+  },
+  {
+   "id": "C04",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.4 Loaded container weight including tare shall not exceed 24 tonnes due to the site access road.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 24000,
+   "basis": "gross",
+   "optional_kinds": [
+    "site_access"
+   ]
+  },
+  {
+   "id": "C05",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.5 The maximum payload per container shall be 18,000 kg.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 18000,
+   "basis": "cargo"
+  },
+  {
+   "id": "C06",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.6 Each truck delivery to site shall not exceed a gross vehicle weight of 32 t.",
+   "kinds": [
+    "site_access"
+   ],
+   "container_limit_kg": null,
+   "note": "relabelled from gross_mass: track-1 spec says a vehicle GVW is not a container limit"
+  },
+  {
+   "id": "C07",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.7 The VGM of every container shall be declared to the shipping line and shall not exceed 26,000 kg.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 26000,
+   "basis": "gross"
+  },
+  {
+   "id": "C08",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.8 Cargo shall be lashed and braced so that it cannot move during transit.",
+   "kinds": [
+    "securing"
+   ]
+  },
+  {
+   "id": "C09",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.9 Securing of cargo in containers shall comply with the CTU Code.",
+   "kinds": [
+    "securing"
+   ]
+  },
+  {
+   "id": "C10",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.10 Panels shall be secured to the stillages with ratchet straps.",
+   "kinds": [
+    "securing",
+    "handling"
+   ]
+  },
+  {
+   "id": "C11",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.11 Glass units shall be transported vertically on A-frames and shall not be laid flat.",
+   "kinds": [
+    "handling"
+   ]
+  },
+  {
+   "id": "C12",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.12 Stillages shall not be double-stacked in the container.",
+   "kinds": [
+    "handling"
+   ]
+  },
+  {
+   "id": "C13",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.13 Finished aluminium surfaces shall be protected with peelable film during transport.",
+   "kinds": [
+    "handling"
+   ]
+  },
+  {
+   "id": "C14",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.14 Brackets and fixings shall be packed in wooden crates marked with the floor and grid reference.",
+   "kinds": [
+    "crating"
+   ]
+  },
+  {
+   "id": "C15",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.15 Units shall be delivered on returnable steel stillages; the Main Contractor will not store empty stillages.",
+   "kinds": [
+    "handling"
+   ]
+  },
+  {
+   "id": "C16",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.16 Deliveries shall follow the installation sequence, one floor at a time.",
+   "kinds": [
+    "delivery_sequence"
+   ]
+  },
+  {
+   "id": "C17",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.17 The Subcontractor shall give 72 hours' notice of each delivery and deliver just-in-time to the hoisting programme.",
+   "kinds": [
+    "delivery_sequence"
+   ],
+   "optional_kinds": [
+    "site_access"
+   ]
+  },
+  {
+   "id": "C18",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.18 Material shall be delivered to site in accordance with the approved delivery schedule.",
+   "kinds": [
+    "delivery_sequence"
+   ]
+  },
+  {
+   "id": "C19",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.19 The Subcontractor shall maintain Contractor's All Risks insurance for the full contract sum.",
+   "kinds": []
+  },
+  {
+   "id": "C20",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.20 The tower crane has a maximum lifting capacity of 5 tonnes at the working radius.",
+   "kinds": [
+    "per_package_limit"
+   ],
+   "container_limit_kg": null,
+   "package_limit_kg": 5000,
+   "note": "relabelled from 'no kind': track-1 spec makes a crane-lift limit a per-package limit for a person"
+  },
+  {
+   "id": "C21",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.21 The dead load of each panel shall not exceed 600 kg for the structural design of the brackets.",
+   "kinds": [],
+   "container_limit_kg": null
+  },
+  {
+   "id": "C22",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.22 Refuse containers shall be provided on each floor by the Main Contractor.",
+   "kinds": []
+  },
+  {
+   "id": "C23",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.23 The mock-up shall be tested for water penetration at 600 Pa.",
+   "kinds": []
+  },
+  {
+   "id": "C24",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.24 The tenderer shall state the programme for fabrication and installation.",
+   "kinds": []
+  },
+  {
+   "id": "C25",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.25 Liquidated damages shall be S$5,000 per day of delay.",
+   "kinds": []
+  },
+  {
+   "id": "C26",
+   "origin": "auditor-clause",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n9.26 A stack effect analysis shall be submitted for the lobby doors.",
+   "kinds": []
+  },
+  {
+   "id": "G1",
+   "origin": "paraphrase",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 No single loaded container arriving at the gate may weigh more than 6 tonnes all-in, box included.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 6000,
+   "basis": "gross"
+  },
+  {
+   "id": "G2",
+   "origin": "paraphrase",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.10 Loads shall be restrained inside each container so that they cannot shift in transit.",
+   "kinds": [
+    "securing"
+   ],
+   "container_limit_kg": null,
+   "accept_unplaced": true
+  },
+  {
+   "id": "G3",
+   "origin": "paraphrase",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.7 Units shall travel on returnable steel racks, standing on edge, and nothing shall be placed on top of them.",
+   "kinds": [
+    "handling"
+   ],
+   "accept_unplaced": true,
+   "note": "re-written from the audit's fragment 'returnable steel racks, standing on edge'"
+  },
+  {
+   "id": "G4",
+   "origin": "paraphrase",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.11 Panels will be called off by the Main Contractor in the order of erection, level by level.",
+   "kinds": [
+    "delivery_sequence"
+   ],
+   "note": "re-written from the audit's fragment 'called off ... in the order of erection, level by level'"
+  },
+  {
+   "id": "D01",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Loaded containers shall not exceed 24 t gross, excluding dunnage.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 24000,
+   "basis": "gross"
+  },
+  {
+   "id": "D02",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Max. load per container 21,000 kg excluding tare.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 21000,
+   "basis": "cargo"
+  },
+  {
+   "id": "D03",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 The payload of each 40HQ shall not exceed 22 tonnes.",
+   "kinds": [
+    "container_type",
+    "gross_mass"
+   ],
+   "container_limit_kg": 22000,
+   "basis": "cargo",
+   "type": "40HQ"
+  },
+  {
+   "id": "D04",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Container weight shall be limited to 25 metric tonnes including dunnage.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 25000
+  },
+  {
+   "id": "D05",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.12 Road haulage: prime movers with trailers shall not exceed a GVW of 40 t on the site access road.",
+   "kinds": [
+    "site_access"
+   ],
+   "container_limit_kg": null
+  },
+  {
+   "id": "D06",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.13 Deliveries shall be made between 8 am and 5 pm, Monday to Saturday; no deliveries on Sundays or public holidays.",
+   "kinds": [
+    "site_access"
+   ],
+   "optional_kinds": [
+    "delivery_sequence"
+   ]
+  },
+  {
+   "id": "D07",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.14 A logistics plan showing packing, container loading and delivery shall be submitted with the tender.",
+   "kinds": [
+    "logistics_plan_submission"
+   ]
+  },
+  {
+   "id": "D08",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.8 Panels shall be shipped in 40' general purpose containers.",
+   "kinds": [
+    "container_type"
+   ],
+   "type": "40GP"
+  },
+  {
+   "id": "D09",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.8 Containers shall be 40ft dry containers or 40ft high cube, at the Subcontractor's option.",
+   "kinds": [
+    "container_type"
+   ],
+   "type": "person",
+   "named": [
+    "40GP",
+    "40HQ"
+   ]
+  },
+  {
+   "id": "D10",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.8 The tenderer may offer 20GP, 40GP or 40HQ containers.",
+   "kinds": [
+    "container_type"
+   ],
+   "type": "person"
+  },
+  {
+   "id": "D11",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Container limits\n(a) The gross mass of each loaded container shall not exceed 20,000 kg including tare.\n(b) Containers shall be 40HQ.",
+   "kinds": [
+    "gross_mass",
+    "container_type"
+   ],
+   "container_limit_kg": 20000,
+   "basis": "gross",
+   "type": "40HQ",
+   "cite": {
+    "gross_mass": "Clause 4.9(a)",
+    "container_type": "Clause 4.9(b)"
+   }
+  },
+  {
+   "id": "D12",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\nClause 12.3(b) Loaded containers shall not exceed 28 t VGM.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 28000,
+   "basis": "gross",
+   "cite": {
+    "gross_mass": "Clause 12.3(b)"
+   }
+  },
+  {
+   "id": "D13",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\nThe gross weight of each container shall not exceed 20 t including tare.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 20000,
+   "basis": "gross",
+   "cite": {
+    "gross_mass": "line 3 of D13.md"
+   }
+  },
+  {
+   "id": "D14",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.20 The glass shall have a nominal thickness of 12 mm.",
+   "kinds": []
+  },
+  {
+   "id": "D15",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.21 The design wind load shall be 2.4 kPa.",
+   "kinds": []
+  },
+  {
+   "id": "D16",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.22 Each panel weighs approximately 450 kg.",
+   "kinds": []
+  },
+  {
+   "id": "D17",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Containers arriving at site shall be within the permissible limits of the authorities for road haulage.",
+   "kinds": [
+    "unplaced"
+   ],
+   "container_limit_kg": null,
+   "note": "a container clause the reader has no kind for: a person must see it"
+  },
+  {
+   "id": "D18",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 The heaviest container shall be declared to the Main Contractor before shipment, with its VGM certificate.",
+   "kinds": [
+    "unplaced"
+   ],
+   "container_limit_kg": null,
+   "note": "a mass term with no figure: a person must see it"
+  },
+  {
+   "id": "D19",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 每个集装箱总重（含箱体自重）不得超过20吨。",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 20000,
+   "basis": "gross"
+  },
+  {
+   "id": "D20",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.10 单件木箱重量不得超过2吨，以满足塔吊起重能力。",
+   "kinds": [
+    "per_package_limit"
+   ],
+   "container_limit_kg": null,
+   "package_limit_kg": 2000,
+   "optional_kinds": [
+    "crating"
+   ]
+  },
+  {
+   "id": "D21",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Each panel shall weigh no more than 800 kg to suit the site hoist.",
+   "kinds": [
+    "per_package_limit"
+   ],
+   "container_limit_kg": null,
+   "package_limit_kg": 800
+  },
+  {
+   "id": "D22",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Panels shall be delivered in containers whose gross mass shall not exceed 20,000 kg.",
+   "kinds": [
+    "gross_mass"
+   ],
+   "container_limit_kg": 20000,
+   "basis": "gross"
+  },
+  {
+   "id": "D23",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Each stillage shall not exceed 1.5 t when loaded in a 40HQ container.",
+   "kinds": [
+    "container_type",
+    "per_package_limit"
+   ],
+   "container_limit_kg": null,
+   "package_limit_kg": 1500,
+   "type": "40HQ",
+   "optional_kinds": [
+    "handling"
+   ]
+  },
+  {
+   "id": "D24",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 The Subcontractor shall ship in 20GP; heavy units 30 mt long shall be split.",
+   "kinds": [
+    "container_type"
+   ],
+   "container_limit_kg": null,
+   "type": "20GP",
+   "note": "'mt' in lower case is not a mass unit"
+  },
+  {
+   "id": "D25",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.9 Maximum 20 t per container, including tare, and 2 t per crate.",
+   "kinds": [
+    "gross_mass",
+    "per_package_limit"
+   ],
+   "container_limit_kg": 20000,
+   "basis": "gross",
+   "package_limit_kg": 2000,
+   "optional_kinds": [
+    "crating"
+   ]
+  },
+  {
+   "id": "D26",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.12 The prime mover and trailer combination with a loaded 40HQ shall not exceed 40 t on the site road.",
+   "kinds": [
+    "container_type",
+    "unplaced"
+   ],
+   "container_limit_kg": null,
+   "optional_kinds": [
+    "site_access"
+   ],
+   "note": "whose limit is 40 t? a vehicle's would pass any container: a person reads it, the tool does not guess"
+  },
+  {
+   "id": "D27",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.12 The site road has a 30 t weight limit for vehicles carrying containers.",
+   "kinds": [
+    "site_access"
+   ],
+   "container_limit_kg": null
+  },
+  {
+   "id": "D28",
+   "origin": "implementer",
+   "text": "SECTION 4 PACKING, DELIVERY AND LOGISTICS\n\n4.12 The forklift at the loading bay is rated 3 t per lift; containers will be unloaded at the bay.",
+   "kinds": [
+    "per_package_limit",
+    "site_access"
+   ],
+   "container_limit_kg": null,
+   "package_limit_kg": 3000
+  }
+ ]
+}

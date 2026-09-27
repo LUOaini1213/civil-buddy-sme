@@ -6,7 +6,7 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-from packing_assistant.runtime.civil_config import CONFIRM, APPROVAL_MODES, SANDBOX_MODES, load_config
+from packing_assistant.runtime.civil_config import CONFIRM, CONFIRM_EN, APPROVAL_MODES, SANDBOX_MODES, is_confirmation, message_confirmation, load_config
 
 HELP = """/help              本页
 /status            作业文件夹 · CIVIL.md · sandbox · approval · 模型 · thread · 会话槽
@@ -24,12 +24,12 @@ HELP = """/help              本页
 /plan              上一轮模型列的步骤
 /review <文稿>     不调模型：文稿里的数字有没有出处、有没有不该下的结论
 /plugins           已装插件、是否受信任、带来哪些岗位（安装与信任用 civil plugin …）
-/confirm           本 thread 视同已打确认句
+/confirm <签认句>  仅确认并重试当前待签认的原任务
 /mcp               IDE/MCP 怎么挂
 /quit              退出
 
 任务直接回车。显式 skill： $construction  或  @施工方案
-高风险写盘确认句：""" + CONFIRM
+高风险写盘确认句：""" + CONFIRM + "\nSign-off sentence (English): " + CONFIRM_EN
 
 
 def _enable_vt() -> None:
@@ -60,6 +60,8 @@ class TuiState:
         self.cfg = load_config()
         self.thread = new_thread("主对话")
         self.confirm = False
+        self.pending_text = ""
+        self.pending_thread_id = ""
         self.last_skill = ""
         self.last_skill_source = ""
         self.last_plan: List[Dict[str, str]] = []
@@ -101,7 +103,7 @@ def _print_out(out: Dict[str, Any]) -> None:
         bits.append(f"approval {out.get('approval')}")
     print(_c("2", " · ".join(bits)))
     if out.get("hitl_pending"):
-        print(_c("33", f"approval 须确认句：{CONFIRM}"))
+        print(_c("33", f"approval 须确认句：{CONFIRM}  |  or type: {CONFIRM_EN}"))
     print(out.get("reply") or "")
     from packing_assistant.civil import _file_paths, display_path
 
@@ -213,13 +215,17 @@ def handle_slash(line: str, st: TuiState) -> Optional[str]:
             return f"sandbox = {st.cfg.sandbox}"
         return "sandbox=" + st.cfg.sandbox + "  可选 " + " | ".join(SANDBOX_MODES)
     if cmd == "confirm":
-        st.confirm = True
-        st.thread.confirm = True
-        return "本 thread 已确认：" + CONFIRM
+        if not st.pending_text or st.pending_thread_id != st.thread.thread_id:
+            return "没有当前待签认的任务；确认不能预先授权下一次操作。"
+        if not is_confirmation(arg):
+            return "请原样输入 /confirm " + CONFIRM + "（或 /confirm " + CONFIRM_EN + "）"
+        out = submit_task(st, st.pending_text, confirmed=True)
+        return str(out.get("reply") or "本次操作已结束。")
     if cmd == "new":
         from packing_assistant.runtime.threads import new_thread
 
-        st.thread = new_thread(arg or "新对话", confirm=st.confirm)
+        st.thread = new_thread(arg or "新对话")
+        st.confirm, st.pending_text, st.pending_thread_id = False, "", ""
         return f"thread {st.thread.thread_id} · {st.thread.title}"
     if cmd == "threads":
         from packing_assistant.runtime.threads import list_threads, thread_status
@@ -240,7 +246,7 @@ def handle_slash(line: str, st: TuiState) -> Optional[str]:
         if not th:
             return "未知 thread"
         st.thread = th
-        st.confirm = th.confirm or st.confirm
+        st.confirm, st.pending_text, st.pending_thread_id = False, "", ""
         return f"切到 {th.thread_id} · {th.title}"
     if cmd == "files":
         arts = st.thread.artifacts
@@ -257,7 +263,8 @@ def handle_slash(line: str, st: TuiState) -> Optional[str]:
             return "用法：/bg 出一份税务日历"
         from packing_assistant.runtime.threads import spawn
 
-        got = spawn(arg.strip(), confirm=st.confirm, title=arg.strip()[:40])
+        st.confirm, st.pending_text, st.pending_thread_id = False, "", ""
+        got = spawn(arg.strip(), confirm=message_confirmation(arg), title=arg.strip()[:40])
         return f"后台 thread {got.get('thread_id')}  state={got.get('state')}"
     return f"未知命令 /{cmd}。/help"
 
@@ -266,16 +273,46 @@ def ask_approval(request: Dict[str, Any], *, read=input) -> bool:
     """Codex asks before a risky command runs; civil asks before a high-risk post writes."""
     print(_c("33", f"approval {request.get('name') or ''}（risk={request.get('risk')}）要写盘。"))
     print(_c("33", f"  同意就原样输入确认句：{CONFIRM}"))
+    print(_c("33", f"  To approve, type exactly: {CONFIRM_EN}"))
     try:
         answer = read(_c("33", "  approve> ")).strip()
     except (EOFError, KeyboardInterrupt):
         return False
-    return CONFIRM in answer
+    return is_confirmation(answer)       # the approve> prompt asks for the sentence alone: exactly one of the two
+
+
+def submit_task(st: TuiState, text: str, *, confirmed: bool = False, approve=None, on_progress=None) -> Dict[str, Any]:
+    """Execute one current operation; an inline approval retries only these same words and is then consumed."""
+    from packing_assistant.civil import with_progress
+    from packing_assistant.runtime.threads import load_thread, run_on_thread
+
+    st.confirm, st.pending_text, st.pending_thread_id = False, "", ""
+    granted: List[bool] = []
+    progress = on_progress or (lambda _text: None)
+
+    def ask(request: Dict[str, Any]) -> bool:
+        granted.append(bool(approve(request)) if approve is not None else False)
+        return granted[-1]
+
+    def turn(allow: bool) -> Dict[str, Any]:
+        return run_on_thread(st.thread.thread_id, text, confirm=allow, approve=ask)
+
+    out = with_progress(lambda: turn(confirmed is True or message_confirmation(text)), progress)
+    if out.get("hitl_pending") and not granted and ask(
+            {"name": out.get("expert_name") or "本次写盘", "risk": "high"}):
+        out = with_progress(lambda: turn(True), progress)
+    fresh = load_thread(st.thread.thread_id)
+    if fresh:
+        st.thread = fresh
+    st.last_skill = str(out.get("skill") or out.get("expert_id") or "")
+    st.last_skill_source = str(out.get("skill_source") or "")
+    st.last_plan = list(out.get("plan") or [])
+    if out.get("hitl_pending"):
+        st.pending_text, st.pending_thread_id = text, st.thread.thread_id
+    return out
 
 
 def run_tui() -> int:
-    from packing_assistant.civil import with_progress
-    from packing_assistant.runtime.threads import run_on_thread
 
     _enable_vt()
     st = TuiState()
@@ -297,33 +334,6 @@ def run_tui() -> int:
                 print(msg)
                 print()
             continue
-        confirm = st.confirm or CONFIRM in line
-        granted: List[bool] = []
-
-        def approve(request: Dict[str, Any]) -> bool:
-            granted.append(ask_approval(request))
-            return granted[-1]
-
-        def turn(confirmed: bool = confirm) -> Dict[str, Any]:
-            return run_on_thread(st.thread.thread_id, line, confirm=confirmed, approve=approve)
-
-        out = with_progress(turn, lambda text: print(_c("2", text)))
-        if out.get("hitl_pending") and not granted and ask_approval(
-                {"name": out.get("expert_name") or "本次写盘", "risk": "high"}):
-            granted.append(True)      # steps 模式：先被拦下，用户当场同意后原话重跑
-            out = with_progress(lambda: turn(True), lambda text: print(_c("2", text)))
-        from packing_assistant.runtime.threads import load_thread
-
-        fresh = load_thread(st.thread.thread_id)
-        if fresh:
-            st.thread = fresh
-        st.last_skill = str(out.get("skill") or out.get("expert_id") or "")
-        st.last_skill_source = str(out.get("skill_source") or "")
-        st.last_plan = list(out.get("plan") or [])
-        if any(granted):      # 同意过一次，本 thread 后面的高风险写盘不再重复问
-            from packing_assistant.runtime.threads import save_thread
-
-            st.confirm = st.thread.confirm = True
-            save_thread(st.thread)
+        out = submit_task(st, line, approve=ask_approval, on_progress=lambda text: print(_c("2", text)))
         _print_out(out)
     return 0

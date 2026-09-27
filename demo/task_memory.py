@@ -19,7 +19,7 @@ try:
 except ImportError:  # ``civil app`` imports demo modules directly.
     import projects
 
-from packing_assistant.runtime.civil_config import CONFIRM
+from packing_assistant.runtime.civil_config import CONFIRM_PATTERN, contains_confirmation, count_confirmations
 
 SCHEMA = "civil.task-memory.v1"
 FILENAME = "context.summary.json"
@@ -69,7 +69,7 @@ def _trim(content: str, start: int, end: int) -> tuple[int, int]:
 def _spans(content: str) -> Iterator[tuple[int, int]]:
     """Scan every sentence, splitting around approval text without copying it."""
     cursor = 0
-    for denied in re.finditer(re.escape(CONFIRM), content):
+    for denied in re.finditer(CONFIRM_PATTERN, content):
         for match in _SENTENCES.finditer(content, cursor, denied.start()):
             yield _trim(content, match.start(), match.end())
         cursor = denied.end()
@@ -127,12 +127,12 @@ def _source(message: dict, index: int, content: str, start: int, end: int) -> di
     supplied = message.get("id")
     # Missing IDs get stable transcript-position IDs, never generated timestamps.
     message_id = supplied if isinstance(supplied, str) and supplied else f"message-{index + 1}"
-    if CONFIRM in message_id or len(message_id) > 256:
+    if contains_confirmation(message_id) or len(message_id) > 256:
         message_id = "id-sha256-" + hashlib.sha256(message_id.encode("utf-8")).hexdigest()
     ts = message.get("ts")
     return {"message_id": message_id, "message_index": index,
             "role": message["role"], "start": start, "end": end,
-            "quote": content[start:end], "ts": ts if type(ts) in (str, int, float) and CONFIRM not in str(ts) else None}
+            "quote": content[start:end], "ts": ts if type(ts) in (str, int, float) and not contains_confirmation(str(ts)) else None}
 
 
 def build(history: list[dict]) -> dict:
@@ -158,7 +158,7 @@ def build(history: list[dict]) -> dict:
                                  ensure_ascii=False, default=str).encode("utf-8"))
         count += 1
         chars += len(content)
-        approvals += content.count(CONFIRM)
+        approvals += count_confirmations(content)
         for start, end in _spans(content):
             original = content[start:end]
             if not original or _ACK.fullmatch(original) or _SENSITIVE.search(original):
@@ -259,7 +259,7 @@ def load(root: Path, sid: str) -> dict | None:
                         or source["end"] - source["start"] != len(source["quote"])
                         or source.get("role") not in {"user", "assistant", "tool"}):
                     return None
-        if CONFIRM in json.dumps(summary, ensure_ascii=False):
+        if contains_confirmation(json.dumps(summary, ensure_ascii=False)):
             return None
         return summary
     except (FileNotFoundError, UnicodeError, ValueError, RecursionError):
@@ -285,7 +285,7 @@ def render(summary: dict, max_chars: int = 6000) -> str:
             source = item.get("source", {})
             text = str(item.get("text", ""))
             ref = f"{source.get('message_id', '?')}:{source.get('start', '?')}-{source.get('end', '?')}"
-            if CONFIRM in text or CONFIRM in ref or _SENSITIVE.search(text):
+            if contains_confirmation(text) or contains_confirmation(ref) or _SENSITIVE.search(text):
                 continue
             who = "用户陈述" if source.get("role") == "user" else "助手声称，未核实" if source.get("role") == "assistant" else "工具报告，未独立核实"
             supersedes = "；已替代旧版本" if item.get("supersedes") else ""
