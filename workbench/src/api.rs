@@ -276,8 +276,13 @@ async fn projects_merge(
 
 async fn sessions_list(
     State(st): State<Arc<AppState>>,
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
     Query(q): Query<HashMap<String, String>>,
-) -> Json<Value> {
+) -> Response {
+    if let Some(engine) = &st.engine {
+        return engine.forward(reqwest::Method::GET,
+            uri.path_and_query().map(|v| v.as_str()).unwrap_or("/api/sessions"), None, Vec::new()).await;
+    }
     let pid = q.get("project_id").cloned().unwrap_or_default();
     let query = q.get("q").cloned().unwrap_or_default();
     let limit = q
@@ -285,7 +290,7 @@ async fn sessions_list(
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or_else(crate::projects::default_limit);
     let offset = q.get("offset").and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
-    Json(crate::projects::list_sessions(&st.paths, &pid, &query, limit, offset))
+    Json(crate::projects::list_sessions(&st.paths, &pid, &query, limit, offset)).into_response()
 }
 
 fn zip_named(files: &[(String, Vec<u8>)]) -> Vec<u8> {
@@ -301,7 +306,9 @@ fn zip_named(files: &[(String, Vec<u8>)]) -> Vec<u8> {
 }
 
 fn require_sid(sid: &str) -> Result<String, ApiError> {
-    crate::projects::safe_session_id(sid).map_err(|e| err(StatusCode::BAD_REQUEST, e))
+    let clean = crate::projects::safe_session_id(sid).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    if clean != sid { return Err(err(StatusCode::BAD_REQUEST, "invalid session_id")); }
+    Ok(clean)
 }
 
 async fn session_cancel(State(st): State<Arc<AppState>>, AxPath(sid): AxPath<String>) -> Result<Response, ApiError> {
@@ -652,7 +659,7 @@ async fn eval_shadow(State(st): State<Arc<AppState>>, Json(body): Json<FirmBidIn
     let session = if body.session_id.is_empty() {
         Uuid::new_v4().simple().to_string().chars().take(12).collect()
     } else {
-        body.session_id.clone()
+        require_sid(&body.session_id)?
     };
     let args = json!({
         "project_name": body.project_name,
@@ -731,7 +738,7 @@ async fn harness_expert(State(st): State<Arc<AppState>>, Json(body): Json<Expert
     let session = if body.session_id.is_empty() {
         Uuid::new_v4().simple().to_string().chars().take(12).collect()
     } else {
-        body.session_id.clone()
+        require_sid(&body.session_id)?
     };
     let ticket = expert_ticket(&session, &body);
     Ok(Json(crate::harness::run_turn(&st.paths, &exp, ticket).to_value()))
@@ -756,7 +763,7 @@ async fn eval_shadow_expert(
     let session = if body.session_id.is_empty() {
         Uuid::new_v4().simple().to_string().chars().take(12).collect()
     } else {
-        body.session_id.clone()
+        require_sid(&body.session_id)?
     };
     let ticket = expert_ticket(&session, &body);
     Ok(Json(crate::harness::shadow_eval_expert(&st.paths, &exp, ticket)))
@@ -1103,7 +1110,7 @@ async fn firm_bid(State(st): State<Arc<AppState>>, Json(body): Json<FirmBidIn>) 
     let session = if body.session_id.is_empty() {
         Uuid::new_v4().simple().to_string().chars().take(12).collect()
     } else {
-        body.session_id.clone()
+        require_sid(&body.session_id)?
     };
     let args = json!({
         "project_name": body.project_name,
@@ -1479,8 +1486,14 @@ async fn chat(State(st): State<Arc<AppState>>, Json(mut body): Json<ChatIn>) -> 
         .into_response())
 }
 
-async fn file_get(State(st): State<Arc<AppState>>, Query(q): Query<HashMap<String, String>>) -> Result<Response, ApiError> {
+async fn file_get(State(st): State<Arc<AppState>>, axum::extract::OriginalUri(uri): axum::extract::OriginalUri, Query(q): Query<HashMap<String, String>>) -> Result<Response, ApiError> {
     let raw = q.get("path").cloned().unwrap_or_default();
+    if raw.is_empty() {
+        if let Some(engine) = &st.engine {
+            return Ok(engine.forward(reqwest::Method::GET,
+                uri.path_and_query().map(|v| v.as_str()).unwrap_or("/api/file"), None, Vec::new()).await);
+        }
+    }
     let target = PathBuf::from(&raw);
     let target = target.canonicalize().map_err(|_| err(StatusCode::NOT_FOUND, "missing"))?;
     let root = st
@@ -1493,6 +1506,10 @@ async fn file_get(State(st): State<Arc<AppState>>, Query(q): Query<HashMap<Strin
     }
     if !target.is_file() {
         return Err(err(StatusCode::NOT_FOUND, "missing"));
+    }
+    if let Some(engine) = &st.engine {
+        return Ok(engine.forward(reqwest::Method::GET,
+            uri.path_and_query().map(|v| v.as_str()).unwrap_or("/api/file"), None, Vec::new()).await);
     }
     let bytes = tokio::fs::read(&target)
         .await

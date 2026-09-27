@@ -96,7 +96,7 @@ These are printed by `scripts/demo_facade.py`, not added for this page:
 
 The gross mass is the engine's per-container cargo plus an approximate knowledge-base tare (40HQ
 3,890 kg); dunnage, lashing and stillage mass are excluded, and the signed VGM governs. More limits
-(the link is not yet on MCP or a gateway route; the bid-book body has Chinese rows in chapter 3 and
+(there is no dedicated linked-run MCP tool or gateway endpoint; the bid-book body has Chinese rows in chapter 3 and
 Annex B; no live-model run) are listed in [examples/facade-demo/README.md](examples/facade-demo/README.md)
 and in §3.4 of the technical document.
 

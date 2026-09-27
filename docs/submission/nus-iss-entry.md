@@ -92,7 +92,7 @@ As the demo and the technical document print them:
 - The plan does not follow the installation sequence (in rev B the L8 panels load in container 1).
 - The tender parse shows 0 of the ITT's 12 façade specification clauses, and no liquidated-damages or
   retention row.
-- The link runs from a `civil` or workbench turn only, not over MCP or a gateway route; the older
+- The link runs through the shared turn runtime, without a dedicated MCP tool or gateway endpoint; the older
   `/api/tender/delivery` route can plan sample materials in another container type and leaves that row
   to a person.
 - The English bid-book still carries Chinese titles in chapter 3 and Annex B for non-logistics rows.

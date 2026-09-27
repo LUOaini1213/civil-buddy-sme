@@ -255,6 +255,21 @@ impl InstanceAuth {
         }
     }
 
+    /// Legacy deterministic tools share this boundary with the unified host;
+    /// selecting a path in chat does not grant access to another user's files.
+    pub fn authorize_local_path(&self, path: &Path) -> Result<(), String> {
+        if !self.requires_token() { return Ok(()); }
+        reject_links(path)?;
+        let canonical = path.canonicalize().map_err(|_| "local path is not accessible")?;
+        let root = self.roots.iter().find(|root| canonical.starts_with(root))
+            .ok_or("local path is outside this instance's allowed workspace")?;
+        if canonical.is_file() {
+            crate::runtime_core::WorkspaceContext::new(root).map_err(|e| e.to_string())?
+                .resolve_read(canonical.strip_prefix(root).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
     fn valid_token(&self, token: &str) -> bool {
         let Some(expected) = self.digest else {
             return false;

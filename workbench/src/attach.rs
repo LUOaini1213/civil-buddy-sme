@@ -592,6 +592,9 @@ pub fn import_local(paths: &Paths, session: &str, raw: &str) -> Result<Vec<Value
         }
         let mut out = Vec::new();
         for f in files {
+            // Recheck every child; a permitted directory can contain a link to
+            // another workspace, which must not become a copied attachment.
+            let f = allow_local_path(paths, &f.to_string_lossy())?;
             let name = f
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -618,6 +621,7 @@ pub fn allow_local_path(_paths: &Paths, raw: &str) -> Result<PathBuf, String> {
         return Err("请给出本机完整路径，例如桌面上的招标文件。禁止把 D:\\layout 当缺省作业根。".into());
     }
     let p = PathBuf::from(trimmed);
+    crate::product::auth::InstanceAuth::from_env()?.authorize_local_path(&p)?;
     let canon = if p.exists() {
         p.canonicalize().unwrap_or(p)
     } else {

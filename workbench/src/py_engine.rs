@@ -155,6 +155,7 @@ impl PyEngine {
             Ok(resp) => {
                 let status = resp.status();
                 let ct = resp.headers().get(reqwest::header::CONTENT_TYPE).cloned();
+                let disposition = resp.headers().get(reqwest::header::CONTENT_DISPOSITION).cloned();
                 match resp.bytes().await {
                     Ok(bytes) => {
                         let mut out = Response::builder().status(status.as_u16());
@@ -162,6 +163,9 @@ impl PyEngine {
                             if let Ok(v) = ct.to_str() {
                                 out = out.header(axum::http::header::CONTENT_TYPE, v);
                             }
+                        }
+                        if let Some(disposition) = disposition {
+                            out = out.header(axum::http::header::CONTENT_DISPOSITION, disposition);
                         }
                         out.body(Body::from(bytes))
                             .unwrap_or_else(|_| Response::new(Body::from("engine response")))

@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXTRA = (
     "SECURITY.md", "docs/civil-buddy/release-handoff.md",
     "docs/civil-buddy/sme-integration.md", "README.zh.md",
+    "docs/civil-buddy/acceptance/sme-preview-checklist.md",
     "scripts/unified_acceptance.py", "scripts/test_unified_runtime_http.py",
     "examples/facade-demo/README.md", "examples/facade-demo/facade_itt_doc.md",
     "examples/facade-demo/facade_panels.xlsx", "examples/facade-demo/facade_panels_rev_b.xlsx",

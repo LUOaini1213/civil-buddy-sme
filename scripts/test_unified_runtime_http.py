@@ -125,6 +125,7 @@ def legacy_session_handoff(first, first_cookie, second, second_cookie, directory
     require(done.get("wrote") is True and done.get("deliverables"), "Deterministic legacy draft did not produce artifacts")
     require(done.get("submit_blocked") is True, "Draft was incorrectly represented as releasable")
     before = json_request(first.base, "/api/sessions/" + sid, cookie=first_cookie)
+    (directory / "source-detail.json").write_text(json.dumps(before, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     require(before.get("deliverables") and len(before.get("attachments", [])) == 1,
             "Legacy session details do not restore artifacts and selected attachments")
 
@@ -133,12 +134,17 @@ def legacy_session_handoff(first, first_cookie, second, second_cookie, directory
         for row in attachments:
             path = "/api/file?" + urllib.parse.urlencode({"session": session, "upload": row["id"]})
             code, _, body = request(instance.base, path, cookie=cookie)
-            require(code == 200 and body, f"Attachment download failed with HTTP {code}")
+            require(code == 200 and body, f"Attachment download failed with HTTP {code}: {body[:300]!r}")
             attachment_bytes.append((row["name"], body))
         for row in deliverables:
             path = "/api/file?" + urllib.parse.urlencode({"path": row["path"]})
             code, _, body = request(instance.base, path, cookie=cookie)
-            require(code == 200 and body, f"Artifact download failed with HTTP {code}")
+            require(code == 200 and body, f"Artifact download failed with HTTP {code}: {body[:300]!r}")
+            portable = "/api/file?" + urllib.parse.urlencode({"session": session, "run": row["run_id"],
+                                                             "file": Path(row["path"]).name, "name": row["name"]})
+            portable_code, _, portable_body = request(instance.base, portable, cookie=cookie)
+            require(portable_code == 200 and portable_body == body,
+                    f"Portable artifact link differs from original: HTTP {portable_code}: {portable_body[:300]!r}")
             artifact_bytes.append((row["name"], body))
         return Counter(attachment_bytes), Counter(artifact_bytes)
 
@@ -147,6 +153,9 @@ def legacy_session_handoff(first, first_cookie, second, second_cookie, directory
     foreign_file = "/api/file?" + urllib.parse.urlencode({"path": before["deliverables"][0]["path"]})
     require(request(second.base, foreign_file, cookie=second_cookie)[0] in (400, 403, 404),
             "Another named instance could read source artifacts without importing a package")
+    foreign_upload = "/api/file?" + urllib.parse.urlencode({"session": sid, "upload": upload["id"]})
+    require(request(second.base, foreign_upload, cookie=second_cookie)[0] in (400, 403, 404),
+            "Another named instance could read source attachment without importing a package")
     status, headers, archive = request(first.base, f"/api/sessions/{sid}/export", cookie=first_cookie, timeout=120)
     require(status == 200 and "zip" in headers.get("Content-Type", ""), f"Session export failed with HTTP {status}")
     (directory / "legacy-session.zip").write_bytes(archive)
@@ -169,7 +178,11 @@ def legacy_session_handoff(first, first_cookie, second, second_cookie, directory
     copied_sid = imported["session_id"]
     require(imported.get("ok") is True and imported.get("confirmation_reset") is True and copied_sid != sid,
             "Import did not create a new task with confirmation reset")
+    listing = json_request(second.base, "/api/sessions", cookie=second_cookie)["sessions"]
+    require(any(row["session_id"] == copied_sid for row in listing), "Imported session is missing from the task list")
+    require(not any(row["session_id"] == sid for row in listing), "Source session leaked into another instance's task list")
     restored = json_request(second.base, "/api/sessions/" + copied_sid, cookie=second_cookie)
+    (directory / "imported-detail.json").write_text(json.dumps(restored, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     require(restored["transcript"] == before["transcript"], "Imported original conversation changed")
     require(restored["expert_ids"] == before["expert_ids"], "Imported selected expert changed")
     copied_uploads = restored["attachments"]
@@ -196,6 +209,7 @@ def legacy_session_handoff(first, first_cookie, second, second_cookie, directory
               "source_session": sid, "imported_session": copied_sid, "different_named_instances": True,
               "attachments": len(copied_uploads), "deliverables": len(restored["deliverables"]),
               "archive_sha256": sha256(archive).hexdigest(), "attachment_and_artifact_bytes_equal": True,
+              "portable_artifact_links_preserved": True,
               "source_artifact_cross_instance_access_blocked": True,
               "original_conversation_preserved": True, "source_unchanged": True, "confirmation_reset": True,
               "new_high_risk_operation_blocked": True, "rust_workspace_turns_included": False}
