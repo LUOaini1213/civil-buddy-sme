@@ -29,8 +29,8 @@ _AMBIGUOUS_REASONS = {
     "variation": "整理变更签证的事实、依据与工程量栏",
 }
 _PREFIX = r"(?:(?:请帮我|帮我|麻烦|请|这次|本次|暂时|现在|进一步|继续|接着|先|再|仅仅|只需|只要|仅|只)\s*)*"
-_NEGATED = re.compile(r"^" + _PREFIX + r"(?:不要|不用|无需|暂不|不需要|不想|不做|不写|不生成|别|禁止|我不(?:想|需要|打算|要求))"
-                      r"|(?i:^(?:(?:please|pls|just)\s+)?(?:don[’']?t|dont|do\s+not|no\s+need|not\s+(?:yet|now)|never|stop|hold\s+off|skip|cancel)(?=\s+[a-z]|\s*$))")
+_NEGATED = re.compile(r"^" + _PREFIX + r"(?:不要|不用|无需|暂不|不需要|不想|不做|不写|不生成|别(?!忘)|禁止|我不(?:想|需要|打算|要求))"
+                      r"|(?i:^(?:(?:please|pls|just)\s+)?(?:(?:don[’']?t|dont|do\s+not|never)(?!\s+forget)|no\s+need|not\s+(?:yet|now)|stop|hold\s+off|skip|cancel)(?=\s+[a-z]|\s*$))")
 # 意图判定用的三张词表，各分组；每一组带来多少请求、又放进来多少提问，
 # 见 scripts/eval_task_intent.py --variant all（基准 test/benchmarks/task_intent）。
 # "core" 三组合起来就是改动前的写法，保留它是为了随时能量出「之前是多少」。
@@ -151,28 +151,70 @@ _LINK_CUE = re.compile(
 # whether X meets Y" and "which statements does the plan support?" ask for it to be run.
 _ASKS_ABOUT = re.compile(r"(?i)(?:^|[.?!]\s+)\W*(?:how|why|what|when|where|who)\b|怎么|怎样|如何|为什么|为何|什么|是啥")
 _LINK_REFUSED = re.compile(
-    r"(?i)(?:\b(?:not|never|without|no)|n[’']t)\b(?:\W+\w+){0,5}?\W+(?:link(?:ing)?|check(?:ing)?|cross-check(?:ing)?"
+    r"(?i)(?:\b(?:not|never|without|no)|n[’']t)\b(?!\s+forget\b)(?:\W+\w+){0,5}?\W+(?:link(?:ing)?|check(?:ing)?|cross-check(?:ing)?"
     r"|match(?:ing)?|compar(?:e|ing)|map(?:ping)?)\b"
     r"|\b(?:ignor(?:e|ing)|skip(?:ping)?|disregard(?:ing)?|leave\s+out|hold\s+off(?:\s+on)?)\b(?:\W+\w+){0,3}?\W+"
     r"(?:clauses?|tender|itt|link|linking|check|requirements?)\b"
     r"|(?:不要|别|无需|不用|暂不|先不|不想|跳过|忽略)\S{0,6}?(?:核对|对照|联动|比对|匹配|条款)")
-_LINK_ACTION = re.compile(
-    r"(?i)(?:^|[，,:;.!?]\s*)\s*" + _EN_LEAD
-    + r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?"
-    r"(?:link|match|map|compare|(?:cross-)?check|verify|answer)\b"
-    r"|^" + _PREFIX + r"(?:核对|对照|比对|匹配|把|用|按招标|招标装柜联动|投标装柜联动|标书装柜联动)")
-_LINK_CHECK_QUESTION = re.compile(
-    r"(?i)^\s*(?:do|does)\b.{0,500}\b(?:comply|meet|satisfy)\b"
-    r"|\bwhich\s+(?:bid\s+)?statements\b.{0,100}\bplan\b.{0,80}\bsupport\b"
-    r"|^装箱单.{0,500}(?:符合|满足).{0,500}吗[？?]?$")
 
 
-def _link_requests_execution(text: str) -> bool:
-    """A named link is a topic, not authorization. Promote only a positive action/check request."""
+def _link_read_only(text: str) -> bool:
+    """An explanation or a question about the link ("Explain ... using Y.xlsx as context"): a topic, not authorization."""
     clean = _FILE.sub("〔文件〕", _positive_text(_QUOTED.sub("〔引用〕", text)))
-    if _READ_REQUEST.search(clean) or _ASKS_ABOUT.search(clean):
-        return False
-    return bool(_LINK_ACTION.search(clean) or _LINK_CHECK_QUESTION.search(clean))
+    return bool(_READ_REQUEST.search(clean) or _ASKS_ABOUT.search(clean))
+
+
+# Look-alikes (review of #67, test/benchmarks/link_routing/dev_round3.json). A request that names both files and a
+# link word is not yet a request for the run, which writes ~13 files:
+#   excluded   "Pack X without checking Y", "No need to link X to Y", "don't check it against Y": the link is ruled
+#              out, so wants_link is false and the rest of the request (pack X) goes to its own post;
+#   not asked  advice ("Should I / Do I need to / Is it worth / Would it make sense ..."), a hypothetical ("If I
+#              check ..."), past tense or someone else's work ("I already checked", "My colleague checked", "Has
+#              anyone checked"), 要不要 / 应该 / 需不需要 / 已经...过: the link is the topic, so a question about it
+#              gets the link's answer, but nothing runs (intent chat);
+#   asked      everything else must still say so: a closed compliance question ("Does / Is / Can X meet, comply
+#              with, fit ... Y?", "X 能满足 Y 的条款吗？"), "check whether / if", "which statements / clauses", or an
+#              imperative at a clause start ("Check / Match / Link / Verify / Answer ...", "核对 / 对照 / 用 ...").
+_EN_SUBJECT_START = re.compile(
+    r"(?i)(?:i|i[’']m|i[’']ve|we|you|they|he|she|it|my|our|your|their|his|her|its|the|this|that|these|those|a|an|someone|somebody"
+    r"|anyone|anybody|everyone|nobody|yesterday|today|tomorrow|last|once|when|whenever|after|before|since|until|as|if|because"
+    r"|here|there|maybe|perhaps|probably|hopefully)\b")
+_PARTICIPLE_START = re.compile(r"(?i)(?!(?:bring|string|need|proceed|feed|embed|speed|shed|seed)\b)[a-z-]{2,}(?:ed|ing)\b")
+_LINK_WORD = r"(?:(?:cross-)?check|link|match|compar|verif|reconcil)\w*"
+_LINK_DONE = r"(?:(?:cross-)?checked|linked|matched|compared|verified|reconciled)"
+_LINK_ZH_VERB = r"(?:核对|对照|比对|匹配|联动|检查)"
+_SUBJECT = (r"(?:i|we|you|they|he|she|someone|somebody|my\s+\w+|our\s+\w+|his\s+\w+|her\s+\w+|their\s+\w+"
+            r"|the\s+(?:pm|pe|qs|estimator|engineer|client|team|consultant))")
+_LINK_EXCLUDED = re.compile(
+    r"(?i)(?:\b(?:without|skip(?:ping|ped)?|no\s+need\s+to|don['’]?t(?!\s+forget)|do\s+not(?!\s+forget)|not|no)|\bw/o)\s+(?:\w+\s+){0,2}"
+    + _LINK_WORD + r"|不(?:用|要|必|需要?)(?:先|再)?(?:把)?[^，。；;？?]{0,20}?" + _LINK_ZH_VERB
+    + r"|跳过[^，。；;]{0,20}?" + _LINK_ZH_VERB)
+_LINK_NOT_ASKED = re.compile(
+    r"(?i)(?:^|[.?!;:,，]\s*)\W*should\b|\bshould\s+(?:i|we|you|they)\b|\bwould\s+it\b|\bis\s+it\s+worth\b"
+    r"|\bworth\s+(?:\w+\s+){0,2}" + _LINK_WORD + r"|\bmake\s+sense\b|\bdo\s+(?:i|we)\s+(?:really\s+)?(?:need|have)\s+to\b"
+    r"|\bneed\s+(?:i|we)\b|\bif\s+(?:i|we|you|they)\s+(?:\w+\s+){0,2}" + _LINK_WORD
+    + r"|\b(?:has|have|did)\s+(?:anyone|anybody|someone|somebody)\b"
+    r"|\balready\s+(?:\w+\s+){0,2}?" + _LINK_DONE + r"\b|\b" + _LINK_DONE + r"\b[^.?!]{0,80}\balready\b"
+    r"|\b" + _SUBJECT + r"\s+(?:have\s+|has\s+|had\s+)?" + _LINK_DONE + r"\b"
+    r"|\b" + _SUBJECT.replace("you|", "") + r"\s+(?:will|['’]ll|would|might|may|could|plan\s+to|intend\s+to|(?:am|are|is)\s+going\s+to)"
+    r"\s+(?:\w+\s+)?" + _LINK_WORD
+    # deferred ("Remind me tomorrow to check ...", "Note to self: ...", "Wait until Monday, then check ...") and a
+    # sentence that opens with the check already done or as its subject ("Linked X and Y yesterday", "Checking X against
+    # Y was a waste of time"); review of PR #75, dev_round3.json origin 'review-r3'
+    + r"|\bremind\s+(?:me|us|him|her|them)\b|\bnote\s+to\s+(?:self|myself)\b|\b(?:wait|hold\s+on)\s+(?:until|till|for)\b"
+    r"|\b(?:tomorrow|next\s+(?:week|month|time)|at\s+some\s+point|eventually|some\s*day)\b"
+    r"|(?:^|[.?!;]\s+)\W*(?:already\s+)?(?:" + _LINK_DONE + r"|(?:cross-)?checking|linking|matching|comparing|verifying"
+    r"|reconciling)\b"
+    + r"|(?:要不要|应不应该?|该不该|需不需要|用不用|是否需要|有没有必要|值得|应该|如果|假如|要是)(?:先|再|现在)?[^，。；;？?]{0,20}?"
+    + _LINK_ZH_VERB + r"|已经[^，。；;？?]{0,20}?" + _LINK_ZH_VERB + r"|" + _LINK_ZH_VERB + r"过(?!程)"
+    + r"|(?:提醒我|回头|以后|改天|明天|下周|下个月|晚点|稍后)[^，。；;？?]{0,20}?" + _LINK_ZH_VERB)
+_LINK_ASKED = re.compile(
+    r"(?i)(?:^|[.?!;:]\s+|[,，]\s*)\W*(?:(?:please|pls|kindly|now|then|just|also|and|so|ok|okay|can\s+you|could\s+you|would\s+you"
+    r"|will\s+you)[\s,]+)*(?:(?:does|do|will|is|are|can|could)\b[^.?!]{0,200}?\b(?:compl(?:y|ies|iant|iance)|meets?|satisf\w*|fits?|conform\w*)"
+    r"|(?:link|match|(?:cross-)?check|compare|verify|reconcile|answer|write|draft|prepare|respond|plan|pack|tell\s+me\s+which)\b)"
+    r"|\b(?:check|see|verify|confirm|find\s+out)\s+(?:whether|if)\b|\bwhich\s+(?:\w+\s+){0,2}(?:statements?|clauses?)\b"
+    r"|(?:^|[，,。；;：:！!\n])\s*(?:请|帮我|麻烦|先|再|现在)*\s*(?:核对|对照|比对|匹配|联动|检查|按|用|根据|把)"
+    r"|(?:满足|符合|达到)[^。？?]{0,120}?(?:吗|么)\s*[？?]?\s*$|是否(?:满足|符合)")
 
 
 def _names_tender_and_list(text: str) -> bool:
@@ -194,7 +236,28 @@ def wants_link(message: str) -> bool:
     text = _positive_text(text)
     if any(phrase in text for phrase in _LINK_ZH) or _LINK_EN.search(text):
         return True
-    return _names_tender_and_list(text) and bool(_LINK_CUE.search(_FILE.sub(" ", text)))
+    rest = _FILE.sub(" ", text)
+    return _names_tender_and_list(text) and bool(_LINK_CUE.search(rest)) and not _LINK_EXCLUDED.search(rest)
+
+
+def link_not_asked(message: str) -> bool:
+    """A link request that does not ask for the run: advice, a hypothetical, past tense, someone else's work."""
+    return bool(_LINK_NOT_ASKED.search(_FILE.sub(" ", _QUOTED.sub("〔引用〕", message or ""))))
+
+
+def _asks_for_link_run(text: str) -> bool:
+    rest = _FILE.sub(" ", text)
+    if _ASKS_ABOUT.search(rest):
+        return False
+    if _LINK_ASKED.search(rest):
+        return True
+    # An English sentence that is not a question and does not open with a subject opens with its verb: an imperative
+    # ("Set Y.xlsx beside X.md", "Answer X.md from Y.xlsx"). "The PM checked ...", "Once ... I will check ..." open
+    # with a subject or a time clause and stay a chat.
+    # A first word in -ed / -ing is a participle or a gerund, not an imperative ("Priced Y.xlsx, then ...").
+    head = rest.lstrip(" \t\r\n\"'([")
+    return (head[:1].isascii() and not _QUESTION.search(text) and not _EN_SUBJECT_START.match(head)
+            and not _PARTICIPLE_START.match(head))
 
 
 def _positive_text(message: str) -> str:
@@ -326,10 +389,20 @@ def route_task(message: str, expert_ids: list[str] | None = None) -> dict:
     if not explicit and wants_link(text):
         ids = ["bid-parse"]
         result["reason"] = "招标与装柜联动：先读招标的物流条款，再按条款柜型用点名的装箱单真算，逐条写应答并记联动。"
-        if result["intent"] == "chat" and _FILE.search(text) and _link_requests_execution(text):
+        phrase = any(p in text for p in _LINK_ZH) or bool(_LINK_EN.search(text))
+        if link_not_asked(text):
+            # "Should I check Y.xlsx against X.md?", "I already checked ...", "要不要把 ... 对照一下？": about the link,
+            # not a request for it. Nothing runs, whatever the verbs say.
+            result["intent"] = "chat"
+        elif result["intent"] == "chat" and _FILE.search(text) and not _link_read_only(text) and (
+                (phrase and not _QUESTION.search(text)) or (_names_tender_and_list(text) and _asks_for_link_run(text))):
             # "按招标 X.md 和 Y.xlsx 出物流应答" names its inputs: it asks for the run. So does "check whether Y.xlsx meets
-            # the clauses of X.md" or "does Y.xlsx comply with X.md?"; "how do I check Y.xlsx against X.md?" does not.
+            # the clauses of X.md", "does Y.xlsx comply with X.md?" or "Match X.md against Y.xlsx"; "how do I check
+            # Y.xlsx against X.md?" and "My colleague checked Y.xlsx against X.md." do not.
             result["intent"] = "run"
+        elif result["intent"] != "chat" and not phrase and not _asks_for_link_run(text):
+            # the rules read a request, but nothing in it asks for this run ("We matched Y.xlsx to X.md last month")
+            result["intent"] = "chat"
     elif not explicit:
         comprehensive = (bool(re.search(r"招标|投标|技术标", text))
                          and bool(re.search(r"综合|全面|整体|成套|完整|全套|三岗", text))

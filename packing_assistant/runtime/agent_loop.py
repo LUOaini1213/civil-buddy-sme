@@ -7,7 +7,9 @@ only orchestrates. submit_blocked stays true.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
@@ -49,9 +51,21 @@ _PIPE_KEYS = (
 )
 
 
+_SID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$")
+
+
 def _safe_sid(session_id: str) -> str:
-    sid = (session_id or "default").replace("..", "_").replace("/", "_").replace("\\", "_")
-    return sid or "default"
+    """One path component for a session's output folder. An id of [A-Za-z0-9._-] that starts with a letter or digit,
+    does not end in a dot, is at most 128 long and is no Windows device name is used as it is. Anything else ('.',
+    '..', '...', 'C:', a space, a slash, non-ASCII, CON) becomes 'sid-' + a hash of it: it can never name the output
+    root, a parent, a drive or a device, and two different ids never share a folder. The link-record reader rglobs
+    this folder, so '.' must never reach it."""
+    from pathlib import PureWindowsPath
+
+    sid = str(session_id or "default")
+    if _SID_RE.match(sid) and not PureWindowsPath(sid).is_reserved():
+        return sid
+    return "sid-" + hashlib.sha256(sid.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
 def _scrub(text: str) -> str:
@@ -728,7 +742,7 @@ def run_agent(
                 sched.transition(run, "waiting_hitl")
                 who = f"{exp.name} " if exp else ""
                 reply = (f"approval={cfg.approval}: {who or 'this post '}writes only after a person types the sign-off sentence "
-                         f"\"{CONFIRM_EN}\" (or 「{CONFIRM}」) in this turn. Nothing was written."
+                         f"\"{CONFIRM_EN}\" (or 「{CONFIRM}」) on its own. Nothing was written."
                          if english_request(text) else f"approval={cfg.approval}：{who}写盘须确认句「{CONFIRM}」。本轮未写盘。")
                 messages.append({"role": "assistant", "content": reply})
                 bus.emit(run.run_id, "hitl", {"required": True})

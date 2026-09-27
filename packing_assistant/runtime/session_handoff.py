@@ -12,7 +12,11 @@ _DIR = default_out_root(_ROOT)
 
 
 def _safe(session_id: str) -> str:
-    return (session_id or "default").replace("..", "_").replace("/", "_").replace("\\", "_") or "default"
+    # one rule for a session's folder name, shared with the link record, the packing snapshot and the job files
+    # (the old rule here kept '.', so session "." wrote into demo/out itself)
+    from packing_assistant.runtime.agent_loop import _safe_sid
+
+    return _safe_sid(session_id)
 
 
 def handoff_path(session_id: str) -> Path:

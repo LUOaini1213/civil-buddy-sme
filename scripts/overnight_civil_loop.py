@@ -36,7 +36,7 @@ APPLY_LOCK = OUT / "apply.lock"
 
 DEFAULT_END = "2026-08-20T08:30:00+08:00"
 TZ8 = timezone(timedelta(hours=8))
-UA = "Mozilla/5.0 (compatible; CivilBuddyOvernightEval/1.0; +https://github.com/LUOaini1213/civil-buddy)"
+UA = "Mozilla/5.0 (compatible; CivilBuddyOvernightEval/1.0; +https://github.com/LUOaini1213/civil-buddy-sme)"
 
 PAGES = (
     {

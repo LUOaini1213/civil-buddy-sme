@@ -823,11 +823,11 @@ def all_experts(base: str, catalog: dict, extracted: Path) -> list[dict]:
         sid = "post-" + uuid4().hex[:12]
         record = {"expert": eid, "session": sid}
         try:
-            message = "写一份本岗草稿，所有未提供的内容保持待填。我明白，将由持证人员签认"
+            message = "写一份本岗草稿，所有未提供的内容保持待填。"
             if eid == "bid-parse":
                 message += "\n以下是验收用招标原文：投标人必须提交营业执照复印件；施工工期为60天。"
             done = chat(base, sid, message,
-                        expert_ids=[eid], confirm_ok=True)
+                        expert_ids=[eid], confirm_ok=True, confirm_text="我明白，将由持证人员签认")
             record.update(ok=done.get("ok"), wrote=done.get("wrote"),
                           hitl_pending=done.get("hitl_pending", False), text=done.get("text", ""),
                           deliverables=done.get("deliverables", []), verified_docx=0)

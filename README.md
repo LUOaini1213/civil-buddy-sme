@@ -32,10 +32,13 @@ stay with people (`[TO FILL]`); nothing is booked or submitted.
 **Submitted version.** The version submitted for NUS-ISS shortlisting is release
 [v0.7.0](https://github.com/LUOaini1213/civil-buddy-sme/tree/v0.7.0) (commit `0c0e803`); the figures and
 file:line references in the submitted PDFs were measured there. Since then `main` has added a unified Rust
-workbench (PR #1) and a `/demo` page and a Lightsail guide (PR #2); none of these are in the PDFs. The façade
-demo's figures are unchanged. Smaller differences on `main`: the Rust workbench refuses a bare `confirm_ok`, the
-Python surfaces also accept one English sign-off sentence, the English bid-book has no Chinese rows, and the
-tender parse keeps the liquidated-damages and retention rows for a person.
+workbench (PR #1) and a `/demo` page and a Lightsail guide (PR #2), and on 2026-09-28 it merged the later
+review rounds of the development line (how the link reads mass limits and clauses, English verdict and record
+guards, panel lists with title rows and packaging-equipment rows, a hardened `/demo` upload, a stricter sign-off
+rule); none of these are in the PDFs. The façade demo's figures are unchanged. Smaller differences on `main`: the
+Rust workbench refuses a bare `confirm_ok`, the Python surfaces also accept one English sign-off sentence but only
+typed on its own, the English bid-book has no Chinese rows, and the tender parse keeps the liquidated-damages and
+retention rows for a person.
 
 ## Try it: one command, offline, no key
 
@@ -126,9 +129,11 @@ Enforced in code, not in prompts; shipped as the security baseline (pull request
 3. **Only a person's typed sentence approves high-risk work.** The 19 high-risk posts in
    `workbench/seed.json` (structure, geotechnics, safety briefing, …) write nothing until a person types
    `我明白，将由持证人员签认` or its one English equivalent, "I understand; a licensed person will sign
-   this off." (the Rust workbench accepts only the Chinese sentence), and it covers that turn only. The
+   this off." (the Rust workbench accepts only the Chinese sentence), and it covers that turn only. It is
+   typed on its own, in the confirmation box, at the terminal's `approve>` prompt or in the desktop dialog:
+   on the Python surfaces the sentence written into a task, or quoted from a tender, approves nothing. The
    sentence is asked for only when a high-risk post is selected or loaded; in the Rust workbench's default
-   automatic mode the model decides whether to load a post, and a sentence pasted on a line of its own
+   automatic mode the model decides whether to load a post, and there a sentence pasted on a line of its own
    still approves (both are open items in [SECURITY.md](SECURITY.md)).
    The bid posts (bid-parse, bid-tech, bid-compliance) are **low risk** in `seed.json`: they draft without
    the sentence, but every draft carries `submit_blocked = true` and the qualification / rejection rows
@@ -143,7 +148,9 @@ Enforced in code, not in prompts; shipped as the security baseline (pull request
 ## Where it runs (AWS, stated honestly)
 
 - **Target:** one AWS Lightsail Linux instance per company, used by employees in a browser behind TLS.
-  **The Lightsail instance is not running yet**; no cloud host has run the image.
+  **The Lightsail instance is not running yet** (we are waiting for the team's AWS account); no cloud host has
+  run the image. Meanwhile a temporary live instance of the same Docker image, behind its access token, runs on
+  our own machine behind a tunnel; its address is given to the organisers, not published here.
 - **Docker image:** CI's `docker-smoke` job (pull request #64, merge commit `16316df`) builds the
   gateway image on every push and checks that it refuses to start without `CIVIL_TOKEN` (exit 3),
   answers 401 without the token and 200 with it, parses the synthetic ITT through the API, and keeps a
@@ -153,7 +160,8 @@ Enforced in code, not in prompts; shipped as the security baseline (pull request
 - **Amazon Bedrock:** configurable through the OpenAI-compatible Chat Completions setting, but **never
   run** from this repository. No result in this repository comes from a live model.
 - Operator guides: [minimal deployment](docs/deploy-minimal.md) and [Lightsail runbook](docs/deploy-aws-lightsail.md).
-  The gateway also provides the token-protected `/demo` page for tender and panel-list uploads.
+  The gateway also provides the token-protected `/demo` page: the linked run on the synthetic façade job in one
+  click, or on a tender and a panel list you upload (size, row and cell limits; at most 2 runs at once).
   What each post-submission preview adds, and its known limits, is listed in the notes of the v0.8.0 preview
   [releases](https://github.com/LUOaini1213/civil-buddy-sme/releases).
 
@@ -282,9 +290,9 @@ As of `cab9249`, 98 of the 447 commits on `main` (22%) are authored as `Packing 
 (`git log --format=%an | sort | uniq -c`): changes drafted by an agent and committed under their own
 name, then reviewed by a person before landing on `main`. It is part of the human-in-the-loop process,
 not a second author. The commits after `cab9249` (`0c0e803`, the v0.7.0 README commit; pull
-requests #1–#2 with their merges; later documentation commits) are all authored under the maintainer's
-name; pull requests #1–#2 were
-drafted by a Codex session, partly from earlier agent-drafted development commits.
+requests #1–#2 with their merges; later documentation commits; the 2026-09-28 merge of the development line)
+are all authored under the maintainer's name; pull requests #1–#2 were drafted by a Codex session, partly from
+earlier agent-drafted development commits, and the development line's commits keep their own authors.
 
 ## Licence
 
