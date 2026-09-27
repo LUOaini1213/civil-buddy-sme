@@ -16,6 +16,8 @@ jobs:
   # 评委下载运行的正是这个 exe，它的测试不能只靠本机想起来才跑。
   rust:
     runs-on: ubuntu-latest
+    # a hung cargo test or host smoke used to hold the runner for GitHub's 360-minute default; runs take ~3 min
+    timeout-minutes: 30
     env:
       PYTHON_DOTENV_DISABLED: "1"
       CIVIL_PYTHON: python
@@ -41,6 +43,8 @@ jobs:
 
   smoke:
     runs-on: ubuntu-latest
+    # runs take ~13 min; without this a hang held the runner for the 360-minute default
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
