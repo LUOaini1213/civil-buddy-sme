@@ -130,6 +130,8 @@ CHECKS = (
     Check("civil-config", ("scripts/test_civil_config.py",)),
     Check("civil-workspace", ("scripts/test_civil_workspace.py",)),
     Check("model-loop", ("scripts/test_model_loop.py",)),
+    # bounded retry of one model request (429/5xx/timeouts/resets) against a fake endpoint on 127.0.0.1
+    Check("model-retry", ("scripts/test_model_retry.py",), timeout=300),
     # model mode on the link: deterministic first, the model only explains; its claims checked against the record
     Check("model-mode-link", ("scripts/test_model_mode_link.py",), timeout=300),
     # 12 frozen requests against a scripted OpenAI-compatible server on 127.0.0.1 (no network, no key)
