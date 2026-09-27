@@ -4,7 +4,7 @@
 
 设计日期：2026-09-21。修订版 v0.5：在已有 Agent 基础设施上增加共享 PDF、Excel、Word 读改技能、文档修改协议，以及 LLM/Jev 参与跨文件工程任务的具体流程。
 
-核对基线：已合并的 [PR #55](https://github.com/LUOaini1213/civil-buddy/pull/55) head `8ab5677`、merge `279da2c`，远端 main `b3ccc72`；队友 cuizhi-chat 的 [PR #56](https://github.com/LUOaini1213/civil-buddy/pull/56) head `f328693`；你的 [PR #58](https://github.com/LUOaini1213/civil-buddy/pull/58) head `3e93025`。后两项核对时仍是开放 PR。主目录 main 仍在 `40ba86c`；CAD 工作区本轮另有 planning/routing 的未提交修改及新文件，本文读改能力仍以固定提交 `3e93025` 为准，未将进行中的其他开发算作已验证能力。本轮未修改、切换或合并项目源码。
+核对基线（均为早期开发工作中的提交，已在本仓库历史中）：已合并的会话/事件基线 head `8ab5677`、merge `279da2c`，当时 main `b3ccc72`；前端模块化分支 head `f328693`；CAD 与工程分支 head `3e93025`。后两项核对时尚未合并。下文的 PR55、PR56、PR57、PR58 是这些早期开发分支的简称，不是本仓库的 PR 编号。主目录 main 仍在 `40ba86c`；CAD 工作区本轮另有 planning/routing 的未提交修改及新文件，本文读改能力仍以固定提交 `3e93025` 为准，未将进行中的其他开发算作已验证能力。本轮未修改、切换或合并项目源码。
 
 状态：可用于分工和实现的设计稿。已做固定版本源码核对和部分现有离线回归，没有实现新 Rust 运行时、使用 API Key 或执行真实模型验收。现有能力须结合所属分支阅读；拟议接口、模块和迁移步骤是目标规格。
 
@@ -391,22 +391,22 @@ Python 工具协议带 version、call_id、tool、session_id/turn_id/run_id、�
 
 | 资产 | 已确认实现 | 采用方式与限制 |
 |---|---|---|
-| SSE 日志与续流 | [chat_service.py:712](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/demo/chat_service.py#L712)、[app.py:869](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/demo/app.py#L869)：seq、JSONL、SSE id、after/Last-Event-ID | 直接保留前端处理器、去重和重连行为；Rust 移植生产者并增加 turn_id 游标校验。现有写日志失败只记错误，不应直接宣称具备事务持久性 |
-| 重启中断状态 | [chat_service.py:629](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/demo/chat_service.py#L629)：state.json、PID、heartbeat、stale | 保留中断展示和历史回放；Rust 内部 interrupted 映射到兼容状态。不得把它写成崩溃后继续执行工具 |
-| 前台/后台同一任务 | [chat_service.py:873](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/demo/chat_service.py#L873)：同 producer、lease、turn_id，POST 返回 202 | 保留 session/turn 对象与同会话排他；Agent 子任务新增在内部 Task 层，不复活另一套用户可见 thread |
-| 附件与下载引用 | [uploads.py:94](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/demo/uploads.py#L94)、[attach.rs:19](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/workbench/src/attach.rs#L19)、[app.py:956](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/demo/app.py#L956)：session/uploads、原件/提取文本/metadata、逻辑引用 | 数据格式、备份语义和前端引用直接保留；服务实现逐步移植，路径根换成 WorkspaceContext |
-| 当前工作台交互 | [app.js:683](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/demo/static/app.js#L683)、[app.js:1902](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/demo/static/app.js#L1902)：上传进度/重试、附件选择、事件恢复、任务草稿 | 保留行为与测试，具体模块边界采用 PR56；不能把已完成的产品能力缩回简单聊天框 |
-| 后端能力声明 | [api.rs:297](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/workbench/src/api.rs#L297)：声明共享界面当前禁用的上传、取消等能力 | 保留机制，补充版本及所有能力键。新增能力缺字段按未支持处理；attachments=false 不代表没有上传代码，Rust 实际已有上传路由，需逐项验收后启用 |
-| IntentSpec | [intent_spec.py:14](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/packing_assistant/intent_spec.py#L14)：目标、预算、锁定项、物料范围和显式优先级 | 直接保留领域契约；Jev 只补充受约束建议，不覆盖明确输入 |
-| Team A/B 阶段 | [team_a.py:13](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/packing_assistant/teams/team_a.py#L13)、[team_b.py:13](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/packing_assistant/teams/team_b.py#L13)：成箱、确认、规划、装载、评估、风险、可视化 | 保留领域函数和阶段职责；由 Rust 管理用户授权及跨阶段状态。现有 Team 名称不等于多个独立 LLM 已经在协作 |
-| 有界重排 | [bounded_debate.py:218](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/packing_assistant/bounded_debate.py#L218)：critic/planner 提案、最多两轮、复算裁决 | 原规则作为基线，Jev 从合法动作列表提出建议；保留锁柜数、参数约束和工具裁决 |
-| 工具契约与审计 | [tool_contracts.py:1](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/packing_assistant/runtime/tool_contracts.py#L1)、[tool_engine.py:153](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/packing_assistant/runtime/tool_engine.py#L153) | 保留名称、输入输出约束和错误分类；迁移前冻结共享 schema，Rust 执行授权，不把 Python 线程超时复制成终止机制 |
-| 内部取消检查点 | [cancel.py:27](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/packing_assistant/runtime/cancel.py#L27)、[big_team.py:265](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/packing_assistant/teams/big_team.py#L265) | 原工具检查点直接保留，新增 Rust→Python 取消控制通道；外部 Java 等在途调用的终止能力要单独验收 |
-| 技能与 trace/storage | [expert_capabilities.py:26](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/packing_assistant/expert_capabilities.py#L26)、[trace_events.py:49](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/packing_assistant/trace_events.py#L49)、[storage.py:39](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/packing_assistant/storage.py#L39) | 复用 seed、生成技能、领域 trace schema 和 SQLite 基础，新增 Jev 决策事件与父子 ID 映射，分阶段统一写入者 |
+| SSE 日志与续流 | [chat_service.py:712](../../../demo/chat_service.py)、[app.py:869](../../../demo/app.py)：seq、JSONL、SSE id、after/Last-Event-ID | 直接保留前端处理器、去重和重连行为；Rust 移植生产者并增加 turn_id 游标校验。现有写日志失败只记错误，不应直接宣称具备事务持久性 |
+| 重启中断状态 | [chat_service.py:629](../../../demo/chat_service.py)：state.json、PID、heartbeat、stale | 保留中断展示和历史回放；Rust 内部 interrupted 映射到兼容状态。不得把它写成崩溃后继续执行工具 |
+| 前台/后台同一任务 | [chat_service.py:873](../../../demo/chat_service.py)：同 producer、lease、turn_id，POST 返回 202 | 保留 session/turn 对象与同会话排他；Agent 子任务新增在内部 Task 层，不复活另一套用户可见 thread |
+| 附件与下载引用 | [uploads.py:94](../../../demo/uploads.py)、[attach.rs:19](../../../workbench/src/attach.rs)、[app.py:956](../../../demo/app.py)：session/uploads、原件/提取文本/metadata、逻辑引用 | 数据格式、备份语义和前端引用直接保留；服务实现逐步移植，路径根换成 WorkspaceContext |
+| 当前工作台交互 | [app.js:683](../../../demo/static/app.js)、[app.js:1902](../../../demo/static/app.js)：上传进度/重试、附件选择、事件恢复、任务草稿 | 保留行为与测试，具体模块边界采用 PR56；不能把已完成的产品能力缩回简单聊天框 |
+| 后端能力声明 | [api.rs:297](../../../workbench/src/api.rs)：声明共享界面当前禁用的上传、取消等能力 | 保留机制，补充版本及所有能力键。新增能力缺字段按未支持处理；attachments=false 不代表没有上传代码，Rust 实际已有上传路由，需逐项验收后启用 |
+| IntentSpec | [intent_spec.py:14](../../../packing_assistant/intent_spec.py)：目标、预算、锁定项、物料范围和显式优先级 | 直接保留领域契约；Jev 只补充受约束建议，不覆盖明确输入 |
+| Team A/B 阶段 | [team_a.py:13](../../../packing_assistant/teams/team_a.py)、[team_b.py:13](../../../packing_assistant/teams/team_b.py)：成箱、确认、规划、装载、评估、风险、可视化 | 保留领域函数和阶段职责；由 Rust 管理用户授权及跨阶段状态。现有 Team 名称不等于多个独立 LLM 已经在协作 |
+| 有界重排 | [bounded_debate.py:218](../../../packing_assistant/bounded_debate.py)：critic/planner 提案、最多两轮、复算裁决 | 原规则作为基线，Jev 从合法动作列表提出建议；保留锁柜数、参数约束和工具裁决 |
+| 工具契约与审计 | [tool_contracts.py:1](../../../packing_assistant/runtime/tool_contracts.py)、[tool_engine.py:153](../../../packing_assistant/runtime/tool_engine.py) | 保留名称、输入输出约束和错误分类；迁移前冻结共享 schema，Rust 执行授权，不把 Python 线程超时复制成终止机制 |
+| 内部取消检查点 | [cancel.py:27](../../../packing_assistant/runtime/cancel.py)、[big_team.py:265](../../../packing_assistant/teams/big_team.py) | 原工具检查点直接保留，新增 Rust→Python 取消控制通道；外部 Java 等在途调用的终止能力要单独验收 |
+| 技能与 trace/storage | [expert_capabilities.py:26](../../../packing_assistant/expert_capabilities.py)、[trace_events.py:49](../../../packing_assistant/trace_events.py)、[storage.py:39](../../../packing_assistant/storage.py) | 复用 seed、生成技能、领域 trace schema 和 SQLite 基础，新增 Jev 决策事件与父子 ID 映射，分阶段统一写入者 |
 
 ### 必须修正的复用边界
 
-PR55 的 [chat_service.py:909](https://github.com/LUOaini1213/civil-buddy/blob/8ab5677ee7215a1f3c087ce23ee5ab15c7bcf29a/demo/chat_service.py#L909) 在写磁盘终态之前调用 lease.finish；内层执行器也会先释放 lease。查询逻辑会将“内存不活跃、磁盘仍 running”判作 stale。定向测试观察到一次磁盘仍为 running 的断言失败，单独复跑通过。因此记录为已观察到的时序竞态，不能声称每次必现；Rust 必须将终态提交和租约释放设计成一致转换。
+PR55 的 [chat_service.py:909](../../../demo/chat_service.py) 在写磁盘终态之前调用 lease.finish；内层执行器也会先释放 lease。查询逻辑会将“内存不活跃、磁盘仍 running”判作 stale。定向测试观察到一次磁盘仍为 running 的断言失败，单独复跑通过。因此记录为已观察到的时序竞态，不能声称每次必现；Rust 必须将终态提交和租约释放设计成一致转换。
 
 当前内存注册表和 PID 检查适用于单服务进程。需要多进程运行时，应引入有 owner/generation 的持久租约，不能仅把已有文件复制到共享目录就视为分布式任务系统。
 
@@ -442,10 +442,10 @@ demo/tests/test_links_and_cache.py::test_legacy_uploads_are_adopted_into_the_ses
 
 | 位置 / 分支 | 核对版本与状态 | 对本设计的影响 |
 |---|---|---|
-| 主目录 `C:\Users\LW\civil-buddy` | main `40ba86c`，相对已核对 origin/main 落后 35 个提交；有未跟踪工程文档及 outputs | 主目录的旧状态不能代表所有本地开发工作 |
+| 本地主目录 | main `40ba86c`，相对已核对 origin/main 落后 35 个提交；有未跟踪工程文档及 outputs | 主目录的旧状态不能代表所有本地开发工作 |
 | 远端 main | `b3ccc72`，已含 PR55 和共享模型回合修复 | 聊天、会话、事件与附件的稳定参考 |
-| 队友 `cuizhi-chat/civil-buddy` 的 `refactor/app-modules` | PR56 `f328693`，开放；相对 PR55 有 10 个提交 | 复用八模块前端、错误时已有产物、续流及后台任务行为 |
-| CAD 工作区 `C:\Users\LW\.codex\worktrees\cad-to-3d\civil-buddy` | PR58 `3e93025`，已推送、开放，工作区干净 | 复用 CAD、工程工具、版本记录、计划页面及 runtime 改进 |
+| 队友的 `refactor/app-modules` 分支 | PR56 `f328693`，开放；相对 PR55 有 10 个提交 | 复用八模块前端、错误时已有产物、续流及后台任务行为 |
+| 本地 CAD 工作区 | PR58 `3e93025`，已推送、开放，工作区干净 | 复用 CAD、工程工具、版本记录、计划页面及 runtime 改进 |
 | `feat/post-depth-g14-kb` | PR57 `79bcb58`，开放 | 知识、意图与评测增量；不算新增工程求解器 |
 
 本次核对过程中 PR58 从 `8359bc7` 更新到了 `3e93025`。工程层已包含在后者，不再标为未提交。队友 fork 的 main 与当前主仓库 main 没有可用的共同祖先比较；应沿已经移植到本仓历史的 PR56 分支集成，不能把 fork main 当作统一基线直接拉入。PR56 描述仍说“两个提交”，实际固定版本为十个增量提交，以源码和提交记录为准。
@@ -454,13 +454,13 @@ demo/tests/test_links_and_cache.py::test_legacy_uploads_are_adopted_into_the_ses
 
 | 领域 | 当前实现和证据 | Rust 所需适配 |
 |---|---|---|
-| CAD 原件、选集与建模 | [cad3d/projects.py](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/cad3d/projects.py#L166)：原件 hash、服务端重解析、选集、版本、项目包；[agent.py](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/cad3d/agent.py#L134)：从宿主选中项目和用户原话取事实 | 保留 document/project/selection/revision 引用；工作区、权限、操作记录由宿主管理 |
-| 截面性质 | [section.py](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/engineering/section.py#L10)：sectionproperties，材料区/孔洞、面积/形心/惯性矩、实体来源及输入 hash；已有 `cad_section_properties` 模型工具入口 | 最小 Rust 工具闭环首先接它；保留单位、实体定位、离散误差和能力边界 |
-| 梁/框架 | [frame.py](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/engineering/frame.py#L253)：Pynite 一阶弹性分析，显式 SI 节点/约束/材料/荷载 | 新增统一工具注册及来源绑定；不推断跨度/支座/荷载，不冒充规范验算 |
-| IFC 信息与版本 | [ifc.py](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/engineering/ifc.py#L69)：IfcTester IDS 检查、IfcDiff 同 schema / GlobalId 比较 | 保留输入摘要、规则来源与失败实体；不扩大成碰撞或结构安全分析 |
-| 施工计划 | [schedule.py](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/engineering/schedule.py#L225)：日期/依赖校验、修订冲突、保存与恢复；现有 Frappe Gantt 页面 | 统一项目作用域、保存与操作事件；当前不具备完整 CPM 或资源平衡 |
-| 分析记录 | [records.py](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/engineering/records.py#L131)：输入/结果快照、摘要、版本、原子写与乐观并发 | 保留快照格式及 `expected_revision` 冲突语义；抽离对 `demo.projects` 存储辅助函数的反向依赖 |
-| 固定计算 worker | [worker.py](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/engineering/worker.py#L33)：frame/section/ifc_check/ifc_diff 四种操作、受限输入输出、120 秒默认超时、kill+wait | Rust 持有进程和取消生命周期；包装版本协议，无需另做通用脚本执行器 |
+| CAD 原件、选集与建模 | [cad3d/projects.py](../../../packing_assistant/cad3d/projects.py)：原件 hash、服务端重解析、选集、版本、项目包；[agent.py](../../../packing_assistant/cad3d/agent.py)：从宿主选中项目和用户原话取事实 | 保留 document/project/selection/revision 引用；工作区、权限、操作记录由宿主管理 |
+| 截面性质 | [section.py](../../../packing_assistant/engineering/section.py)：sectionproperties，材料区/孔洞、面积/形心/惯性矩、实体来源及输入 hash；已有 `cad_section_properties` 模型工具入口 | 最小 Rust 工具闭环首先接它；保留单位、实体定位、离散误差和能力边界 |
+| 梁/框架 | [frame.py](../../../packing_assistant/engineering/frame.py)：Pynite 一阶弹性分析，显式 SI 节点/约束/材料/荷载 | 新增统一工具注册及来源绑定；不推断跨度/支座/荷载，不冒充规范验算 |
+| IFC 信息与版本 | [ifc.py](../../../packing_assistant/engineering/ifc.py)：IfcTester IDS 检查、IfcDiff 同 schema / GlobalId 比较 | 保留输入摘要、规则来源与失败实体；不扩大成碰撞或结构安全分析 |
+| 施工计划 | [schedule.py](../../../packing_assistant/engineering/schedule.py)：日期/依赖校验、修订冲突、保存与恢复；现有 Frappe Gantt 页面 | 统一项目作用域、保存与操作事件；当前不具备完整 CPM 或资源平衡 |
+| 分析记录 | [records.py](../../../packing_assistant/engineering/records.py)：输入/结果快照、摘要、版本、原子写与乐观并发 | 保留快照格式及 `expected_revision` 冲突语义；抽离对 `demo.projects` 存储辅助函数的反向依赖 |
+| 固定计算 worker | [worker.py](../../../packing_assistant/engineering/worker.py)：frame/section/ifc_check/ifc_diff 四种操作、受限输入输出、120 秒默认超时、kill+wait | Rust 持有进程和取消生命周期；包装版本协议，无需另做通用脚本执行器 |
 
 其中 CAD 截面已接模型工具；frame、IFC、计划主要接参数面板和 HTTP，仍需统一 Agent 工具注册。文档中已有的 102/102、浏览器及工程专项通过记录属于该开发分支的报告；本轮确认了源码，没有重跑全部工程验证或真实工程输入验收。
 
@@ -468,11 +468,11 @@ demo/tests/test_links_and_cache.py::test_legacy_uploads_are_adopted_into_the_ses
 
 现在至少有三类“项目”：聊天所属工程、CAD 项目、工程分析/计划记录。不能只因它们都叫 `project_id` 就当作同一个 ID。目标由 WorkspaceId 表示材料与权限作用域，SessionId 表示用户任务；CAD/分析/计划对象保留各自 ID，以 `DomainObjectRef { kind, id, revision }` 关联到工作区。
 
-当前分析记录由 `OUT_ROOT/_engineering` 保存，计划使用仓库根对应的 `.civil-buddy/out/engineering/schedules`；[engineering_api.py:60](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/demo/engineering_api.py#L60) 可核对两种根目录。拟议 Repository 接口显式接收 WorkspaceContext，先兼容读取旧布局；保存快照仍只有一个权威写入者，SQLite 先登记索引和任务关联。验证导入/恢复后才切换写入，避免在迁移过程中复制出两份可独立修改的工程。
+当前分析记录由 `OUT_ROOT/_engineering` 保存，计划使用仓库根对应的 `.civil-buddy/out/engineering/schedules`；[engineering_api.py:60](../../../demo/engineering_api.py) 可核对两种根目录。拟议 Repository 接口显式接收 WorkspaceContext，先兼容读取旧布局；保存快照仍只有一个权威写入者，SQLite 先登记索引和任务关联。验证导入/恢复后才切换写入，避免在迁移过程中复制出两份可独立修改的工程。
 
 当前工程 `run_id` 先保存在有上限的内存 RUNS，用户保存后才形成持久分析项目。目标把计算完成、结果持久化、产物发布区分为不同状态：完成计算不能自动等价于已保存项目，取消也不能删除此前健康版本。由宿主解析原始文件和选集引用，模型只接触必要摘要与证据；不允许模型直接提交任意输出路径、伪造成功结果或修改已确认输入。
 
-PR58 [workspace_ctx.py](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/runtime/workspace_ctx.py#L12) 的局部上下文和 [tool_engine.py](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/runtime/tool_engine.py#L250) 的传播/取消改进应保留。`workspace.py` 的模块路径与进程环境注入仍存在，不能由局部 ContextVar 改进推导出全项目已隔离，也没有本轮证据证明已实际串数据。
+PR58 [workspace_ctx.py](../../../packing_assistant/runtime/workspace_ctx.py) 的局部上下文和 [tool_engine.py](../../../packing_assistant/runtime/tool_engine.py) 的传播/取消改进应保留。`workspace.py` 的模块路径与进程环境注入仍存在，不能由局部 ContextVar 改进推导出全项目已隔离，也没有本轮证据证明已实际串数据。
 
 ## 16. 汇合分支的顺序与验收
 

@@ -13,7 +13,11 @@
   paths      a client file name never becomes a path; the job folder is bound per context (office_job.job_root_scope),
              CIVIL_JOB_ROOT is untouched and the sandbox is not widened (a scoped folder outside its roots stays closed)
   demo       one call copies the SYNTHETIC examples/facade-demo files, runs rev A then rev B, leaves the examples as they were
-  prune      10 jobs per session, 5 demo sessions, and nothing this module did not name is removed
+  prune      10 jobs per session, 5 demo sessions, and nothing this module did not name is removed; active,
+             queued and draining sessions are kept until their last request (and its tool workers) leave
+  hardening  a timed-out run holds its slot until its worker exits (never more than 2 workers), the worker stops at
+             the next merge step, row / cell / 20 MB caps on panel lists, English failure text (raw reason in the
+             job's log), a session of its own without session_id, no device names, no '.' session folder
   review     an independent reviewer's probes: every app route closed without the token, foreign Origin, ?token=
              on a POST, hostile file names, a lying Content-Length, inputs not downloadable
   landing    / and /workbench without the token: what this is and how to get access, in English, not "gateway down";
@@ -31,6 +35,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import zipfile
 from contextlib import ExitStack
@@ -135,7 +140,7 @@ class Case(unittest.TestCase):
         self.addCleanup(self.stack.close)
         self.stack.enter_context(patch.dict(os.environ))
         for key in ("CIVIL_ALLOW_OPEN_LAN", "CIVIL_JOB_ROOT", "UVICORN_HOST", "CIVIL_LINK_MAX_TENDER_MB",
-                    "CIVIL_LINK_MAX_PANEL_MB"):
+                    "CIVIL_LINK_MAX_PANEL_MB", "CIVIL_LINK_MAX_PANEL_ROWS"):
             os.environ.pop(key, None)
         self.tmp = Path(tempfile.mkdtemp(prefix="test-web-link-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
@@ -557,6 +562,415 @@ class PruneTests(Case):
         self.assertTrue((session / "notes").is_dir())
         self.assertTrue((self.root / "README.txt").is_file())
         self.assertEqual([f"demo-0000000{i}" for i in range(2, 7)], sorted(p.name for p in self.root.glob("demo-*")))
+
+
+class HardeningTests(Case):
+    """Round-3 review items (2026-09-27). Each failed on main 923ed38 (scratchpad probe.py, 0/9) and passes here."""
+
+    def blocked_engine(self, gate: threading.Event, seen: dict, timeout: float = 0.05):
+        """A ToolEngine whose link tool blocks until ``gate`` is set: a run the engine times out but whose worker
+        is still alive, as a 60 s timeout on a big panel list is in production."""
+        from packing_assistant.runtime import tool_engine
+
+        guard = threading.Lock()
+
+        def handler(args):
+            with guard:
+                seen["live"] = seen.get("live", 0) + 1
+                seen["peak"] = max(seen.get("peak", 0), seen["live"])
+            try:
+                gate.wait(20)
+            finally:
+                with guard:
+                    seen["live"] -= 1
+            return {"ok": False, "error_code": "late"}
+
+        def make():
+            engine = tool_engine.ToolEngine()
+            engine.register("tender.packing_link", handler, expert_id="bid-parse", timeout_s=timeout)
+            return engine
+
+        return patch.object(tool_engine, "default_engine", make)
+
+    def wait_for_slots(self, slots: threading.BoundedSemaphore, n: int) -> None:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            got = [slots.acquire(blocking=False) for _ in range(n)]
+            for ok in got:
+                if ok:
+                    slots.release()
+            if all(got):
+                return
+            time.sleep(0.05)
+        self.fail(f"the {n} slots did not come back after the workers exited")
+
+    def test_timed_out_runs_never_run_more_workers_than_the_limit(self) -> None:
+        """Main released the slot when the request timed out, while the tool's worker kept parsing: 3 rounds of 2
+        uploads left 6 workers alive and still admitted a seventh call. Now a slot is held until its worker exits."""
+        gate, seen, codes = threading.Event(), {}, []
+        slots = threading.BoundedSemaphore(2)
+
+        def upload(sid):
+            try:
+                web_link._locked_run(sid, lambda: web_link._upload_job(
+                    sid, (".md", "t.md", ITT), (".xlsx", "p.xlsx", REV_A), "", ""))
+                codes.append("ran")
+            except web_link.Refusal as r:
+                codes.append(r.code)
+
+        with patch.object(web_link, "_RUNS", slots), self.blocked_engine(gate, seen):
+            try:
+                for rnd in range(3):
+                    threads = [threading.Thread(target=upload, args=(f"round{rnd}-{k}",)) for k in range(2)]
+                    for t in threads:
+                        t.start()
+                    for t in threads:
+                        t.join(10)
+                        self.assertFalse(t.is_alive(), "a request waited for its worker instead of answering")
+                self.assertLessEqual(seen["peak"], 2, "more tool workers alive than CIVIL_LINK_CONCURRENCY")
+                self.assertEqual(2, seen["live"])
+                self.assertEqual(["busy"] * 4 + ["timeout"] * 2, sorted(codes))
+                with self.assertRaises(web_link.Refusal) as busy:
+                    web_link._locked_run("quick", lambda: self.fail("a call was admitted while both slots drain"))
+                self.assertEqual(429, busy.exception.status)
+            finally:
+                gate.set()
+            self.wait_for_slots(slots, 2)
+        self.assertEqual(0, seen["live"])
+        self.assertEqual({}, web_link._SESSION_USERS)
+        self.assertEqual(set(), web_link._DRAINING_SESSIONS)
+
+    def test_a_timed_out_link_stops_at_the_next_merge_step(self) -> None:
+        """The pack step of a big list is quadratic in pieces (300 rows: 79 s). Main let a timed-out worker finish
+        (it ran 69 s past a 10 s timeout); with the slot now held until the worker exits, it must stop: the merge
+        search checks the engine's timeout event (tools/packing.py _can_merge)."""
+        import openpyxl
+        from packing_assistant.runtime import tool_engine
+
+        self.assertTrue(self.upload(session_id="warm").json()["ok"])     # imports loaded, as on a running server
+        wb = openpyxl.load_workbook(io.BytesIO(REV_A))
+        ws = wb["materials"]
+        row = [c.value for c in ws[2]]
+        row[2], row[4] = 1, row[3]
+        for i in range(300):
+            ws.append([f"X{i:04d}"] + row[1:])
+        big = io.BytesIO()
+        wb.save(big)
+        engine = tool_engine.default_engine()
+        engine.tools["tender.packing_link"].timeout_s = 2.0
+        released = threading.Event()
+        idle = engine.when_idle
+        slots = threading.BoundedSemaphore(2)
+
+        def tracked(run_id, callback):
+            def done():
+                try:
+                    callback()
+                finally:
+                    released.set()
+            idle(run_id, done)
+
+        with patch.object(web_link, "_RUNS", slots), patch.object(engine, "when_idle", tracked), \
+                patch.object(tool_engine, "default_engine", return_value=engine):
+            t0 = time.monotonic()
+            with self.assertRaises(web_link.Refusal) as caught:
+                web_link._locked_run("big", lambda: web_link._upload_job(
+                    "big", (".md", "t.md", ITT), (".xlsx", "p.xlsx", big.getvalue()), "", ""))
+            answered = time.monotonic() - t0
+            self.assertEqual("timeout", caught.exception.code)
+            self.assertTrue(released.wait(15), "the timed-out worker kept packing")
+            stopped = time.monotonic() - t0
+        self.assertLess(stopped - answered, 10, (answered, stopped))
+        self.assertEqual({}, engine._workers)
+
+    def test_panel_list_row_and_cell_caps(self) -> None:
+        self.assertEqual(20 * 1024 * 1024, web_link.MAX_UNZIPPED)
+        self.assertEqual(5000, web_link.max_panel_rows())
+        # the demo workbook has 8 rows (5 on 'materials', 3 on 'README'); the CSV has 5 lines
+        os.environ["CIVIL_LINK_MAX_PANEL_ROWS"] = "7"
+        r = self.upload(session_id="rows")
+        self.assertEqual((413, "too_many_rows"), (r.status_code, r.json()["error_code"]), r.text[:300])
+        self.assertIn("more than 7 rows", r.json()["detail"])
+        os.environ["CIVIL_LINK_MAX_PANEL_ROWS"] = "4"
+        r = self.upload(panel=("p.csv", csv_bytes(REV_A)), session_id="rows")
+        self.assertEqual((413, "too_many_rows"), (r.status_code, r.json()["error_code"]))
+        self.assertEqual([], self.jobs(), "a refused list created a job folder")
+        os.environ["CIVIL_LINK_MAX_PANEL_ROWS"] = "8"
+        self.assertTrue(self.upload(session_id="rows").json()["ok"], "a list at the limit is linked")
+        os.environ["CIVIL_LINK_MAX_PANEL_ROWS"] = "5"
+        self.assertTrue(self.upload(panel=("p.csv", csv_bytes(REV_A)), session_id="rows").json()["ok"])
+        del os.environ["CIVIL_LINK_MAX_PANEL_ROWS"]
+        before = len(self.jobs())
+
+        def workbook(sheet_xml: bytes) -> bytes:
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+                z.writestr("xl/workbook.xml", "<workbook/>")
+                z.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+            return buf.getvalue()
+
+        cell = b'<c t="n"><v>1</v></c>'
+        rows = workbook(b"<worksheet><sheetData>" + b"".join(b'<row r="%d">' % i + cell + b"</row>" for i in range(1, 5002))
+                        + b"</sheetData></worksheet>")
+        prefixed = workbook(b"<x:worksheet><x:sheetData>" + b"<x:row>" * 5001 + b"</x:sheetData></x:worksheet>")
+        wide = workbook(b"<worksheet><sheetData><row>" + cell * 100_001 + b"</row></sheetData></worksheet>")
+        inflating = io.BytesIO()
+        with zipfile.ZipFile(inflating, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("xl/workbook.xml", "<workbook/>")
+            with z.open("xl/worksheets/sheet1.xml", "w") as member:
+                for _ in range(21):
+                    member.write(b" " * (1024 * 1024))
+        csv = b"id,name,quantity\n" + b"".join(b"X%05d,panel,1\n" % i for i in range(5000))
+        for name, data, code in (("rows.xlsx", rows, "too_many_rows"), ("prefixed.xlsx", prefixed, "too_many_rows"),
+                                 ("wide.xlsx", wide, "too_many_rows"), ("inflating.xlsx", inflating.getvalue(), "too_large"),
+                                 ("rows.csv", csv, "too_many_rows")):
+            t0 = time.perf_counter()
+            r = self.upload(panel=(name, data), session_id="caps")
+            self.assertEqual((413, code), (r.status_code, r.json().get("error_code")), (name, r.text[:300]))
+            self.assertLess(time.perf_counter() - t0, 10, f"{name}: refused only after parsing")
+        self.assertEqual(before, len(self.jobs()), "a refused list created a job folder")
+
+    def test_tool_failures_are_told_in_english_and_logged_raw(self) -> None:
+        cjk = re.compile(r"[\u3000-\u9fff\uff00-\uffef]")
+        broken = self.upload(tender=("broken.pdf", b"%PDF-1.4\n not a pdf"), session_id="errors")
+        self.assertEqual(422, broken.status_code, broken.text[:300])
+        body = broken.json()
+        self.assertEqual("invalid_args", body["error_code"])
+        self.assertTrue(body["detail"].startswith("the link did not run: the tender broken.pdf could not be read. A file "),
+                        body["detail"])
+        self.assertIsNone(cjk.search(broken.text), broken.text)
+        self.assertNotIn(str(self.tmp), broken.text.replace("\\\\", "\\"))
+        [job] = self.jobs()
+        log = (job / "run-error.log").read_text(encoding="utf-8")
+        self.assertIn("invalid_args", log)
+        self.assertRegex(log, cjk, "the raw reason is kept in the job's log")
+        self.assertEqual(404, self.client.get(f"/api/tender/link/file/errors/{job.name}/run-error.log",
+                                              headers=BEARER).status_code)
+        gate, seen = threading.Event(), {}
+        slots = threading.BoundedSemaphore(2)
+        with patch.object(web_link, "_RUNS", slots), self.blocked_engine(gate, seen):
+            try:
+                late = self.upload(session_id="errors")
+            finally:
+                gate.set()
+            self.wait_for_slots(slots, 2)
+        self.assertEqual((422, "timeout"), (late.status_code, late.json()["error_code"]), late.text[:300])
+        self.assertIn("took longer than 0.05 s", late.json()["detail"])
+        self.assertIsNone(cjk.search(late.text), late.text)
+        odd = web_link._failure_text("weird<code>", {"reason": "\u5931\u8d25 C:\\x"}, None)
+        self.assertIsNone(cjk.search(odd), odd)
+        self.assertNotIn("<", odd)
+        self.assertNotIn("C:", odd)
+
+    def test_uploads_without_a_session_id_do_not_share_one(self) -> None:
+        first = self.upload().json()
+        second = self.upload(panel=("facade_panels_rev_b.xlsx", REV_B)).json()
+        self.assertTrue(first["ok"] and second["ok"], (first, second))
+        for d in (first, second):
+            self.assertRegex(d["session_id"], r"^web-[0-9a-f]{16}$")
+            self.assertIsNone(d["previous_job_id"], "another caller's job was used as 'previous'")
+            self.assertEqual([], d["stale_statements"])
+        self.assertNotEqual(first["session_id"], second["session_id"])
+        self.assertNotIn(first["session_id"], web_link._SESSION_LOCKS, "the lock map grows with every upload")
+        self.assertNotIn(second["session_id"], web_link._SESSION_LOCKS)
+        again = self.upload(panel=("facade_panels_rev_b.xlsx", REV_B), session_id=first["session_id"]).json()
+        self.assertEqual(first["job_id"], again["previous_job_id"], "a returned session_id continues that session")
+
+    def test_no_link_route_computes_without_the_token(self) -> None:
+        """The token gate still comes first: without it no route reaches _locked_run, the tool engine or the row
+        count, whatever the body (the new session default and the row cap run only after the guard)."""
+        from packing_assistant.runtime import tool_engine
+
+        calls = []
+        remote = TestClient(gateway.app, **REMOTE)
+        big = b"id\n" + b"x\n" * 6000
+        with patch.object(web_link, "_locked_run", side_effect=lambda *a, **k: calls.append("run")), \
+                patch.object(web_link, "_check_rows", side_effect=lambda *a, **k: calls.append("rows")), \
+                patch.object(tool_engine, "default_engine", side_effect=lambda: calls.append("engine")):
+            for headers in ({}, {"Authorization": "Bearer wrong"}, {"Cookie": "cb_token=wrong"}):
+                for method, path, kwargs in (
+                        ("POST", "/api/tender/link", {"files": {"tender": ("t.md", ITT), "panel_list": ("p.csv", big)}}),
+                        ("POST", "/api/tender/link", {"files": {"tender": ("t.md", ITT), "panel_list": ("p.xlsx", REV_A)},
+                                                      "data": {"session_id": "."}}),
+                        ("POST", "/api/tender/link/demo", {}),
+                        ("GET", "/api/tender/link/file/web-0123456789abcdef/20260927T000000000000Z-abcdef/bidbook.en.md", {}),
+                        ("GET", "/demo", {})):
+                    status = remote.request(method, path, headers=headers, **kwargs).status_code
+                    self.assertEqual(401, status, (method, path, headers))
+        self.assertEqual([], calls, "a request without the token reached the link")
+        self.assertEqual([], self.jobs())
+
+    def test_windows_device_names_are_not_used_as_file_names(self) -> None:
+        for name, saved in (("CON.md", "CON_.md"), ("nul.md", "nul_.md"), ("lpt1.md", "lpt1_.md"), ("aux.x.md", "aux.x_.md"),
+                            ("CONSOLE.md", "CONSOLE.md"), ("com10.md", "com10.md")):
+            self.assertEqual(saved, web_link._safe_name(name, ".md", "tender"), name)
+
+    def test_a_session_id_never_names_the_output_root_or_a_parent(self) -> None:
+        """agent_loop._safe_sid('.') was '.', so read_link_record rglobbed every session's folder and answered a
+        question in one session from another session's link record."""
+        from packing_assistant.runtime import agent_loop, tool_engine
+        from packing_assistant.runtime.session_packing import _path
+        from packing_assistant.tender_packing_link import LINK_FILE
+
+        for sid in (".", "..", "...", "a/../..", "..\\..", "C:", "x:y", " ", "CON", "nul", "a.", "-x", "\u6807", "x" * 200):
+            got = agent_loop._safe_sid(sid)
+            self.assertRegex(got, r"^sid-[0-9a-f]{16}$", sid)
+            self.assertEqual(got, agent_loop._safe_sid(sid), "the same id always maps to the same folder")
+            self.assertEqual(got, _path(sid).parent.name)
+        for sid in ("judge-1", "t-1234abcd", "sess-ab12", "eval-case.1", "default"):
+            self.assertEqual(sid, agent_loop._safe_sid(sid))
+        self.assertEqual("default", agent_loop._safe_sid(""))
+        self.assertNotEqual(agent_loop._safe_sid("."), agent_loop._safe_sid(".."))
+        d = self.upload(session_id="rec").json()
+        record = self.root / "rec" / d["job_id"] / "out" / LINK_FILE
+        out = self.tmp / "agent-out"
+        (out / "other" / "job").mkdir(parents=True)
+        shutil.copy(record, out / "other" / "job" / LINK_FILE)
+        with patch.object(agent_loop, "_OUT", out):
+            self.assertTrue(tool_engine._read_link_record({"session_id": "other"})["ok"])
+            for sid in (".", "..", "./", "other/.."):
+                got = tool_engine._read_link_record({"session_id": sid})
+                self.assertEqual("no_link_record", got.get("error_code"), (sid, str(got)[:200]))
+
+
+def sheet_xlsx(rows_xml: str, *, part: str = "xl/worksheets/sheet1.xml", head: str = "", tail: str = "") -> bytes:
+    """A workbook openpyxl opens, with its one sheet at ``part`` (the relationships may name any path)."""
+    main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    pkg = "http://schemas.openxmlformats.org/package/2006/relationships"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                   '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                   '<Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" '
+                   'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                   f'<Override PartName="/{part}" '
+                   'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>')
+        z.writestr("_rels/.rels", f'<Relationships xmlns="{pkg}"><Relationship Id="rId1" '
+                   f'Type="{rel}/officeDocument" Target="xl/workbook.xml"/></Relationships>')
+        z.writestr("xl/workbook.xml", f'<workbook xmlns="{main}" xmlns:r="{rel}"><sheets>'
+                   '<sheet name="materials" sheetId="1" r:id="rId1"/></sheets></workbook>')
+        z.writestr("xl/_rels/workbook.xml.rels", f'<Relationships xmlns="{pkg}"><Relationship Id="rId1" '
+                   f'Type="{rel}/worksheet" Target="/{part}"/></Relationships>')
+        z.writestr(part, f'<worksheet xmlns="{main}">{head}<sheetData>{rows_xml}</sheetData>{tail}</worksheet>')
+    return buf.getvalue()
+
+
+def sheet_row(r: int, values, first_col: str = "A") -> str:
+    cells = "".join(f'<c r="{chr(ord(first_col) + i)}{r}" t="inlineStr"><is><t>{v}</t></is></c>' if isinstance(v, str)
+                    else f'<c r="{chr(ord(first_col) + i)}{r}"><v>{v}</v></c>' for i, v in enumerate(values))
+    return f'<row r="{r}">{cells}</row>'
+
+
+PANEL_HEAD = sheet_row(1, ["Mark", "Description", "Qty", "Weight (kg)", "Length (mm)", "Width (mm)", "Height (mm)"])
+
+
+def panel_rows(n: int, start: int = 2) -> str:
+    return "".join(sheet_row(start + k, [f"P{k:05d}", "Unitised panel", 1, 450, 4200, 1500, 250]) for k in range(n))
+
+
+class ReviewRound3Tests(Case):
+    """The independent review of #77 (2026-09-28): each upload below passed the row and cell caps and then cost the
+    reader seconds to hours, and with the slot now held until the worker stops, two of them kept the link busy."""
+
+    def test_caps_count_every_part_the_row_numbers_the_columns_and_merges(self) -> None:
+        far_cell = '<c r="XFD1" t="inlineStr"><is><t>x</t></is></c>'
+        wide_head = PANEL_HEAD.replace("</row>", far_cell + "</row>")
+        inputs = {
+            # a sheet anywhere the relationships point: 60,000 rows took the reader 17 s, then the pack step
+            "rows outside xl/worksheets": sheet_xlsx(PANEL_HEAD + panel_rows(5001), part="xl/sheets/data.xml"),
+            # 2 KB: openpyxl pads the gap to row 1,048,576 (10 s, 410 MB)
+            "last row numbered 1,048,576": sheet_xlsx(PANEL_HEAD + panel_rows(10) + sheet_row(1048576, ["END"])),
+            # one header cell in column XFD: 4,000 rows took 11 s
+            "a header cell in column XFD": sheet_xlsx(wide_head + panel_rows(4000)),
+            # both: the reader was still running at 90 s and the slot was never released
+            "column XFD and row 1,048,576": sheet_xlsx(wide_head + panel_rows(10) + sheet_row(1048576, ["END"])),
+            "stated dimension A1:XFD1048576": sheet_xlsx(PANEL_HEAD + panel_rows(10), head='<dimension ref="A1:XFD1048576"/>'),
+            # openpyxl makes one object per merged cell when a two-row header makes it read merges: 1 M took 27 s
+            "one merge over A40:Z40000": sheet_xlsx(PANEL_HEAD + panel_rows(10), tail='<mergeCells count="1">'
+                                                    '<mergeCell ref="A40:Z40000"/></mergeCells>'),
+            "5,001 rows numbered without r": sheet_xlsx("<row><c><v>1</v></c></row>" * 5001),
+        }
+        csv_cr = b"Mark,Qty,Weight (kg)\r" + b"P1,1,450\r" * 5001        # the csv reader ends a line at a bare CR too
+        before = len(self.jobs())
+        for name, data in [*inputs.items(), ("CR-only csv", csv_cr)]:
+            t0 = time.perf_counter()
+            ext = ".csv" if name.endswith("csv") else ".xlsx"
+            r = self.upload(panel=("p" + ext, data), session_id="caps3")
+            self.assertEqual((413, "too_many_rows"), (r.status_code, r.json().get("error_code")), (name, r.text[:300]))
+            self.assertLess(time.perf_counter() - t0, 5, f"{name}: refused only after parsing")
+        self.assertEqual(before, len(self.jobs()), "a refused list created a job folder")
+        # at the limits: 5,000 rows, a grid of 5,000 x 200, a small header merge
+        head_200 = PANEL_HEAD.replace("</row>", '<c r="GR1" t="inlineStr"><is><t>x</t></is></c></row>')
+        for name, data in (("5,000 rows", sheet_xlsx(PANEL_HEAD + panel_rows(4999))),
+                           ("5,000 x 200", sheet_xlsx(head_200 + panel_rows(4999))),
+                           ("header merge", sheet_xlsx(PANEL_HEAD + panel_rows(10), tail='<mergeCells count="1">'
+                                                       '<mergeCell ref="E1:G1"/></mergeCells>'))):
+            web_link._check_rows(data, "xlsx", name)
+        # every table in the repository still passes
+        tables = [p for top in ("docs", "examples", "test") for pattern in ("*.xlsx", "*.csv")
+                  for p in (ROOT / top).glob(f"**/{pattern}")]
+        self.assertGreater(len(tables), 20)
+        for path in tables:
+            kind = "xlsx" if path.suffix == ".xlsx" else "text"
+            if kind == "xlsx" and not zipfile.is_zipfile(path):
+                continue
+            web_link._check_rows(path.read_bytes(), kind, path.name)
+
+    def test_a_timed_out_link_stops_while_reading_a_padded_sheet(self) -> None:
+        """Behind the caps as well: the reader checks the engine's timeout event while openpyxl pads rows, so a sheet
+        that gets past the upload check (a workbench file, a future reader) cannot hold a slot for hours."""
+        from packing_assistant.runtime import tool_engine
+
+        self.assertTrue(self.upload(session_id="warm3").json()["ok"])
+        far = sheet_xlsx(PANEL_HEAD.replace("</row>", '<c r="XFD1" t="inlineStr"><is><t>x</t></is></c></row>')
+                         + panel_rows(10) + sheet_row(1048576, ["END"]))
+        engine = tool_engine.default_engine()
+        engine.tools["tender.packing_link"].timeout_s = 2.0
+        released = threading.Event()
+        idle = engine.when_idle
+
+        def tracked(run_id, callback):
+            def done():
+                try:
+                    callback()
+                finally:
+                    released.set()
+            idle(run_id, done)
+
+        with patch.object(web_link, "_RUNS", threading.BoundedSemaphore(2)), patch.object(engine, "when_idle", tracked), \
+                patch.object(tool_engine, "default_engine", return_value=engine):
+            t0 = time.monotonic()
+            with self.assertRaises(web_link.Refusal) as caught:
+                web_link._locked_run("far", lambda: web_link._upload_job(
+                    "far", (".md", "t.md", ITT), (".xlsx", "p.xlsx", far), "", ""))
+            answered = time.monotonic() - t0
+            self.assertEqual("timeout", caught.exception.code)
+            self.assertTrue(released.wait(15), "the timed-out worker kept reading padded rows")
+        self.assertLess(time.monotonic() - t0 - answered, 10)
+
+    def test_sessions_of_their_own_leave_no_empty_folders(self) -> None:
+        """Every upload without a session_id has a folder of its own; pruning removed its jobs and left the folder,
+        so the web-link root grew by one folder per upload (8 uploads, 3 jobs kept: 13 folders, 10 empty)."""
+        with patch.object(web_link, "KEEP_JOBS_TOTAL", 2):
+            for _ in range(4):
+                self.assertTrue(self.upload().json()["ok"])
+        folders = [p for p in self.root.iterdir() if p.is_dir()]
+        self.assertEqual([], [p.name for p in folders if not any(p.iterdir())], "empty session folders left behind")
+        self.assertEqual(2, len(folders))
+        self.assertEqual(2, len(self.jobs()))
+
+    def test_every_session_file_uses_one_folder_rule(self) -> None:
+        """memory.py and session_handoff.py kept the old rule: session '.' wrote its summary and hand-off into
+        demo/out itself, and an id such as 'x y' split one session's files across two folders."""
+        from packing_assistant.runtime import agent_loop, memory, session_handoff
+        from packing_assistant.runtime.session_packing import _path
+
+        for sid in (".", "..", "x y", "CON", "C:", "default", "web-0123", ""):
+            folder = agent_loop._safe_sid(sid)
+            self.assertEqual({folder}, {memory.summary_path(sid).parent.name, session_handoff.handoff_path(sid).parent.name,
+                                        _path(sid).parent.name}, sid)
+            self.assertNotEqual("out", memory.summary_path(sid).parent.name, sid)
 
 
 class LandingTests(Case):

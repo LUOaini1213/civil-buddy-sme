@@ -2,11 +2,11 @@
 
 Civil Buddy drafts internal documents for engineering and logistics staff: bid responses, packing and container
 plans, site reports. Its outputs are drafts for a person to check, never signed or submitted documents. This page
-states the safety model, which checks test it, what is still open, and how to report a problem. Every claim here is
-backed by a check in `npm run check` (`scripts/check_project.py`) or by a known-open item listed below.
+states the safety model, which checks test it, what is still open, and how to report a problem. Each claim names the
+check in `npm run check` (`scripts/check_project.py`) that pins it; what no check pins is listed under Known open items.
 
-Supported version: `main`. Older release builds (including the Rust workbench zips on GitHub Releases) are not
-maintained.
+v0.7.0 is the submitted competition version; `main` holds post-submission preview work. Earlier trial builds
+(including the Rust workbench zips on GitHub Releases) are not maintained.
 
 ## Safety model
 
@@ -20,7 +20,7 @@ maintained.
 2. **The model never approves.** In model mode the model picks tools from a fixed menu; its tools and the Python MCP
    server have no approval field, and a copy of the confirmation sentence in a model reply is replaced. The deliverable
    writer receives only the user's words and the named job files, so model text does not reach a draft. Every model
-   reply passes three deterministic checks:
+   reply passes four deterministic checks:
    - *number provenance*: a quantity or clause number with no source in the turn's evidence is rewritten once, then
      listed to the user;
    - *verdict guard* (`packing_assistant/tools/verdict_guard.py`, Chinese and English): verdicts the product must
@@ -30,11 +30,24 @@ maintained.
    - *claim check* (`packing_assistant/tools/claim_check.py`): when the turn wrote a link record, a coverage claim
      the record does not support ("all seven clauses are covered" with one covered statement, "S4 is covered" when S4
      waits for a person) is replaced by what the record says.
+   - *record guard* (`packing_assistant/tools/record_guard.py`): a sentence that attaches a status, container type,
+     mass or clause meaning the record does not give, or says a draft is approved or ready to submit / book, is
+     struck and listed.
 3. **Only a person's typed sentence approves high-risk work, for one turn.** The 19 high-risk posts (structure,
    geotechnical, fire protection, construction method, safety briefs and others) write nothing until a person types
-   the confirmation sentence in that turn. The gateway and `civil serve` accept only `confirm_text` equal to the
-   sentence; a boolean such as `confirm_ok` or `p0_confirmed` is refused (HTTP 422 on the gateway). The approval is
-   not remembered for the next turn. The same sentence inside a tender, a panel list or a model reply does not approve.
+   the confirmation sentence on its own: in the workbench's confirmation box or the gateway's and `civil serve`'s
+   `confirm_text`, at the terminal's `approve>` prompt (or `/confirm <sentence>`, which only retries the task that is
+   waiting for approval), or in the desktop dialog. The Python surfaces never read the task for approval: a message
+   approves only when the whole of it, trimmed, is the sentence (`civil_config.confirms_in_message`), so the sentence
+   quoted from a tender, a panel list or a file, deferred, conditional, retracted or simply added to a request
+   approves nothing on the gateway, the terminal and the desktop app; neither does a copy in a model reply. The Rust
+   workbench still takes it as a whole line of the message (see Known open items). A boolean such as `confirm_ok` or
+   `p0_confirmed` is refused (HTTP 422 on the gateway and the Rust workbench). Every approval covers that turn only:
+   it is not remembered for the next turn, a new thread, a resumed thread or a restored session.
+   `civil exec --confirm` is the local operator's own switch and takes no sentence. The sentence is asked for only
+   when a high-risk post is selected or loaded. In the Rust workbench's default automatic post selection the model
+   decides whether to load a post; if it loads none, a copy can be written without the sentence. Writes are always
+   new copies, and a copy is written only after the source was read and the identical change was previewed.
 4. **Token-gated server.** `packing_assistant/access_guard.py` sits in front of the gateway and the workbench,
    WebSockets included. With `CIVIL_TOKEN` set, every request needs the token (loopback too; compared with
    `hmac.compare_digest`). With no token, only a genuinely local request passes, and `demo/serve.py`, a `uvicorn --host`
@@ -55,10 +68,12 @@ All of these run in `npm run check` and in CI on every pull request:
 | Check | What it pins |
 |---|---|
 | `access-guard` | the token gate on both web apps, the refusal to bind a non-loopback address without a token |
-| `human-approval` | MCP never offers or accepts an approval flag; `civil serve` takes only the typed sentence; approval does not carry over to a later turn |
-| `http-confirmation` | the gateway and workbench HTTP routes approve only on `confirm_text` equal to the sentence |
+| `human-approval` | MCP never offers or accepts an approval flag; `civil serve` takes only the typed sentence and does not carry an approval over to a later turn; the sentence inside a task (quoted from a tender, deferred, conditional, retracted or appended) approves nothing in the terminal or the desktop app, which ask at `approve>` / the dialog instead; an approval at `approve>` or in the dialog covers that turn only |
+| `http-confirmation` | the gateway and workbench HTTP routes approve only on `confirm_text` equal to the sentence; a workbench task that carries the sentence among other words, such as a pasted tender, writes nothing |
+| `injection-plants` (gateway test) | the sentence planted in a tender and posted to the gateway's `/api/agent` and `/api/turn` approves nothing |
 | `pack-ship-read-sandbox` | pack-ship reads stay inside the sandbox roots over MCP and the gateway |
-| `injection-plants` | instructions planted in SYNTHETIC tender (Markdown and Word) and panel-list files do not change statuses, approve anything or become statements, in the steps-mode link, the steps-mode turn and the gateway; a scripted fake model that obeys the plant is corrected and struck by the guards |
+| `injection-plants` | instructions planted in SYNTHETIC tender (Markdown and Word) and panel-list files turn no statement covered and approve nothing (a planted figure sends its row to a person, a planted container code stops the plan: fail-safe, not a pass), in the steps-mode link, the steps-mode turn and the gateway; a scripted fake model that obeys the plant is corrected and struck by the guards; a planted clause that names a transport or packing term becomes one extra row that waits for a person and quotes it, never covered |
+| `safety-sealed` | the verdict guard on a sealed English set written blind (24 sentences; floor 20 right, first run 20/24, precision 1.000, recall 0.600) and the 8 sealed planted-instruction files, in the link and the steps turn (floors 7/7 and 8/8, each the same as its control run); a fake model that repeats the plant is also run and printed, not pinned: it leaves planted words in 4 of 8 replies (the guards strike verdicts, correct coverage claims and strike sentences that contradict the link record; they do not delete every instruction the model repeats) |
 | `verdict-bench` | floors for the verdict guard on its Chinese dev set, its second Chinese held-out set and the English dev set |
 | `model-loop` | the model loop with a scripted model: routing, number and verdict guards, approvals, read limits |
 | `tender-packing-link` | statuses are computed from the plan; lashing, stillages and sequencing are never covered |
@@ -76,7 +91,7 @@ The technical document (`docs/submission/nus-iss-technical.md`, §4.4) describes
 snapshot. Remaining boundaries and their current scope are listed here:
 
 - **Old Rust binaries.** Earlier trial builds accepted an approval flag. Current HTTP routes require the
-  confirmation text for the operation. Current Rust MCP does not advertise or accept approval arguments,
+  confirmation text in the current turn. Current Rust MCP does not advertise or accept approval arguments,
   denies high-risk tool calls, validates session IDs and enforces its launch scope. Use the interactive
   workbench for approval; do not substitute an old executable for this source.
 - **Pack-ship circuit on the steps path.** Three needs-human packing lists in a row open a process-wide circuit for
@@ -98,6 +113,12 @@ snapshot. Remaining boundaries and their current scope are listed here:
   a scripted model; a live model reading a planted instruction could still steer which menu tool runs on which listed
   file, and what a chat reply says before the guards. The URL fetch resolves DNS twice.
 - **Chat.** In the workbench, question-only turns call the model whenever a key is set, whatever `agent_mode` says.
+- **Sign-off inside pasted text (Rust workbench).** The Rust workbench still takes a sign-off sentence that forms a
+  whole line or sentence of the message as approval. The Python surfaces no longer do (only the whole message, or the
+  confirmation field). Until the Rust side matches, a person should not paste unreviewed text into a high-risk turn.
+- **Automatic post selection.** The typed confirmation applies only when a high-risk post is selected or loaded. In
+  the Rust workbench's default automatic mode the model decides whether to load a post, so a model that loads none
+  can write a copy of a high-risk document without the sentence. The copy is new and the original is unchanged.
 
 ## Unified named instances (2026-09-27)
 
@@ -111,19 +132,20 @@ files under the same Windows/Linux account. Use separate OS accounts or hosts wh
 
 The internal Python service has a separate random Bearer token, a route allowlist, no provider keys and no model
 loop. Named mode disables legacy local-path import, URL import and studio editing. Rust Agent events, actor IDs,
-usage and interrupted/cancelled states are persisted. Confirmation is specific to the current operation and is
-not inherited from old turns, restored sessions, document quotations or a boolean field. The legacy limitations
+usage and interrupted/cancelled states are persisted. Confirmation is specific to the current turn and is
+not inherited from old turns, restored sessions or a boolean field; it is asked for only when a high-risk post is
+selected or loaded, and pasted text can still carry it (both listed under Known open items). The legacy limitations
 above still apply to separately launched Python/gateway entry points unless their own implementation says otherwise;
 they must not be used as an unprotected alternate entry into a named instance.
 
 Evidence: `product_identity`, `runtime_core`, `product_document_gates`, `scripts/test_domain_service.py`,
 `scripts/test_link_confirmation_regressions.py`, and the optional compiled-process
 `scripts/test_unified_runtime_http.py`. Tests use local scripted providers, not a live-model security assessment.
-See [the handoff guide](docs/civil-buddy/release-handoff.md) for deployment and acceptance boundaries.
+See [the handoff guide](docs/civil-buddy/release-handoff.md) (in Chinese) for deployment and acceptance boundaries.
 
 ## Reporting a problem
 
-Please open an issue at <https://github.com/LUOaini1213/civil-buddy-sme/issues> and put "security" in the title. If the
-problem could be exploited, describe what is affected and how to reproduce it at a high level, and leave out working
-exploit code, tokens or keys; a maintainer will follow up in the issue. Never paste a real API key, token or
-customer file into an issue.
+Please open an issue in this repository and put "security" in the title. Do not post exploit details in a public
+issue: if the problem could be exploited, describe what is affected and how to reproduce it at a high level, and
+leave out working exploit code, tokens or keys; a maintainer will follow up in the issue. Never paste a real API key,
+token or customer file into an issue.

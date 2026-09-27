@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """断网专项（UX R12，结论记 docs/ux/ux-design-spec.md 附录 K）。
 
-场景：中建现场多为内网/弱网，"断网必须可用"是 UX 红线。本脚本用 playwright 把
+场景：施工现场多为工地内网/弱网，"断网必须可用"是 UX 红线。本脚本用 playwright 把
 **所有非 localhost 请求一律 abort**（模拟外网彻底不通），然后跑两端核心动线：
 
   端 A  http://127.0.0.1:8765  Rust 工作台（demo/static/）

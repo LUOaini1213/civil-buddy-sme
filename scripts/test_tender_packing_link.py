@@ -403,6 +403,73 @@ class Link(unittest.TestCase):
                      "Check facade_panels.xlsx for missing weights"):
             self.assertFalse(wants_link(text), text)
 
+    def test_look_alikes_do_not_run_the_link(self):
+        """Review of #67: advice, hypothetical, past-tense and negated requests that name both files ran the link and
+        wrote 11 files each (test/benchmarks/link_routing/dev_round3.json)."""
+        from packing_assistant.runtime.task_router import route_task, wants_link
+
+        p, t = "facade_panels.xlsx", "facade_itt_doc.md"
+        for text in (f"Should I check {p} against {t} first, or price it first?",
+                     f"Is it worth matching {p} to {t} before the site visit?",
+                     f"If I check {p} against {t}, will it change my crate count?",
+                     f"Would it make sense to link {t} and {p}?",
+                     f"I already checked {p} against {t} last week.",
+                     f"Do I need to check {p} against {t}?",
+                     f"Has anyone checked {p} against {t}?",
+                     f"My colleague checked {p} against {t}.",
+                     f"The PM checked {p} against {t} yesterday.",
+                     f"我应该先核对 {p} 和 {t} 吗？",
+                     f"要不要把 {p} 和 {t} 对照一下？",
+                     f"你们上周已经把 {p} 和 {t} 核对过了。"):
+            with self.subTest(text=text):
+                self.assertEqual(route_task(text)["intent"], "chat")
+        for text in (f"Pack {p} without checking {t}", f"Pack {p} without linking it to {t}",
+                     f"Pack {p} but don't check it against {t}."):
+            with self.subTest(text=text):
+                self.assertFalse(wants_link(text))
+                self.assertEqual(route_task(text)["intent"], "run")     # the packing it asks for still runs
+        for text in (f"Is {p} compliant with the container clauses of {t}?", f"Please link {p} and {t}.",
+                     f"Don't forget to check {p} against {t}.", f"{p} 能满足招标 {t} 的物流条款吗？"):
+            with self.subTest(text=text):
+                self.assertTrue(wants_link(text))
+                self.assertEqual((route_task(text)["expert_ids"], route_task(text)["intent"]), (["bid-parse"], "run"))
+
+    def test_deferred_and_past_look_alikes_do_not_run_the_link(self):
+        """Review of PR #75 (dev_round3.json origin 'review-r3'): at d455e57 each of these still ran the link, because
+        a sentence that opens with a verb was read as an imperative ("Remind me ...", "Linked ...", "Checking ...") or
+        the check came after a deferral ("Wait until Monday, then check ..."), and "w/o" / "No checking" did not
+        exclude the link from a pack request."""
+        from packing_assistant.runtime.task_router import route_task, wants_link
+
+        p, t = "facade_panels.xlsx", "facade_itt_doc.md"
+        for text in (f"Remind me tomorrow to check {p} against {t}.",
+                     f"Checking {p} against {t} was a waste of time.",
+                     f"Linked {t} and {p} yesterday, all fine.",
+                     f"Matched {p} to {t} last week; no issues.",
+                     f"Note to self: check {p} against {t} after the addendum.",
+                     f"Wait until Monday, then check {p} against {t}.",
+                     f"提醒我明天核对 {p} 和 {t}。"):
+            with self.subTest(text=text):
+                self.assertEqual(route_task(text)["intent"], "chat")
+        for text in (f"Pack {p} w/o checking {t}", f"Pack {p}. No checking against {t} this time."):
+            with self.subTest(text=text):
+                self.assertFalse(wants_link(text))
+                self.assertEqual((route_task(text)["expert_ids"], route_task(text)["intent"]), (["pack-ship"], "run"))
+        for text in (f"Kindly match {t} with {p}.", f"​Check {p} against {t}.",
+                     f"Before you pack {p}, check it against {t}.", f"Bring {p} and {t} together: check the clauses."):
+            with self.subTest(text=text):
+                self.assertEqual((route_task(text)["expert_ids"], route_task(text)["intent"]), (["bid-parse"], "run"))
+
+    def test_a_look_alike_writes_nothing(self):
+        from packing_assistant.civil import run_task
+
+        for i, text in enumerate(("Should I check facade_panels.xlsx against facade_itt_doc.md first, or price it first?",
+                                  "要不要把 facade_panels.xlsx 和 facade_itt_doc.md 对照一下？",
+                                  "Linked facade_itt_doc.md and facade_panels.xlsx yesterday, all fine.")):
+            out = run_task(text, session_id=f"link-lookalike-{i}")
+            self.assertEqual((out["wrote"], out["intent"]), (False, "chat"), text)
+            self.assertNotIn("tender.packing_link", out.get("tools_run") or [], text)
+
     def test_an_english_request_is_answered_in_english(self):
         from packing_assistant.civil import run_task
 

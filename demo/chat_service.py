@@ -25,7 +25,7 @@ from llm import LLMError
 import turn_control
 from turn_control import TurnCancelled
 from packing_assistant.expert_roster import get_expert as roster_expert
-from packing_assistant.runtime.civil_config import CONFIRM, contains_confirmation, hitl_reply, is_confirmation, message_confirmation
+from packing_assistant.runtime.civil_config import CONFIRM, contains_confirmation, hitl_reply, is_confirmation, confirms_in_message
 from packing_assistant.runtime.reply_language import english_request
 from packing_assistant.runtime.expert_skills import match_skill
 from packing_assistant.understand import understand
@@ -347,7 +347,7 @@ def prepare_turn(root: Path, body: dict) -> dict:
             "requests": requests, "prepared_context": prepared,
             "local_sources": [session_context.citation(sid, s["hit"]) for s in prepared["sources"]],
             "intent": intent, "project_id": project_id, "project_name": project_name,
-            "confirmed": is_confirmation(str(body.get("confirm_text") or "")) or message_confirmation(message),
+            "confirmed": is_confirmation(str(body.get("confirm_text") or "")) or confirms_in_message(message),
             "attachments": attachment_ids, "route": route,
             "workflow_sources": workflow_sources, "workflow_unreadable": workflow_unreadable,
             "workflow_budget": body.get("workflow_budget"),

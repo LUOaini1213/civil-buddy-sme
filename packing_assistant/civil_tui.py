@@ -6,7 +6,7 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-from packing_assistant.runtime.civil_config import CONFIRM, CONFIRM_EN, APPROVAL_MODES, SANDBOX_MODES, is_confirmation, message_confirmation, load_config
+from packing_assistant.runtime.civil_config import CONFIRM, CONFIRM_EN, APPROVAL_MODES, SANDBOX_MODES, is_confirmation, confirms_in_message, load_config
 
 HELP = """/help              本页
 /status            作业文件夹 · CIVIL.md · sandbox · approval · 模型 · thread · 会话槽
@@ -264,7 +264,7 @@ def handle_slash(line: str, st: TuiState) -> Optional[str]:
         from packing_assistant.runtime.threads import spawn
 
         st.confirm, st.pending_text, st.pending_thread_id = False, "", ""
-        got = spawn(arg.strip(), confirm=message_confirmation(arg), title=arg.strip()[:40])
+        got = spawn(arg.strip(), confirm=confirms_in_message(arg), title=arg.strip()[:40])
         return f"后台 thread {got.get('thread_id')}  state={got.get('state')}"
     return f"未知命令 /{cmd}。/help"
 
@@ -297,7 +297,7 @@ def submit_task(st: TuiState, text: str, *, confirmed: bool = False, approve=Non
     def turn(allow: bool) -> Dict[str, Any]:
         return run_on_thread(st.thread.thread_id, text, confirm=allow, approve=ask)
 
-    out = with_progress(lambda: turn(confirmed is True or message_confirmation(text)), progress)
+    out = with_progress(lambda: turn(confirmed is True or confirms_in_message(text)), progress)
     if out.get("hitl_pending") and not granted and ask(
             {"name": out.get("expert_name") or "本次写盘", "risk": "high"}):
         out = with_progress(lambda: turn(True), progress)

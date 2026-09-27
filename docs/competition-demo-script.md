@@ -1,6 +1,6 @@
 ﻿# 评委 5 分钟路径（Civil Buddy · 当前版本）
 
-> 仓库：**github.com/LUOaini1213/civil-buddy-sme**（原独立仓 packing-agent 已并入本树）。
+> 仓库：**github.com/LUOaini1213/civil-buddy-sme**（原独立仓 packing-agent 已并入本树）。  
 > 产品：土木版 Codex —— 66 岗工作台，装箱/拼柜（pack-ship）是其中一岗。  
 > 原则：**tools compute numbers, the model only routes**——柜数/坐标由引擎算，模型不写 xyz、不拍柜数；高风险写盘/出运须人确认。  
 > Harness 0.6.4 · 13 agents · 主路径 `agent_mode=steps`（无 API Key 走 policy fallback，功能不哑）。

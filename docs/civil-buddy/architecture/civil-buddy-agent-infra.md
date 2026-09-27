@@ -24,13 +24,13 @@
 
 ### 现有实现及缺口
 
-[demo/context.py:187](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/demo/context.py#L187) 已有完整请求校验，计入消息元数据、工具 schema、系统提示、记忆、检索片段、历史与当前工具交互，并为回复留预算。`prepare_request` 保留当前用户消息及其后工具交互，按完整片段和连续历史后缀缩减可选内容，报告未纳入的来源。估算采用已在本地的 tokenizer 加裕量或 UTF-8 字节保守估算，不是 DeepSeek 官方计费精确值。
+[demo/context.py:187](../../../demo/context.py) 已有完整请求校验，计入消息元数据、工具 schema、系统提示、记忆、检索片段、历史与当前工具交互，并为回复留预算。`prepare_request` 保留当前用户消息及其后工具交互，按完整片段和连续历史后缀缩减可选内容，报告未纳入的来源。估算采用已在本地的 tokenizer 加裕量或 UTF-8 字节保守估算，不是 DeepSeek 官方计费精确值。
 
-[task_memory.py:138](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/demo/task_memory.py#L138) 已有来源位置、版本替代和 `user_stated / assistant_claimed / tool_reported` 区分。用户陈述仍不自动成为已验证事实。`semantic_memory.py` 的可选模型摘要要求精确原文引用和数字支持，保留 `verified:false`；历史更正、来源变化会使缓存失效。`context_maintenance.py` 可以从原始对话/附件重建派生记忆与检索，不改原件，也不调用模型。
+[task_memory.py:138](../../../demo/task_memory.py) 已有来源位置、版本替代和 `user_stated / assistant_claimed / tool_reported` 区分。用户陈述仍不自动成为已验证事实。`semantic_memory.py` 的可选模型摘要要求精确原文引用和数字支持，保留 `verified:false`；历史更正、来源变化会使缓存失效。`context_maintenance.py` 可以从原始对话/附件重建派生记忆与检索，不改原件，也不调用模型。
 
-缺口是调用链不同：Web 问答使用上述预算，而 [runtime/model_loop.py:574](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/runtime/model_loop.py#L574) 组装并追加消息，`model_client.py:109` 直接构造请求，未接同一全请求预算检查。步数上限和单次工具文本截取不能替代模型窗口检查。
+缺口是调用链不同：Web 问答使用上述预算，而 [runtime/model_loop.py:574](../../../packing_assistant/runtime/model_loop.py) 组装并追加消息，`model_client.py:109` 直接构造请求，未接同一全请求预算检查。步数上限和单次工具文本截取不能替代模型窗口检查。
 
-Rust [context.rs:16](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/workbench/src/context.rs#L16) 目前默认窗口 1,000,000、回复预留 16,384，按中文字数/其他字符粗估，并把旧消息短摘录折入历史。Python 默认 32,768/4,096，两者行为不同。这里记录的是代码默认值，不是对任何模型真实窗口的确认；迁移不能把 Rust 现有模块当作 Python 完整上下文管理的等价实现。
+Rust [context.rs:16](../../../workbench/src/context.rs) 目前默认窗口 1,000,000、回复预留 16,384，按中文字数/其他字符粗估，并把旧消息短摘录折入历史。Python 默认 32,768/4,096，两者行为不同。这里记录的是代码默认值，不是对任何模型真实窗口的确认；迁移不能把 Rust 现有模块当作 Python 完整上下文管理的等价实现。
 
 ### 目标 ContextService
 
@@ -64,9 +64,9 @@ Rust [context.rs:16](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee37
 
 ### 已有边界必须保留
 
-[sandbox.py](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/sandbox.py#L157) 与 `runtime/policy.py` 已做路径、敏感文件、spawn 白名单、工具归属、只读、失败/预算及写入策略检查。这些检查依赖调用路径经过策略层；不是操作系统隔离。应用层允许路径也不总是只限 `.civil-buddy/out`，应读取具体工具和当前配置。
+[sandbox.py](../../../packing_assistant/sandbox.py) 与 `runtime/policy.py` 已做路径、敏感文件、spawn 白名单、工具归属、只读、失败/预算及写入策略检查。这些检查依赖调用路径经过策略层；不是操作系统隔离。应用层允许路径也不总是只限 `.civil-buddy/out`，应读取具体工具和当前配置。
 
-[runtime/os_sandbox](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/packing_assistant/runtime/os_sandbox/__init__.py#L53) 已有独立 worker、自约束、自检及 app/os/auto 选择。明确指定 os 而无法启用时拒绝，auto 模式才报告原因并退回应用策略。
+[runtime/os_sandbox](../../../packing_assistant/runtime/os_sandbox/__init__.py) 已有独立 worker、自约束、自检及 app/os/auto 选择。明确指定 os 而无法启用时拒绝，auto 模式才报告原因并退回应用策略。
 
 | 后端 | 当前可确认的机制 | 当前不能宣称的保证 |
 |---|---|---|
@@ -93,7 +93,7 @@ PR58 截面工具在当前 OS worker 中拒绝嵌套启动工程子进程，这�
 
 ### 现有能力
 
-公共知识由 `packing_assistant/kb_search.py` 维护 SQLite FTS5/BM25 候选检索，结合关键词、短语、文件名等评分；`demo/rag.py` 有岗位/部门/公司范围。会话侧 [local_retrieval.py](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/demo/local_retrieval.py#L23) 独立索引当前会话历史与附件，中文 unigram/bigram，900 字符块、160 重叠，支持指纹更新、删除与重建。语义摘要不是向量检索；本次未找到 embedding、向量库、RRF 或模型 reranker 的对应实现。
+公共知识由 `packing_assistant/kb_search.py` 维护 SQLite FTS5/BM25 候选检索，结合关键词、短语、文件名等评分；`demo/rag.py` 有岗位/部门/公司范围。会话侧 [local_retrieval.py](../../../demo/local_retrieval.py) 独立索引当前会话历史与附件，中文 unigram/bigram，900 字符块、160 重叠，支持指纹更新、删除与重建。语义摘要不是向量检索；本次未找到 embedding、向量库、RRF 或模型 reranker 的对应实现。
 
 Rust `rag.rs` 已有公共 KB 的只读 FTS 和扫描回退，但尚未覆盖 Python 会话检索、完整来源 API 与语义记忆；Rust 附件链仍包含截取注入，不能等同完整项目 RAG。
 
@@ -149,7 +149,7 @@ Trace 将模型请求、工具、检索、sandbox 决策与产物关联起来。
 
 ## 6. 语音输入
 
-现有 [demo/asr.py:31](https://github.com/LUOaini1213/civil-buddy/blob/3e93025ee3794f96028ea8ce2067184a6af28a25/demo/asr.py#L31) 与 voice.js 已提供语音入口，本地服务默认 faster-whisper small/CPU/int8，有 20 秒、8 MB 输入限制与领域术语 initial_prompt。这里“本地”指运行 Python 服务的机器，手机经局域网使用时音频会发送到该服务。浏览器 SpeechRecognition 是需明确同意的可选降级，可能使用浏览器厂商服务。Rust 当前健康能力声明仍为 `asr:false`，因此不能因前端有按钮就称 Rust 已支持语音。
+现有 [demo/asr.py:31](../../../demo/asr.py) 与 voice.js 已提供语音入口，本地服务默认 faster-whisper small/CPU/int8，有 20 秒、8 MB 输入限制与领域术语 initial_prompt。这里“本地”指运行 Python 服务的机器，手机经局域网使用时音频会发送到该服务。浏览器 SpeechRecognition 是需明确同意的可选降级，可能使用浏览器厂商服务。Rust 当前健康能力声明仍为 `asr:false`，因此不能因前端有按钮就称 Rust 已支持语音。
 
 现有接口是 `GET /api/asr/status`、`POST /api/asr/prepare`、`POST /api/asr`，保留其输入限制及 400/409/413/429/503 错误语义。当前取消“准备”等待不终止后台准备；停止录音会提交识别；识别超时只中止前端等待，后端没有完整识别取消 API。以下 cancel/隔离迟到回填属于新增目标，不能误列为已有能力。
 
