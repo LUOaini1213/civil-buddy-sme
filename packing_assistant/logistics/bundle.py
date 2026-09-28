@@ -8,6 +8,7 @@ import io
 import json
 import stat
 import zipfile
+import zlib
 
 from packing_assistant.runtime.cancel import check
 from .records import MAX_RECORD, MAX_SOURCE, source_bytes, validate_record, digest
@@ -94,7 +95,7 @@ def import_bundle(data):
             # Never restore assertions or authorization from an untrusted handover.
             record["confirmation"] = None
             return validate_record(record)
-    except (zipfile.BadZipFile, RuntimeError, KeyError, TypeError, AttributeError, RecursionError, OverflowError) as exc:
+    except (zipfile.BadZipFile, zlib.error, EOFError, RuntimeError, KeyError, TypeError, AttributeError, RecursionError, OverflowError) as exc:
         raise ValueError("项目包损坏或结构无效，未创建项目。") from exc
 
 

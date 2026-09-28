@@ -40,6 +40,12 @@ Jev uses the [TypeSafe System One API](https://docs.typesafe.ai/introduction/qui
 
 ## Execution guarantees and limits
 
+Document publication summaries come from this turn's registered copies and source/output hashes.
+An explicit write request with no artifact, a failed tool, or an unapplied preview is reported as incomplete;
+the model's own “saved” or “Done” statement is not a receipt. This does not certify that every part of a
+free-form request was fulfilled, and ordinary explanatory replies do not receive comprehensive numeric
+provenance verification. The legacy Python reply guard is a separate implementation.
+
 - Events persist before the page sees them. Refresh reconnects from the last sequence; restart marks unfinished tasks interrupted and never silently repeats writes.
 - A task tree shares input/output/call budgets. At most two read-only children run together, four children in total, depth one; cancellation propagates.
 - Context occupancy is a conservative serialized-byte estimate, separately shown from model billed usage and task stages. It never silently removes the current request or half a tool interaction.

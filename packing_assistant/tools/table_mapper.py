@@ -17,6 +17,10 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 PathLike = Union[str, Path]
 
+
+class TableCellError(ValueError):
+    """A written numeric cell cannot safely be read; never replace it with a default."""
+
 # 标准字段 → 同义词（小写匹配）
 COLUMN_SYNONYMS: Dict[str, Tuple[str, ...]] = {
     "id": ("id", "编号", "行号", "line_id", "row_id", "line_no", "no", "序号"),
@@ -445,6 +449,46 @@ def _to_float(v: Any) -> Optional[float]:
         return None
 
 
+_WEIGHT_NUMBER = re.compile(
+    r"([+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)"
+    r"\s*(kg|kgs|kilograms?|公斤|千克|g|grams?|克|t|tonnes?|tons?|mt|吨|lb|lbs|pounds?|磅)?", re.I
+)
+_WEIGHT_UNITS = {**{u: 1.0 for u in ("kg", "kgs", "kilogram", "kilograms", "公斤", "千克")},
+                 **{u: 0.001 for u in ("g", "gram", "grams", "克")},
+                 **{u: 1000.0 for u in ("t", "ton", "tons", "tonne", "tonnes", "mt", "吨")},
+                 **{u: 0.45359237 for u in ("lb", "lbs", "pound", "pounds", "磅")}}
+
+
+# A cell that says the weight is not given ("-", "N/A", "TBC") is a missing weight, not an unreadable one:
+# the row stays and the weight_missing gate asks a person, as it did before the strict reading below.
+_WEIGHT_NOT_GIVEN = frozenset(("-", "--", "–", "—", "/", "n/a", "na", "n.a.", "tba", "tbc", "tbd",
+                               "nil", "none", "null", "待定", "无"))
+
+
+def _weight_number(value: Any, scale: Optional[float] = None) -> Optional[float]:
+    """One finite mass, optionally followed by a matching unit; ranges/operators are not numbers."""
+    if value is None or isinstance(value, str) and not value.strip():
+        return None
+    if isinstance(value, str) and value.strip().lower() in _WEIGHT_NOT_GIVEN:
+        return None
+    unit = None
+    if isinstance(value, bool):
+        raise TableCellError("weight must be a finite number, not a boolean")
+    if isinstance(value, (int, float)):
+        number = float(value)
+    else:
+        match = _WEIGHT_NUMBER.fullmatch(str(value).strip())
+        if not match:
+            raise TableCellError("weight must contain one number with an optional mass unit; confirm ranges or expressions")
+        number = float(match.group(1).replace(",", ""))
+        unit = match.group(2)
+    if not math.isfinite(number):
+        raise TableCellError("weight must be finite")
+    if unit and scale is not None and _WEIGHT_UNITS[unit.lower()] != scale:
+        raise TableCellError("weight cell unit does not match its column unit; confirm the unit")
+    return number
+
+
 #: 一个件数，可带尾随单位词："8" / "8件" / "10 pcs" / "3 EA" / "1,200"。逗号只认千分位；
 #: "1,5"、"10/12"、"2-3"、"约5" 这类读不出唯一件数的写法一律不匹配。
 _QTY_TEXT = re.compile(
@@ -528,6 +572,10 @@ def _infer_weight_scale(header: str, values: List[Optional[float]]) -> float:
     """返回乘到 kg 的系数。注意：不可用 `'t' in header`（weight 含字母 t）。"""
     h = _norm_header(header)
     raw = str(header or "")
+    # An explicit kg header is authoritative even for a 60,000 kg line total.
+    # It must never fall through to the unitless magnitude heuristic below.
+    if "kg" in h or "kilogram" in h or "公斤" in raw or "千克" in raw:
+        return 1.0
     # 磅。英制表里尺寸是英寸、重量是磅；只换算尺寸不换算重量，会得到一个尺寸对、
     # 重量高估 2.2 倍的方案，和吨当公斤是同一类错。
     if "kg" not in h and (re.search(r"(?:^|[(\[_/).\-])(?:lb|lbs|pound|pounds)(?:$|[)\].])", h) or "磅" in raw):
@@ -622,6 +670,7 @@ def rows_to_ir(
     source_path: str = "",
     profile_hint: str = "generic_table",
     row_numbers: Optional[Sequence[int]] = None,
+    cell_errors: Optional[Sequence[Dict[str, str]]] = None,
 ) -> List[Dict[str, Any]]:
     """字典行列表 → MaterialTableIR（同时兼容现有 materials API）。
 
@@ -788,6 +837,8 @@ def rows_to_ir(
         if qty_state == "zero":
             clean_stats["n_skip_zero_qty"] += 1
             continue
+        if cell_errors is not None and i <= len(cell_errors) and cell_errors[i - 1]:
+            raise TableCellError("; ".join(cell_errors[i - 1].values()))
         # 写了但读不出件数：行留下、如实标记，由闸门转人工（同 weight_missing）。
         # 既无尺寸又无重量的仍按下面的全零占位行丢弃——那是噪声，不是货。
         quantity_invalid = qty_state == "invalid"
@@ -826,10 +877,18 @@ def rows_to_ir(
             L, W, H = cur["length_mm"], cur["width_mm"], cur["height_mm"]
         dims_estimated = L <= 0 or W <= 0 or H <= 0
 
-        unit_w = _to_float(got.get("weight_kg"))
+        def weight(std: str, scale: float) -> Optional[float]:
+            try:
+                return _weight_number(got.get(std), scale)
+            except TableCellError as exc:
+                column = std_to_raw.get(std, std)
+                where = f"row {row_no if row_no is not None else i}, column {column!r}"
+                raise TableCellError(f"{where}: {exc}") from None
+
+        unit_w = weight("weight_kg", wt_scale)
         if unit_w is not None:
             unit_w = unit_w * wt_scale
-        total_w = _to_float(got.get("total_weight_kg"))
+        total_w = weight("total_weight_kg", tw_scale)
         if total_w is not None:
             total_w = total_w * tw_scale
         # 件数不知道时不推另一格：单重 × ? 与 总重 ÷ ? 都是编出来的数，留 0（= 没写）
@@ -1113,40 +1172,85 @@ def load_csv(path: PathLike, encoding: str = "utf-8-sig") -> List[Dict[str, Any]
     return out
 
 
+def _xlsx_formula_errors(path: Path, title: str, data: Sequence[Sequence[Any]], start: int,
+                         headers: Sequence[str]) -> List[Dict[str, str]]:
+    """Keep missing formula results distinct from blank cells after header composition.
+
+    openpyxl does not calculate formulas. A second, read-only view supplies only
+    formula metadata; no spreadsheet expression is executed or changed.
+    """
+    import openpyxl
+
+    from packing_assistant.runtime.cancel import check as cancel_check
+
+    mapped = build_column_map(headers)
+    critical = {i for i, h in enumerate(headers) if mapped.get(h) in (
+        "quantity", "weight_kg", "total_weight_kg", "length_mm", "width_mm", "height_mm", "__dims__"
+    ) or mapped.get(h, "").startswith(PAIR_PREFIX)}
+    errors: List[Dict[str, str]] = [{} for _ in data[start:]]
+    if not critical or start >= len(data):
+        return errors
+    wb = openpyxl.load_workbook(path, data_only=False, read_only=True)
+    try:
+        for offset, row in enumerate(wb[title].iter_rows(min_row=start + 1, max_row=len(data), max_col=len(headers))):
+            if not offset % 1024:
+                cancel_check()
+            for j in critical:
+                cell = row[j]
+                if cell.data_type != "f":
+                    continue
+                cached = data[start + offset][j] if j < len(data[start + offset]) else None
+                invalid = (cached is None or isinstance(cached, bool)
+                           or isinstance(cached, str) and (not cached.strip() or cached.startswith("#"))
+                           or isinstance(cached, (int, float)) and not math.isfinite(cached))
+                if invalid:
+                    errors[offset][headers[j]] = (
+                        f"{title!r}!{cell.coordinate}: formula has no usable cached result; "
+                        "recalculate the workbook or provide a confirmed numeric value"
+                    )
+    finally:
+        wb.close()
+    return errors
+
+
 def load_xlsx(path: PathLike, sheet: Optional[str] = None) -> List[Dict[str, Any]]:
     import openpyxl
 
     path = Path(path)
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-    if sheet and sheet in wb.sheetnames:
-        ws = wb[sheet]
-    elif "materials" in wb.sheetnames:
-        ws = wb["materials"]
-    else:
-        ws = wb.active
     from packing_assistant.runtime.cancel import check as cancel_check
 
-    data = []
-    # openpyxl pads the gap before a far row number with empty rows: a run the tool engine timed out stops here
-    # (the check does nothing outside a timed-out or cancelled run)
-    for n, values in enumerate(ws.iter_rows(values_only=True)):
-        if not n % 1024:
-            cancel_check()
-        data.append(values)
-    title = ws.title
+    try:
+        if sheet and sheet in wb.sheetnames:
+            ws = wb[sheet]
+        elif "materials" in wb.sheetnames:
+            ws = wb["materials"]
+        else:
+            ws = wb.active
+        data = []
+        # openpyxl pads the gap before a far row number with empty rows: a run the tool engine timed out stops here
+        # (the check does nothing outside a timed-out or cancelled run)
+        for n, values in enumerate(ws.iter_rows(values_only=True)):
+            if not n % 1024:
+                cancel_check()
+            data.append(values)
+        title = ws.title
+    finally:
+        wb.close()
     # iter_rows() starts at sheet row 1 and pads the empty rows above the first used one, so data[k] is sheet row
     # k + 1. ws.min_row is the first *used* row: taking it as the offset put every recorded row number (and the
     # merged-header lookup) off by the number of blank rows above the table.
     first_row = 1
-    wb.close()
     if not data:
         return []
     h = _choose_header_row(data)
     composed = _two_row_header(path, title, data, h, first_row)
     headers = composed if composed is not None else [str(c or "").strip() for c in data[h]]
     start = h + (2 if composed is not None else 1)
+    formula_errors = _xlsx_formula_errors(path, title, data, start, headers)
     rows: List[Dict[str, Any]] = []
     numbers: List[int] = []
+    errors: List[Dict[str, str]] = []
     for k, row in enumerate(data[start:]):
         if not k % 256:
             cancel_check()
@@ -1157,7 +1261,8 @@ def load_xlsx(path: PathLike, sheet: Optional[str] = None) -> List[Dict[str, Any
             continue
         rows.append(d)
         numbers.append(first_row + start + k)
-    out = rows_to_ir(rows, headers=headers, source="xlsx", source_path=str(path), row_numbers=numbers)
+        errors.append(formula_errors[k])
+    out = rows_to_ir(rows, headers=headers, source="xlsx", source_path=str(path), row_numbers=numbers, cell_errors=errors)
     _update_reading({"sheet": title, "header_row": first_row + h, "header_detected": h > 0,
                           "header_rows": [first_row + h, first_row + h + 1] if composed is not None else [first_row + h]})
     return out
@@ -1286,10 +1391,20 @@ def _no_rows_reason(path: "Path") -> str:
     return "no material rows parsed"
 
 
+def _cell_failure(path: str, exc: TableCellError) -> Dict[str, Any]:
+    _LAST_READING.set({})
+    _LAST_CLEAN_STATS.set({})
+    return {"ok": False, "path": path, "materials": [], "ir": [], "column_map": {},
+            "stats": {"n_rows": 0}, "errors": [str(exc)], "reading": {}}
+
+
 def parse_table_file(path: PathLike, **kwargs: Any) -> Dict[str, Any]:
     """统一入口：文件 → {materials, ir, stats, column_map}。"""
     path = Path(path)
-    ir = load_table(path, **kwargs)
+    try:
+        ir = load_table(path, **kwargs)
+    except TableCellError as exc:
+        return _cell_failure(str(path), exc)
     mats = ir_to_materials(ir)
     n_est = sum(1 for m in ir if (m.get("meta") or {}).get("dims_estimated"))
     confs = [(m.get("meta") or {}).get("confidence", 0) for m in ir]
@@ -1371,7 +1486,10 @@ def parse_table_rows(
     source: str = "api_rows",
 ) -> Dict[str, Any]:
     """已解析的字典行 → 与文件入口相同的返回形状。"""
-    ir = rows_to_ir(list(rows), headers=headers, source=source)
+    try:
+        ir = rows_to_ir(list(rows), headers=headers, source=source)
+    except TableCellError as exc:
+        return _cell_failure("", exc)
     mats = ir_to_materials(ir)
     colmap = {}
     if ir:

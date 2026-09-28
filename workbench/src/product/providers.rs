@@ -107,7 +107,16 @@ async fn attempt(
             "请先在模型设置中配置 API Key".into(),
         ));
     }
-    let endpoint = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
+    // Configuration and the offline endpoint checker accept either the base
+    // URL or the full Chat Completions endpoint. Validate the supplied URL
+    // before normalizing so a query/fragment cannot conceal an invalid base.
+    let base = cfg.base_url.trim().trim_end_matches('/');
+    validate_endpoint(base)?;
+    let endpoint = if base.ends_with("/chat/completions") {
+        base.to_owned()
+    } else {
+        format!("{base}/chat/completions")
+    };
     validate_endpoint(&endpoint)?;
     let mut payload =
         json!({"model":cfg.model,"messages":messages,"max_tokens":max_output,"stream":false});

@@ -4,7 +4,7 @@
 默认交付：装箱作业单 + 可选 packing-agent 回传摘要
 风险：low
 
-独立成稿时先读本文件和大类共享库。引擎在本仓 `packing_assistant/`。GitHub：https://github.com/LUOaini1213/packing-agent
+独立成稿时先读本文件和大类共享库。引擎在本仓 `packing_assistant/`。GitHub：https://github.com/LUOaini1213/civil-buddy-sme
 独有工具：`pack-ship__list`
 聊天可只答 faq / web-knowledge，不写盘。
 

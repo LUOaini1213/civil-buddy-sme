@@ -182,7 +182,10 @@ class TenderWorkflowTests(unittest.TestCase):
 
     def test_long_local_attachment_tail_is_parsed_without_context_inflation(self):
         text = ("附件说明无关文字。" * 80 + "\n") * 300 + TENDER
-        result = self.run_workflow(text, sources=[{"source_id": "long-tender", "text": text, "role": "tender"}])
+        # This checks full local-file parsing, not the default interactive deadline.
+        # Parsing this 216k-character fixture took 54s on a loaded Windows builder.
+        result = self.run_workflow(text, sources=[{"source_id": "long-tender", "text": text, "role": "tender"}],
+                                   budget={"timeout_s": 120})
         self.assertTrue(result["ok"], result)
         self.assertGreater(result["metrics"]["tool_input_chars"], 200_000)
         self.assertLess(result["metrics"]["reserved_tokens"], result["metrics"]["limit"])
@@ -315,16 +318,22 @@ class TenderWorkflowTests(unittest.TestCase):
 
         def runner(messages, *, max_tokens, cancel_event):
             slot = next(index)
-            entered.wait(timeout=3)
-            cancel_event.wait(3)
+            entered.wait(timeout=30)
+            self.assertTrue(cancel_event.wait(3))
             released[slot].set()
             return answer(messages, max_tokens=max_tokens, cancel_event=cancel_event)
 
+        # Word/Excel drafts are exported before either callback can enter.
+        # Allow setup time under load; cancellation must still return within 3s.
         with ThreadPoolExecutor(1) as pool:
-            future = pool.submit(self.run_workflow, model_runner=runner, cancel_event=cancel)
-            entered.wait(timeout=3)
-            cancel.set()
-            result = future.result(timeout=3)
+            future = pool.submit(self.run_workflow, model_runner=runner, cancel_event=cancel,
+                                 budget={"timeout_s": 60})
+            try:
+                entered.wait(timeout=30)
+                cancel.set()
+                result = future.result(timeout=3)
+            finally:
+                cancel.set()
         self.assertEqual(result["state"], "cancelled", result)
         self.assertTrue(all(event.wait(1) for event in released))
         self.assertTrue(all(any(f["path"].endswith(".docx") for f in c["files"]) for c in result["children"]))
