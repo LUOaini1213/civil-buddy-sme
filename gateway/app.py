@@ -21,6 +21,8 @@ from typing import Any, Dict, List, Optional
 
 import asyncio
 import queue as queue_mod
+import threading
+import weakref
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -62,6 +64,7 @@ from packing_assistant.harness import (  # noqa: E402
     run_team_b,
 )
 from packing_assistant.session_store import (  # noqa: E402
+    SessionPersistError,
     delete_checkpoint,
     list_checkpoints,
     load_checkpoint_meta,
@@ -85,6 +88,10 @@ def _store_session(session_id: str, state: Dict[str, Any]) -> None:
         _SESSIONS[rid] = state
     try:
         save_session(sid, state)
+    except SessionPersistError as exc:
+        # Loud, not silent: the database stayed locked, nothing was saved to disk (RAM holds the new
+        # state), and a restart would resume the previous one. The caller sees 503 and can retry.
+        raise HTTPException(503, f"the session was not saved: {exc}", headers={"Retry-After": "5"}) from exc
     except Exception:
         pass
 
@@ -107,6 +114,11 @@ def _get_session(session_id: str) -> Optional[Dict[str, Any]]:
 
 
 app = FastAPI(title="Civil Buddy Gateway", version=HARNESS_VERSION)
+# Added first, so it sits inside CORS and the access guard: a repeated Idempotency-Key on a run-starting
+# POST gets the stored response instead of a second run (gateway/idempotency.py).
+from gateway.idempotency import IdempotencyMiddleware  # noqa: E402
+
+app.add_middleware(IdempotencyMiddleware)
 # Same-machine pages only (the :8765 workbench probes /api/health); no cookies cross origins.
 app.add_middleware(
     CORSMiddleware,
@@ -184,6 +196,58 @@ def _storage_startup_maintenance() -> None:
         logger.info("storage backup done: %s", p)
     except Exception:
         logger.warning("storage startup backup skipped (non-blocking)", exc_info=True)
+
+
+@app.on_event("startup")
+def _recover_interrupted_sessions() -> None:
+    """A session a crash left in team_a/team_b_running is marked interrupted (never resumed silently)."""
+    from packing_assistant.session_store import recover_interrupted
+
+    recover_interrupted()
+
+
+#: whole-pipeline endpoints: each runs the packing solver for seconds to minutes on a worker thread
+PIPELINE_PATHS = frozenset({"/api/pipeline", "/api/pipeline/stream", "/api/pipeline/profile",
+                            "/api/pipeline/trace", "/api/demo"})
+
+
+def _pipeline_concurrency() -> int:
+    """CIVIL_PIPELINE_CONCURRENCY, at least 1; a value that is not a number falls back to 4 (the middleware is
+    built on the first request, so raising here would answer 500 to every path, /api/health included)."""
+    raw = os.getenv("CIVIL_PIPELINE_CONCURRENCY") or "4"
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        logger.warning("CIVIL_PIPELINE_CONCURRENCY=%r is not a number; using 4", raw)
+        return 4
+
+
+class _PipelineCap:
+    """At most CIVIL_PIPELINE_CONCURRENCY (default 4) pipeline requests at once on this server; the next one
+    gets 429 + Retry-After at once instead of queueing for a thread. A streaming run holds its slot until the
+    stream ends. Callers the access guard refuses pass through to it untouched (401, not 429)."""
+
+    def __init__(self, app_: Any) -> None:
+        self.app = app_
+        self.slots = threading.BoundedSemaphore(_pipeline_concurrency())
+
+    async def __call__(self, scope, receive, send):
+        if (scope["type"] != "http" or scope.get("method") != "POST" or scope.get("path") not in PIPELINE_PATHS
+                or not access_guard.authorised(scope)):
+            return await self.app(scope, receive, send)
+        if not self.slots.acquire(blocking=False):
+            from fastapi.responses import JSONResponse
+
+            busy = JSONResponse({"detail": "装箱流程并发已满，请稍后重试。Too many packing runs at once; retry shortly.",
+                                 "error_code": "busy"}, status_code=429, headers={"Retry-After": "5"})
+            return await busy(scope, receive, send)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            self.slots.release()
+
+
+app.add_middleware(_PipelineCap)
 
 
 class TeamARequest(BaseModel):
@@ -1270,8 +1334,147 @@ def api_revise_nl(body: ReviseNlRequest):
     return resp
 
 
+class _SessionLock:
+    __slots__ = ("lock", "waiters", "__weakref__")
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.waiters = 0
+
+
+# One confirm/revise per session at a time. Held only while a request uses it (weak values), so the map does
+# not grow with every session ever seen. Cancel never takes it: it must be able to stop a running Team B.
+_CONFIRM_LOCKS: "weakref.WeakValueDictionary[str, _SessionLock]" = weakref.WeakValueDictionary()
+_CONFIRM_LOCKS_GUARD = threading.Lock()
+#: a second confirm waits this long for the first to finish Team B, then gets the stored result
+_CONFIRM_WAIT_S = 600.0
+#: requests allowed to wait behind a running confirm of one session (a double click, one client retry). More get
+#: 409 at once: every waiter holds a worker thread, and 45 of them held a cancel back 65.6 s on a real server.
+_CONFIRM_MAX_WAITERS = 2
+_CONFIRM_BUSY = "该会话的上一个确认仍在运行。The previous confirm for this session is still running."
+_CANCELLED_DURING_TEAM_B = ("拼柜运行期间该会话已被取消，结果未采用。"
+                            "This session was cancelled while Team B was running; its result was discarded.")
+
+
+def _canonical_session_id(session_id: str) -> str:
+    """The session a confirm/cancel names when it is asked by the run_id alias _store_session also files a state
+    under. Acting on the alias would lock, mark and save a second copy, so a confirm by session_id racing one by
+    run_id ran Team B twice, and a cancel by run_id left the session itself confirmable. Any other key (what-if
+    copies and the like) is its own session and is left alone."""
+    sid = str(session_id or "default")
+    try:
+        known = _get_session(sid) or {}
+    except Exception:
+        known = {}
+    owner = str(known.get("session_id") or "")
+    if owner and owner != sid and str(known.get("run_id") or "") == sid:
+        return owner
+    return sid
+
+
+def _session_lock(session_id: str) -> _SessionLock:
+    sid = str(session_id or "default")
+    with _CONFIRM_LOCKS_GUARD:
+        holder = _CONFIRM_LOCKS.get(sid)
+        if holder is None:
+            holder = _SessionLock()
+            _CONFIRM_LOCKS[sid] = holder
+        return holder
+
+
+def _acquire_confirm_turn(session_id: str) -> _SessionLock:
+    """The session's confirm lock: wait at most _CONFIRM_WAIT_S, behind at most _CONFIRM_MAX_WAITERS others."""
+    holder = _session_lock(session_id)
+    if holder.lock.acquire(blocking=False):
+        return holder
+    with _CONFIRM_LOCKS_GUARD:
+        if holder.waiters >= _CONFIRM_MAX_WAITERS:
+            raise HTTPException(409, _CONFIRM_BUSY, headers={"Retry-After": "5"})
+        holder.waiters += 1
+    try:
+        got = holder.lock.acquire(timeout=_CONFIRM_WAIT_S)
+    finally:
+        with _CONFIRM_LOCKS_GUARD:
+            holder.waiters -= 1
+    if not got:
+        raise HTTPException(409, _CONFIRM_BUSY, headers={"Retry-After": "5"})
+    return holder
+
+
+def _run_team_b_guarded(sid: str, before: Dict[str, Any], run) -> Dict[str, Any]:
+    """Run Team B for a session that passed _team_b_gate, under its lock. A cancel that lands meanwhile wins (409);
+    a Team B exception puts the session back to await_user_confirm so the person can retry."""
+    # RAM agrees with disk while Team B runs: /api/session shows it, and a cancel meanwhile is seen below
+    _SESSIONS[sid] = {**before, "phase": "team_b_running", "user_action": "confirm"}
+    try:
+        state = run()
+    except Exception:
+        now = _SESSIONS.get(sid) or {}
+        if now.get("phase") == "cancelled":  # a cancel stopped Team B: that is the answer, not a crash
+            _store_session(sid, now)
+            raise HTTPException(409, _CANCELLED_DURING_TEAM_B) from None
+        if now.get("phase") == "team_b_running":
+            _store_session(sid, before)  # Team B failed: still awaiting confirmation, the user may retry
+        raise
+    current = _SESSIONS.get(sid) or {}
+    if current.get("phase") == "cancelled":
+        # cancelled while Team B ran: Team B already saved its result to disk, the cancel is final
+        _store_session(sid, current)
+        raise HTTPException(409, _CANCELLED_DURING_TEAM_B)
+    return state
+
+
+def _team_b_gate(session_id: str, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Team B runs only from phase await_user_confirm.
+
+    None: run it. A finished session (done / need_revision) returns its stored result with replayed=true and
+    runs nothing, so a double click or a client retry cannot pack the shipment twice. Every other phase is 409:
+    cancelled is final, interrupted (the gateway restarted mid-run) is never resumed silently.
+    """
+    phase = str(state.get("phase") or "")
+    if phase == "await_user_confirm":
+        return None
+    if phase in ("done", "need_revision"):
+        resp = public_response(state)
+        resp["checkpoint"] = load_checkpoint_meta(session_id) or {}
+        resp["graph_segment"] = state.get("graph_segment")
+        resp["resume_from"] = state.get("resume_from")
+        resp["replayed"] = True
+        return resp
+    if phase == "cancelled":
+        raise HTTPException(409, "该会话已取消，不能再确认；请重新运行装箱流程。"
+                                 "This session was cancelled; a cancelled plan cannot be confirmed. Run the pipeline again.")
+    if phase == "interrupted":
+        was = state.get("interrupted_phase") or "running"
+        raise HTTPException(409, f"网关在该会话运行中（{was}）重启，已标记为中断，不会自动续跑；请重新运行装箱流程。"
+                                 f"The gateway restarted while this session was running ({was}); it was marked "
+                                 "interrupted and is not resumed. Run the pipeline again.")
+    if phase == "team_b_running":
+        raise HTTPException(409, "该会话的拼柜（Team B）正在运行，请等待结果。Team B is already running for this session.")
+    raise HTTPException(409, f"该会话没有待确认的方案（phase={phase or '无'}）；请先以 enable_auto_confirm=false 运行装箱流程。"
+                             f"Nothing is awaiting confirmation in this session (phase={phase or 'none'}).")
+
+
 @app.post("/api/confirm")
 def api_confirm(body: ConfirmRequest):
+    asked = str(body.session_id)
+    sid = _canonical_session_id(asked)
+    if sid != asked:
+        body = body.model_copy(update={"session_id": sid})
+        if body.action == "cancel":
+            from packing_assistant.runtime import cancel as _cancel
+
+            _cancel.request(asked)  # a pipeline may be registered under the alias
+    if body.action == "cancel":
+        return _api_confirm(body)
+    holder = _acquire_confirm_turn(body.session_id)
+    try:
+        return _api_confirm(body)
+    finally:
+        holder.lock.release()
+
+
+def _api_confirm(body: ConfirmRequest):
     # RAM miss → disk checkpoint（进程重启 / 多 worker 轻量恢复）
     state = _get_session(body.session_id)
     if not state and body.packing_plan_id:
@@ -1313,6 +1516,10 @@ def api_confirm(body: ConfirmRequest):
 
     if body.action != "confirm":
         raise HTTPException(400, "action 必须是 confirm | revise | cancel")
+
+    stored = _team_b_gate(body.session_id, state)
+    if stored is not None:
+        return stored
 
     # 写回勾选表
     checked = dict(body.checklist_checked or {})
@@ -1363,14 +1570,14 @@ def api_confirm(body: ConfirmRequest):
         pass
     from packing_assistant.graph_resume import resume_team_b_segment
 
-    state = resume_team_b_segment(
+    state = _run_team_b_guarded(str(body.session_id), state, lambda: resume_team_b_segment(
         state,
         session_id=body.session_id,
         container_type=body.container_type,
         max_containers=body.max_containers,
         adjust_note=body.adjust_note or "",
         confirmed_box_ids=body.confirmed_box_ids,
-    )
+    ))
     if "hitl_summary" in state:
         state = {**state, "hitl_summary": {}}
     state = {**state, "phase": state.get("phase") or "done"}
@@ -1384,6 +1591,7 @@ def api_confirm(body: ConfirmRequest):
     resp["resumed_from_disk"] = True
     resp["graph_segment"] = state.get("graph_segment")
     resp["resume_from"] = state.get("resume_from")
+    resp["replayed"] = False
     return resp
 
 
@@ -1400,18 +1608,26 @@ def api_resume_team_b(session_id: str, body: ConfirmRequest):
     """显式从 HITL resume 小 Team B（等同 confirm，可仅带 session）。"""
     from packing_assistant.graph_resume import load_resume_state, resume_team_b_segment
 
-    st = _get_session(session_id) or load_resume_state(session_id)
-    if not st:
-        raise HTTPException(404, f"session {session_id} 不可 resume")
-    state = resume_team_b_segment(
-        st,
-        session_id=session_id,
-        container_type=body.container_type or st.get("container_type") or "40HQ",
-        max_containers=body.max_containers,
-        adjust_note=body.adjust_note or "",
-        confirmed_box_ids=body.confirmed_box_ids,
-    )
-    _store_session(session_id, state)
+    session_id = _canonical_session_id(session_id)
+    holder = _acquire_confirm_turn(session_id)  # the same door to Team B as /api/confirm: the same once-only rule
+    try:
+        st = _get_session(session_id) or load_resume_state(session_id)
+        if not st:
+            raise HTTPException(404, f"session {session_id} 不可 resume")
+        stored = _team_b_gate(session_id, st)
+        if stored is not None:
+            return stored
+        state = _run_team_b_guarded(str(session_id), st, lambda: resume_team_b_segment(
+            st,
+            session_id=session_id,
+            container_type=body.container_type or st.get("container_type") or "40HQ",
+            max_containers=body.max_containers,
+            adjust_note=body.adjust_note or "",
+            confirmed_box_ids=body.confirmed_box_ids,
+        ))
+        _store_session(session_id, state)
+    finally:
+        holder.lock.release()
     resp = public_response(state)
     resp["resume_from"] = state.get("resume_from")
     resp["graph_segment"] = state.get("graph_segment")

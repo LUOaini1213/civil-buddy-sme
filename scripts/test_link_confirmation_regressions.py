@@ -14,7 +14,7 @@ for key in tuple(os.environ):
     if key.endswith("_API_KEY"):
         os.environ.pop(key, None)
 
-from packing_assistant.runtime.civil_config import CONFIRM, CONFIRM_EN, contains_confirmation, message_confirmation
+from packing_assistant.runtime.civil_config import CONFIRM, CONFIRM_EN, contains_confirmation, confirms_in_message
 from packing_assistant.runtime.task_router import route_task
 from scripts import test_workbench_flow as flow
 
@@ -47,11 +47,14 @@ class LinkIntentTests(unittest.TestCase):
 
 
 class MessageApprovalTests(unittest.TestCase):
-    def test_only_current_standalone_unquoted_sentences_approve(self):
+    def test_only_the_sentence_alone_approves(self):
+        # Merged with the development line's stricter rule (review of PR #67 / #72): the typed task is never read
+        # for approval, so the sentence appended to a request approves nothing either.
         for sentence in (CONFIRM, CONFIRM_EN):
-            for request in (sentence, "写一份消防专篇。" + sentence, "Draft the fire protection report. " + sentence):
-                self.assertTrue(message_confirmation(request), request)
+            self.assertTrue(confirms_in_message(sentence), sentence)
             for request in (
+                "写一份消防专篇。" + sentence,
+                "Draft the fire protection report. " + sentence,
                 'Draft the report. "' + sentence + '"',
                 "Draft the report.\n> " + sentence,
                 "Draft the report.\n```text\n" + sentence + "\n```",
@@ -67,8 +70,8 @@ class MessageApprovalTests(unittest.TestCase):
             ):
                 with self.subTest(request=request):
                     self.assertTrue(contains_confirmation(request))  # still detected by memory scrubbing
-                    self.assertFalse(message_confirmation(request))
-        self.assertFalse(message_confirmation(True))
+                    self.assertFalse(confirms_in_message(request))
+        self.assertFalse(confirms_in_message(True))
 
 
 class HttpRegressions(unittest.TestCase):
@@ -109,10 +112,10 @@ class HttpRegressions(unittest.TestCase):
                 self.assertTrue(out["hitl_pending"], out)
         self.assertFalse(list(self.flow.root.rglob("fire-protect__brief.*")))
 
-    def test_current_standalone_sentence_still_writes_for_both_languages(self):
+    def test_sentence_in_the_confirmation_box_still_writes_for_both_languages(self):
         for sentence in (CONFIRM, CONFIRM_EN):
-            out, _ = self.flow.post("写一份消防专篇，缺失内容待填。" + sentence,
-                                   expert_ids=["fire-protect"], confirm_text="")
+            out, _ = self.flow.post("写一份消防专篇，缺失内容待填。",
+                                   expert_ids=["fire-protect"], confirm_text=sentence)
             self.assertTrue(out["wrote"], out)
             self.assertFalse(out["hitl_pending"], out)
 

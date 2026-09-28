@@ -2,7 +2,7 @@
 """The native desktop app: everything it does (controller, no display needed) and the window itself.
 
   controller   opens a job folder, keeps the thread, runs a turn with live progress lines, asks for the
-               confirm sentence for each operation, lists what was written, reviews a document,
+               confirm sentence for each high-risk turn (the answer covers that turn only), lists what was written, reviews a document,
                switches mode and sandbox backend — and says plainly what it cannot do without a job folder
   window       a real Tk window driven end to end: type a task, the turn runs on a worker thread, the
                transcript and the file list fill in; the approval dialog takes the sentence and only the
@@ -96,7 +96,7 @@ class ControllerTests(JobCase):
         with self.assertRaises(DesktopError):
             controller.submit("   ")
 
-    def test_the_sentence_is_asked_once_per_operation_and_never_carried_forward(self):
+    def test_the_sentence_is_asked_for_each_turn_and_covers_that_turn_only(self):
         controller, asked = DesktopController(), []
         controller.open_job(str(self.job))
         refused = controller.submit(BRIEF, approve=lambda request: asked.append(request) or False)
@@ -105,23 +105,28 @@ class ControllerTests(JobCase):
         granted = controller.submit(BRIEF, approve=lambda request: asked.append(request) or True)
         self.assertTrue(granted["wrote"] and not granted["hitl_pending"], granted.get("reply"))
         self.assertEqual([r["name"] for r in asked], ["安全交底", "安全交底"])
+        # the #61 baseline: one approval, one turn. Until the review of PR #75 the controller kept it for the thread
+        # (and carried it into new threads), so this third turn wrote without asking.
         self.assertFalse(controller.status()["confirmed"])
         again = controller.submit(BRIEF, approve=lambda request: asked.append(request) or False)
-        self.assertFalse(again["wrote"])
-        self.assertTrue(again["hitl_pending"])
-        self.assertEqual(len(asked), 3)                                  # a new operation needs a new decision
-        controller.switch_thread(controller.thread_id)
+        self.assertTrue(again["hitl_pending"] and not again["wrote"], again.get("reply"))
+        self.assertEqual(len(asked), 3)                                  # asked a third time
+        controller.switch_thread(controller.thread_id)                    # switching back carries nothing either
         self.assertFalse(controller.submit(BRIEF, approve=lambda _r: False)["wrote"])
+        controller.new_thread()
+        fresh = controller.submit(BRIEF, approve=lambda request: asked.append(request) or False)
+        self.assertTrue(fresh["hitl_pending"] and not fresh["wrote"])
+        self.assertEqual(len(asked), 4)
         typed = DesktopController()
         typed.open_job(str(self.job))
         typed.new_thread()
-        self.assertTrue(typed.submit(BRIEF + "。" + CONFIRM)["wrote"])     # typing the sentence in the task counts too
-        self.assertFalse(typed.submit(BRIEF, approve=lambda _r: False)["wrote"])
+        # the sentence typed inside the task approves nothing (review of #67): the dialog is still asked
+        self.assertFalse(typed.submit(BRIEF + "。" + CONFIRM, approve=lambda _r: False)["wrote"])
         english = DesktopController()
         english.open_job(str(self.job))
         english.new_thread()
-        self.assertTrue(english.submit(BRIEF + ". " + CONFIRM_EN)["wrote"])   # so does the English one
-        self.assertFalse(english.submit(BRIEF, approve=lambda _r: False)["wrote"])
+        self.assertFalse(english.submit(BRIEF + ". " + CONFIRM_EN, approve=lambda _r: False)["wrote"])
+        self.assertTrue(english.submit(BRIEF + ". " + CONFIRM_EN, approve=lambda _r: True)["wrote"])   # the dialog approves
         lower = DesktopController()
         lower.open_job(str(self.job))
         lower.new_thread()

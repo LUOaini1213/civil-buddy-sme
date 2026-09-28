@@ -9,7 +9,7 @@ pub use budget::{BudgetLimits, BudgetReservation, BudgetSnapshot, BudgetTree, Us
 pub use context::{
     check_request_budget, prepare_context, ContextReport, ContextRequest, PreparedContext,
 };
-pub use persistence::{RuntimeCore, RuntimeEvent, TurnLease, TurnRecord, TurnStatus};
+pub use persistence::{RuntimeCore, RuntimeEvent, TurnLease, TurnRecord, TurnStart, TurnStatus};
 pub use workspace::WorkspaceContext;
 
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,8 @@ pub enum RuntimeError {
     ScopeDenied(String),
     #[error("session already has an active turn")]
     SessionBusy,
+    #[error("idempotency key was already used for a different request")]
+    IdempotencyConflict,
     #[error("record not found in this workspace/session")]
     NotFound,
     #[error("invalid state transition: {0}")]

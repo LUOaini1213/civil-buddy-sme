@@ -51,7 +51,7 @@ GitHub **openai/codex**：★ **116,442** · 9,720 commits · Apache-2.0 · 今�
 ## 3. 土木版 Codex 对位（本机刚跑的闸，不是 GitHub 上的旧树）
 
 本机：`python scripts/test_civil_codex.py` **PASS**；`live_eval()` **offline_gate_pass**。  
-远程 [LUOaini1213/civil-buddy](https://github.com/LUOaini1213/civil-buddy)：★ **0** · 上次 `pushed_at` **2026-08-20**。本日 Codex 面（TUI/thread/config）**还没推上去**。评本机，不要假装远程已是这一版。
+远程开发仓库：★ **0** · 上次 `pushed_at` **2026-08-20**。本日 Codex 面（TUI/thread/config）**还没推上去**。评本机，不要假装远程已是这一版。
 
 | Codex 面 | 本仓 | 判定 |
 |----------|------|------|

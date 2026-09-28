@@ -459,9 +459,17 @@ _WEIGHT_UNITS = {**{u: 1.0 for u in ("kg", "kgs", "kilogram", "kilograms", "公�
                  **{u: 0.45359237 for u in ("lb", "lbs", "pound", "pounds", "磅")}}
 
 
+# A cell that says the weight is not given ("-", "N/A", "TBC") is a missing weight, not an unreadable one:
+# the row stays and the weight_missing gate asks a person, as it did before the strict reading below.
+_WEIGHT_NOT_GIVEN = frozenset(("-", "--", "–", "—", "/", "n/a", "na", "n.a.", "tba", "tbc", "tbd",
+                               "nil", "none", "null", "待定", "无"))
+
+
 def _weight_number(value: Any, scale: Optional[float] = None) -> Optional[float]:
     """One finite mass, optionally followed by a matching unit; ranges/operators are not numbers."""
     if value is None or isinstance(value, str) and not value.strip():
+        return None
+    if isinstance(value, str) and value.strip().lower() in _WEIGHT_NOT_GIVEN:
         return None
     unit = None
     if isinstance(value, bool):
@@ -1173,6 +1181,8 @@ def _xlsx_formula_errors(path: Path, title: str, data: Sequence[Sequence[Any]], 
     """
     import openpyxl
 
+    from packing_assistant.runtime.cancel import check as cancel_check
+
     mapped = build_column_map(headers)
     critical = {i for i, h in enumerate(headers) if mapped.get(h) in (
         "quantity", "weight_kg", "total_weight_kg", "length_mm", "width_mm", "height_mm", "__dims__"
@@ -1183,6 +1193,8 @@ def _xlsx_formula_errors(path: Path, title: str, data: Sequence[Sequence[Any]], 
     wb = openpyxl.load_workbook(path, data_only=False, read_only=True)
     try:
         for offset, row in enumerate(wb[title].iter_rows(min_row=start + 1, max_row=len(data), max_col=len(headers))):
+            if not offset % 1024:
+                cancel_check()
             for j in critical:
                 cell = row[j]
                 if cell.data_type != "f":
@@ -1206,6 +1218,8 @@ def load_xlsx(path: PathLike, sheet: Optional[str] = None) -> List[Dict[str, Any
 
     path = Path(path)
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    from packing_assistant.runtime.cancel import check as cancel_check
+
     try:
         if sheet and sheet in wb.sheetnames:
             ws = wb[sheet]
@@ -1213,7 +1227,13 @@ def load_xlsx(path: PathLike, sheet: Optional[str] = None) -> List[Dict[str, Any
             ws = wb["materials"]
         else:
             ws = wb.active
-        data = list(ws.iter_rows(values_only=True))
+        data = []
+        # openpyxl pads the gap before a far row number with empty rows: a run the tool engine timed out stops here
+        # (the check does nothing outside a timed-out or cancelled run)
+        for n, values in enumerate(ws.iter_rows(values_only=True)):
+            if not n % 1024:
+                cancel_check()
+            data.append(values)
         title = ws.title
     finally:
         wb.close()
@@ -1232,6 +1252,8 @@ def load_xlsx(path: PathLike, sheet: Optional[str] = None) -> List[Dict[str, Any
     numbers: List[int] = []
     errors: List[Dict[str, str]] = []
     for k, row in enumerate(data[start:]):
+        if not k % 256:
+            cancel_check()
         d = {headers[i]: (row[i] if i < len(row) else None) for i in range(len(headers))}
         # skip full_flow non-material
         rt = d.get("row_type")

@@ -11,6 +11,7 @@ inside it, and is the only one that refuses to *read* secrets.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
@@ -243,6 +244,59 @@ def request_spawn(
     return check_spawn(command, kind=kind, profile=profile)
 
 
+#: prefix and suffix of the temporary file a write goes through; a killed writer can leave one behind
+ATOMIC_TMP_PREFIX, ATOMIC_TMP_SUFFIX = ".", ".tmp"
+
+
+def _atomic_write(target: Path, fill: Any, *, mode: str, encoding: Optional[str] = None) -> None:
+    """Write through a temporary file in the target's own folder, then rename it over the target.
+
+    A write that raises (an encoding error, a full disk, a tool timeout that interrupts the worker) or a
+    process that is killed mid-write leaves the previous file, or no file, under the deliverable's name:
+    never a truncated file that looks complete. os.replace is atomic within one folder. Text mode keeps
+    Path.write_text's newline translation, so the bytes on disk are what they were before this change.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOINHERIT", 0)
+    for _ in range(100):
+        tmp = target.with_name(f"{ATOMIC_TMP_PREFIX}{target.name}.{os.urandom(4).hex()}{ATOMIC_TMP_SUFFIX}")
+        try:
+            fd = os.open(tmp, flags, 0o666)     # 0o666 minus the umask, as a plain open() would create it
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise FileExistsError(f"no free temporary name next to {target.name}")
+    try:
+        with os.fdopen(fd, mode, encoding=encoding) as f:
+            f.write(fill)
+            f.flush()
+            os.fsync(f.fileno())
+        if os.name != "nt" and target.exists():
+            os.chmod(tmp, target.stat().st_mode & 0o7777)
+        for attempt in range(20):
+            try:
+                os.replace(tmp, target)
+                break
+            except PermissionError:
+                # Windows refuses to replace a file another process has open; that reader is brief.
+                if os.name != "nt" or attempt == 19:
+                    raise
+                time.sleep(0.05)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    # what a killed earlier writer of this same file left behind (an hour is far past any write)
+    for stale in target.parent.glob(f"{ATOMIC_TMP_PREFIX}{target.name}.*{ATOMIC_TMP_SUFFIX}"):
+        try:
+            if stale.stat().st_mtime < time.time() - 3600:
+                stale.unlink()
+        except OSError:
+            pass
+
+
 def guarded_write_text(
     path: Union[str, Path],
     text: str,
@@ -252,7 +306,7 @@ def guarded_write_text(
 ) -> Path:
     target = assert_write(path, profile=profile)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(text, encoding=encoding)
+    _atomic_write(target, text, mode="w", encoding=encoding)
     return target
 
 
@@ -264,7 +318,7 @@ def guarded_write_bytes(
 ) -> Path:
     target = assert_write(path, profile=profile)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
+    _atomic_write(target, data, mode="wb")
     return target
 
 

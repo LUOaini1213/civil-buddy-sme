@@ -67,6 +67,24 @@ class ComposeTests(unittest.TestCase):
         if data is not None:
             self.assertEqual({"packing_output", "agent_out"}, set(data["volumes"]))
 
+    def test_base_compose_restarts_the_gateway_and_gives_it_time_to_start(self) -> None:
+        # Before 2026-09-28 only the Lightsail override had restart: unless-stopped, so a plain
+        # `docker compose up -d` gateway stayed down after a crash, and the healthcheck had no start_period.
+        text = read(ROOT / "docker-compose.yml")
+        data = yaml_load(text)
+        if data is None:
+            self.assertRegex(text, r"(?m)^    restart: unless-stopped\s*$")
+            self.assertRegex(text, r"(?m)^      start_period: \d+s\s*$")
+            return
+        gateway = data["services"]["gateway"]
+        self.assertEqual("unless-stopped", gateway["restart"])
+        health = gateway["healthcheck"]
+        period = re.fullmatch(r"(\d+)s", str(health.get("start_period", "")))
+        self.assertIsNotNone(period, "healthcheck.start_period missing")
+        self.assertGreaterEqual(int(period.group(1)), 10)
+        self.assertLessEqual(int(period.group(1)), 120)
+        self.assertEqual(("30s", "5s", 3), (health["interval"], health["timeout"], health["retries"]))
+
     def test_override_binds_the_gateway_to_loopback_behind_caddy(self) -> None:
         text = read(LS / "compose.override.yml")
         self.assertNotIn("CIVIL_WORKTREE_ROOT", text)
@@ -90,6 +108,23 @@ class ComposeTests(unittest.TestCase):
         self.assertTrue(any(v.startswith("caddy_data:/data") for v in caddy["volumes"]))
         self.assertTrue(any(e.startswith("SITE_ADDRESS=${SITE_ADDRESS:?") for e in caddy["environment"]))
         self.assertEqual("unless-stopped", data["services"]["gateway"]["restart"])
+
+
+class CiTests(unittest.TestCase):
+    def test_every_ci_job_has_a_timeout(self) -> None:
+        # Before 2026-09-28 the rust and smoke jobs had none, so a hang held a runner for GitHub's 360-minute default.
+        text = read(ROOT / ".github" / "workflows" / "ci.yml")
+        data = yaml_load(text)
+        if data is None:
+            body = text.split("\njobs:", 1)[1]
+            jobs = re.findall(r"(?m)^  ([a-z][a-z0-9-]*):\s*$", body)
+            self.assertEqual(len(jobs), body.count("\n    timeout-minutes: "), jobs)
+            return
+        limits = {name: job.get("timeout-minutes") for name, job in data["jobs"].items()}
+        for name, minutes in limits.items():
+            self.assertIsInstance(minutes, int, f"{name} has no timeout-minutes")
+            self.assertLessEqual(minutes, 60, name)
+        self.assertEqual((30, 45), (limits["rust"], limits["smoke"]))
 
 
 class CaddyTests(unittest.TestCase):
@@ -247,6 +282,22 @@ class DocTests(unittest.TestCase):
         self.assertTrue(routes and re.search(r"(?i)aws|lightsail", routes[0]), routes)
         self.assertRegex(routes[-1], r"(?i)render", routes)
         self.assertNotIn("满载演示", text)
+
+    def test_nginx_example_keeps_the_token_out_of_its_logs(self) -> None:
+        """The example used nginx's default access log, whose $request holds the one-time ?token= link, while the
+        text promised the token stays out of proxy logs (review 2026-09-27)."""
+        text = read(ROOT / "docs" / "deploy-minimal.md")
+        block = re.search(r"```nginx\n(.*?)```", text, re.S).group(1)
+        code = "\n".join(line.split("#")[0] for line in block.splitlines())       # comments may name variables
+        fmt = re.search(r"log_format\s+(\w+)\s+'([^']*)'\s*;", code)
+        self.assertIsNotNone(fmt, "a log_format without the query string")
+        for variable in (r"\$request\b(?!_)", r"\$request_uri", r"\$args", r"\$arg_", r"\$query_string", r"\$is_args",
+                         r"\$http_authorization", r"\$http_cookie"):
+            self.assertNotRegex(fmt.group(2), variable)
+        self.assertRegex(code, r"access_log\s+\S+\s+" + fmt.group(1) + r"\s*;")
+        self.assertEqual(1, len(re.findall(r"access_log", code)), "one access_log, the filtered one")
+        self.assertRegex(code, r"error_log\s+\S+\s+crit\s*;")
+        self.assertRegex(code, r"proxy_read_timeout\s+1[2-9]\d?s\s*;")
 
 
 if __name__ == "__main__":

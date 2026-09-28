@@ -84,7 +84,9 @@ submit_blocked=true  secret_leak=false  禁止：可以投标 / 可以开工
 **提交署名说明** — 截至 `cab9249`，`main` 上 447 个提交里有 98 个（约 22%）署名为 `Packing Assistant`（`git log --format=%an | sort | uniq -c`）：agent 起草并落盘的改动独立署名，经人审后合入 `main`。这是 HITL 流程的一部分，不是第二位作者。
 
 > 内部讨论草稿，不是法定专项方案、不是签认件。
-> 高风险写盘前确认句：`我明白，将由持证人员签认`。
+> 高风险写盘前确认句：`我明白，将由持证人员签认`（英文等价句 / English: `I understand; a licensed person will sign this off.`，Rust 工作台只认中文句）。须单独原样键入：网页的确认框、终端的 `approve>` 或桌面弹窗；写在任务里、夹在招标原文里都不算（Rust 工作台里单独成行的一句仍算，见 SECURITY.md 的未决项）。每次同意只管本轮；`civil exec --confirm` 是本机操作者自己的开关，不输入确认句。
+>
+> Security model, what is tested and how to report a problem: [SECURITY.md](SECURITY.md).
 
 **竞赛材料（海之子杯 2026 · AI 智能体挑战）** — 评审维度对照、可复跑命令与 23 轮 UX 迭代记录移至 [docs/submission/haizizhi-entry.md](docs/submission/haizizhi-entry.md)；Agent Middleware 赛道对照表（**按赛题 checklist 自评**，非官方评审）见 [docs/civil-buddy/track1-qualified.md](docs/civil-buddy/track1-qualified.md)。同一仓库也是 NUS-ISS「Show Me Your Agents」2026 的参赛项目（提案 2026-09-28）：英文对照表、可复跑命令与边界见 [docs/submission/nus-iss-entry.md](docs/submission/nus-iss-entry.md)；两赛口径互不通用。
 

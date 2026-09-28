@@ -397,7 +397,7 @@ async fn execute(
             "status",
             json!({"phase":"model","iteration":iteration+1,"message":runtime_text(&req.locale,"模型正在处理资料与工具结果")}),
         )?;
-        let completion = providers::complete(
+        let completion = providers::complete_with_retry(
             &cfg,
             &prepared.messages,
             &prepared.tools,
@@ -406,6 +406,18 @@ async fn execute(
             budget,
             lease.task_id(),
             &cancel,
+            // Transient model failures are retried only while no tool (the
+            // user-selected skill included) has run in this turn.
+            &providers::RetryPolicy::before_tools(iteration == 0 && selected_skill.is_none()),
+            |notice| {
+                let _ = emit(
+                    lease,
+                    "status",
+                    json!({"phase":"model_retry","retry":notice.retry,"max_retries":notice.max_retries,
+                        "delay_ms":notice.delay.as_millis() as u64,"reason":notice.reason,
+                        "message":format!("模型服务暂时不可用，{:.1} 秒后重试（第 {}/{} 次）", notice.delay.as_secs_f64(), notice.retry, notice.max_retries)}),
+                );
+            },
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -548,7 +560,13 @@ async fn execute(
                         {
                             Err("必须先读取源文件，并成功预览相同的source、expected_sha256和patches".into())
                         } else {
-                            let mut response = scope.execute(name, args.clone()).await;
+                            // Same turn + same previewed patch = same worker call_id,
+                            // so a repeated apply replays the first draft.
+                            let call_id = (name == "apply_document").then(|| {
+                                super::worker::document_call_id(lease.turn_id().as_str(), &key)
+                            });
+                            let mut response =
+                                scope.execute_as(name, args.clone(), call_id.as_deref()).await;
                             if let Ok(value) = &mut response {
                                 if name == "load_skill" && value["risk"] == "high" {
                                     high_risk = true;
@@ -562,7 +580,9 @@ async fn execute(
                                         latest_previews.insert(source.to_owned(), key.clone());
                                         previews.insert(key.clone(), args.clone());
                                     }
-                                    if name == "apply_document" {
+                                    if name == "apply_document"
+                                        && value["result"]["replayed"] != true
+                                    {
                                         let artifact = state
                                             .register_artifact(&req.workspace, &value["result"])?;
                                         emit(lease, "artifact", artifact.clone())?;

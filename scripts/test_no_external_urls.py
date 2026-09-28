@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""零外链断言（UX R12 收口，固化附录 A/K 红线）：中建现场多为内网/弱网，
+"""零外链断言（UX R12 收口，固化附录 A/K 红线）：施工现场多为工地内网/弱网，
 界面必须断网可用 —— 浏览器可加载的任何资产里不允许出现 http(s):// 外链引用。
 
 扫描范围（浏览器真正会解析/加载的资产，缺一不可）：
@@ -230,7 +230,7 @@ def main() -> int:
 
     print(f"[no-external-urls] 扫描 {scanned} 个浏览器资产文件（frontend/ demo/static/ workbench/src/）")
     if bad:
-        print(f"[no-external-urls] FAIL：{len(bad)} 处外链引用（红线：中建内网断网必须可用）")
+        print(f"[no-external-urls] FAIL：{len(bad)} 处外链引用（红线：工地内网断网必须可用）")
         for b in bad:
             print("  " + b)
         return 1

@@ -14,7 +14,8 @@ partner supplied no document or number in this folder.
 | `facade_panels_rev_b.xlsx` | Revision B of the English list: level L9 added (6 more panels) and the L8 panels re-weighed at 520 kg — 30 panels, 13,920 kg | the linked run's re-run |
 | `daily_report_input.txt` | One façade installation day as labelled lines: 6 panels on L5, 13 workers, a roof unit hoist, 2 gondolas (吊篮), 1 MEWP (曲臂车), a gasket defect, work above 3 m under a checked permit | pm-daily (项目日报) |
 | `wah_briefing_input.txt` | Work-at-height toolbox briefing as labelled lines: panel landing and sealing L5–L8, fall height above 3 m, gondola and MEWP measures, stop conditions | safety-brief (安全交底, high risk) |
-| `make_panels.py` | Regenerates the three workbooks: `python examples/facade-demo/make_panels.py [NAME ...]` | — |
+| `facade_panels_mixed.xlsx` | A mixed delivery written the way a panel schedule usually looks, not in the engine's column names: a two-line title block above the header (row 4), `Mark / Description / Qty / Length (mm) / Width (mm) / Depth (mm) / Unit Wt (kg) / Total Wt (kg) / Remarks`, 20 typical panels (L5–L8), 4 L-shaped corner panels (bounding box 4200 × 1500 × 600 mm, 540 kg), 8 spandrel panels (4200 × 1200 × 200 mm, 300 kg), 2 bracket crates (4000 × 1000 × 800 mm, 520 kg) and a TOTAL row — 34 pieces, 14,600 kg | the linked run and pack-ship, for the finale demo |
+| `make_panels.py` | Regenerates the four workbooks: `python examples/facade-demo/make_panels.py [NAME ...]` | — |
 
 The two `.txt` inputs are in Chinese labelled lines because that is what the drafting posts read
 today; an English sentence places almost nothing yet. In English: *daily report* — 24 Sep 2026, fine,
@@ -62,6 +63,28 @@ mass, 6,472.8 kg against the 20,000 kg of Clause 4.9 (S3), are *partial* because
 and names the earlier Word copies that still hold the old statements. Nothing is booked or submitted:
 `submit_blocked` stays true and a person confirms the plan before booking.
 
+## Panel lists as they are usually written
+
+The reader takes the header from row 1 when row 1 is a header (every list above but the mixed one), and otherwise
+from the best of the first 15 rows, so a title block is fine. It reads the usual schedule words (`Mark`, `Panel Ref`,
+`Nos`, `Unit Wt`, `Total Wt`, `Mass`, `Depth`, `Thk`, `W x H (mm)` with cells like `1500 x 4200`), a merged two-row
+header (`Dimensions (mm)` over `L / W / D`), metres and tonnes (converted and recorded), uses the mark as the name when
+there is no description column, and skips `TOTAL` / `Subtotal` / `Grand Total` rows (recorded with their row number).
+A column it cannot read stays unread: in the English linked run the reply names it and every question names the sheet
+row, e.g. `Row 3 (UCW-L6) has no usable weight`. On 2026-09-26 the mixed list printed:
+
+```
+Linked facade_itt_doc.md and facade_panels_mixed.xlsx: 5 logistics clauses, 7 statements (1 covered by the plan,
+2 partial, 0 gap, 4 for a person). Plan 9 x 40HQ (Container type 40HQ taken from Clause 4.8.) Panel list read: header
+read from row 4; 1 total/subtotal row not packed (row 15 'TOTAL'). ...
+```
+
+with 34 → 34 pieces and 14,600 → 14,600 kg in the conservation check. The bracket crate is 4 m long because it
+carries the anchor channels. A short crate (1200 × 1000 × 800 mm) beside the 4.35 m panel crates is where the loader
+is weak today: it then puts 2 crates in each 40HQ instead of 4 and the plan does not fit (measured the same day on
+this list with only BRK-01 resized to 1200 × 1000 × 800: 9 × 40HQ holding 19 of 33 crates). That limit is the loader's, not the reader's, and it is not hidden: the run says
+`DOES NOT FIT` and states no count.
+
 ## Run it
 
 ```
@@ -76,9 +99,10 @@ prints what each flow extracted and where a person must sign, and exits 1 if a f
 
 The work-at-height briefing is a high-risk post: it writes nothing until a licensed person types
 「我明白，将由持证人员签认」 or its one English equivalent, "I understand; a licensed person will sign this off."
-(exactly, for that turn only). The script never types it. That person reruns with
-`--sign "I understand; a licensed person will sign this off."` (or the Chinese sentence; the same as
-`civil exec --confirm`, or the dialog in `civil desktop`).
+(exactly, and on its own: the workbench's confirmation box, the terminal's `approve>` prompt or the dialog in
+`civil desktop`; typed inside the task it approves nothing). The script never types it. That person reruns with
+`--sign "I understand; a licensed person will sign this off."` (or the Chinese sentence). Each approval covers that
+turn only, on every surface; `civil exec --confirm` is the local operator's own switch and takes no sentence.
 
 By hand, in any empty folder: `civil init`, copy the files into an `inputs/` sub-folder (files in the
 folder's top level are pasted into every draft), then the two linked requests above, `civil exec "解析招标 facade_itt_doc.md"`,
@@ -92,7 +116,8 @@ The script computes these from the drafts instead of claiming them; on 2026-09-2
 
 - tender.parse.md shows 0 of the 12 façade specification clauses (PMU, VMU, heat soak, water test,
   PE endorsement, warranty, A-frame delivery, 40HQ containers, gross mass, CTU Code, delivery sequence,
-  insurance), and no LDs or retention row (the linked run reads the five logistics ones itself);
+  insurance) (the linked run reads the five logistics ones itself); on `main` after v0.7.0 the LDs and
+  retention rows are kept as unclassified rows for a person to check;
 - the plan was 6 × 40HQ, one panel per crate, and the same with Chinese notes, English notes and no
   notes at all (the script packs a copy with the notes removed as the control): the notes (glass,
   upright, no stacking) do not change it, and A-frame stillages are not modelled — that needs the

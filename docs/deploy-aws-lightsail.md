@@ -63,13 +63,12 @@ price in September 2026; check the price with the command in A1 before relying o
 1. Your AWS access, as the organisers' document describes. For Path A, the AWS CLI v2 configured for it; check:
    `aws sts get-caller-identity` prints your account, and `aws configure get region` (or `--region` on every
    command, as below).
-2. **The commit to deploy**: a full 40-character SHA that contains `deploy/lightsail/civil-admin.sh`. Today that is
-   the development repository (the showcase mirror does not carry the kit yet):
+2. **The commit to deploy**: a full 40-character SHA of a commit of this repository that contains
+   `deploy/lightsail/civil-admin.sh` (`main` carries the kit since PR #2; the submitted v0.7.0 does not):
 
    ```bash
    REPO=https://github.com/LUOaini1213/civil-buddy-sme.git
-   SHA=$(git ls-remote "$REPO" refs/heads/main | cut -f1)      # after this kit is merged into main
-   # before the merge: SHA=$(git ls-remote "$REPO" refs/heads/feat/web-link-and-lightsail | cut -f1)
+   SHA=$(git ls-remote "$REPO" refs/heads/main | cut -f1)
    echo "$SHA"                                                   # 40 hex characters
    ```
 
@@ -268,8 +267,11 @@ without the token. Then `https://<site>/demo` runs the linked demo in one click.
 - What someone with the token can do: everything a user can (write sessions, upload files, delete checkpoints,
   run evaluations). One token for all routes and no rate limit in front of it. That is why the box holds
   **synthetic data only and no model key by default**: the worst case is a mess that one snapshot restore undoes.
-- Bounded by design: uploads at most 10 MB + 5 MB (Caddy refuses bodies over 16 MB), at most 2 linked runs at
-  once, 10 upload jobs kept per session. The linked run never approves anything: its record stays
+- Bounded by design: uploads at most 10 MB + 5 MB (Caddy refuses bodies over 16 MB), an Office file that unpacks
+  to more than 20 MB or a panel list over 5,000 rows (counted in every part of the workbook, row numbers, far
+  columns and merged cells included) is refused before it is parsed, at most 2 linked runs at once
+  (a run that timed out keeps its slot until its worker has stopped, and the pack step stops at its next merge
+  step), 10 upload jobs kept per session, and an upload without a `session_id` gets a session of its own. The linked run never approves anything: its record stays
   `submit_blocked = true`, `confirmed_by_person = false`; only a person's typed sentence approves high-risk work,
   for one turn, and no model, MCP call or flag can.
 - Logs: uvicorn's access log is off (it printed the `?token=` link); Caddy's access log filters the token query
