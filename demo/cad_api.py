@@ -81,6 +81,7 @@ DOCUMENTS = MemoryStore(max_items=8, max_bytes=192 * 1024 * 1024)
 MODELS = MemoryStore(max_items=12, max_bytes=64 * 1024 * 1024)
 IMPORTS = MemoryStore(max_items=2, max_bytes=192 * 1024 * 1024)
 COMPUTE = BoundedSemaphore(2)
+RETRY_AFTER = {"Retry-After": "5"}  # every busy 429 says when to come back
 OPERATIONS: dict[str, Event] = {}
 OPERATIONS_LOCK = RLock()
 CANCELLED_IMPORTS: OrderedDict[str, float] = OrderedDict()
@@ -177,7 +178,7 @@ def require_export_permission() -> None:
 
 def compute(fn, *args):
     if not COMPUTE.acquire(blocking=False):
-        raise HTTPException(429, "已有建模任务正在处理，请稍后重试。")
+        raise HTTPException(429, "已有建模任务正在处理，请稍后重试。", headers=RETRY_AFTER)
     try:
         return fn(*args)
     except ValueError as exc:
@@ -203,7 +204,7 @@ async def operation(request: Request, fn):
         if identifier in OPERATIONS:
             raise HTTPException(409, "该 CAD 操作正在执行，请勿重复提交。")
         if len(OPERATIONS) >= 4:
-            raise HTTPException(429, "CAD 操作繁忙，请稍后重试。")
+            raise HTTPException(429, "CAD 操作繁忙，请稍后重试。", headers=RETRY_AFTER)
         OPERATIONS[identifier] = event
 
     async def watch_disconnect():
@@ -485,7 +486,7 @@ def project_store():
 def project_compute(fn, *args, **kwargs):
     from packing_assistant.cad3d.projects import ProjectConflict, ProjectNotFound
     if not COMPUTE.acquire(blocking=False):
-        raise HTTPException(429, "已有建模任务正在处理，请稍后重试。")
+        raise HTTPException(429, "已有建模任务正在处理，请稍后重试。", headers=RETRY_AFTER)
     try:
         return fn(*args, **kwargs)
     except ProjectConflict as exc:

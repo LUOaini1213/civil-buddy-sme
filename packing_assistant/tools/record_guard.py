@@ -17,7 +17,9 @@ wrong is what it is attached to. This module attaches them:
               a total or a per-crate mass is another quantity and is left to the number guard
   clause      "Clause X asks for ..." must share at least one content word with clause X's text in the record
               (English only, sentences with three or more content words: a heuristic, not a parser)
-  approval    "approved for submission", "ready to submit / book", "can be submitted", "is signed off" (English;
+              ("met", "satisfied", "complies" count as covered)
+  approval    "approved for submission", "ready to submit / book", "can be submitted", "is signed off", "is compliant
+              with all ...", "you can book the containers", "the submission can go ahead" (English;
               the Chinese forms are verdict_guard's): no draft is, since every one is submit_blocked = true and
               confirmed_by_person = false; a hedged sentence (not, until, once, must, if, a question) is left alone.
               This one needs no record, so it runs on every checked reply.
@@ -33,10 +35,13 @@ from typing import Any, Dict, Iterable, List, Optional
 _SPLIT = re.compile(r"(?<=[。！？!?；;\n])|(?<=\.)(?=\s|$)")
 _IDS = re.compile(r"\bS\s?([1-9]\d?)\b(?:\s*(?:-|–|—|to|through|至|到|~)\s*S?\s?([1-9]\d?)\b)?")
 _ALL = re.compile(r"(?i)\b(?:all|every|each)\b[^.;。；]{0,40}?\b(?:statements?|clauses?|items?|requirements?)\b[^.;。；]{0,25}?"
-                  r"\b(?:are|is|were|was|been|now)\s+(?:all\s+|fully\s+|now\s+)?covered\b|全部(?:已)?覆盖|均已覆盖|都已覆盖|全部满足")
-_NOT_COVERED = re.compile(r"(?i)\b(?:not|never|no longer|isn't|aren't|un)\s*(?:yet\s+|fully\s+)?covered\b|未覆盖|没有覆盖|不能覆盖|无法覆盖")
+                  r"\b(?:are|is|were|was|been|now)\s+(?:all\s+|fully\s+|now\s+)?(?:covered|met|satisfied|fulfilled|complied\s+with)\b|"
+                  r"全部(?:已)?覆盖|均已覆盖|都已覆盖|全部满足|均已满足|都已满足")
+_NOT_COVERED = re.compile(r"(?i)\b(?:not|never|no longer|isn't|aren't|un)\s*(?:yet\s+|fully\s+)?(?:covered|met|satisfied|fulfilled)\b|"
+                          r"未覆盖|没有覆盖|不能覆盖|无法覆盖|未满足")
 _STATUS = {
-    "covered": re.compile(r"(?i)\bcovered\b|已覆盖|覆盖"),
+    # "met", "satisfied", "complies" say covered in other words (reviewer's probe of PR #71, 2026-09-27)
+    "covered": re.compile(r"(?i)\bcovered\b|\bmet\b|\bsatisfie[sd]\b|\bfulfill?ed\b|\bcompl(?:ies|ied|iant)\b|已覆盖|覆盖|已满足"),
     "partial": re.compile(r"(?i)\bpartial(?:ly)?\b|\bpartly\b|部分"),
     "gap": re.compile(r"(?i)\bgaps?\b|缺口|不满足"),
     "human_required": re.compile(r"(?i)human[_\s]required|\bfor a person\b|\b(?:a|the) person\b|\bpeople\b|\bhuman\b|人工|由人|待人|需人"),
@@ -58,7 +63,12 @@ _LABELS = (
 _LIMIT_WORD = re.compile(r"(?i)\blimit|\bnot\s+exceed|\bexceed|\ballowed\b|上限|不超过|不得超过|限")
 _APPROVAL = re.compile(r"(?i)\bapproved\s+for\s+(?:submission|booking|issue|tender)\b|\bready\s+(?:to|for)\s+(?:be\s+)?(?:submit|submission|"
                        r"submitted|book|booking|booked)\b|\b(?:can|may)\s+(?:now\s+)?(?:be\s+)?(?:submitted|booked)\b|"
-                       r"\b(?:is|are|was|were|has\s+been|have\s+been|now)\s+(?:fully\s+)?(?:approved|signed[\s-]off|certified)\b")
+                       r"\b(?:is|are|was|were|has\s+been|have\s+been|now)\s+(?:fully\s+)?(?:approved|signed[\s-]off|certified)\b|"
+                       r"\b(?:is|are)\s+(?:fully\s+)?compliant\s+with\s+(?:all|every|the\s+(?:tender|itt))\b|"
+                       r"\b(?:can|may)\s+(?:now\s+)?(?:book|submit|issue)\s+(?:the\s+|these\s+|your\s+)?(?:bid|tender|response|"
+                       r"submission|containers?|booking|shipment)\b|"
+                       r"\b(?:submission|booking|bid|shipment)\s+(?:can|may)\s+(?:now\s+)?go\s+ahead\b|"
+                       r"\b(?:draft|bid|response)\s+(?:is\s+final\s+and\s+)?(?:may|can)\s+(?:now\s+)?be\s+issued\b")
 _HEDGE = re.compile(r"(?i)\bnot\b|\bno\b|\bnever\b|n't\b|\bcannot\b|\buntil\b|\bbefore\b|\bonce\b|\bafter\b|\bwhen\b|\bwhether\b|"
                     r"\bif\b|\bmust\b|\bneeds?\b|\bonly\b|\?")
 _NAMES = {"gross": "heaviest container gross mass", "cargo": "heaviest container cargo mass", "tare": "container tare",
@@ -146,13 +156,59 @@ def _label_before(before: str) -> str:
     return best
 
 
+_NEARLY = re.compile(r"(?i)\b(?:nearly|almost|virtually|practically)\s+$")
+
+
+_NEARLY_OR_MOST = re.compile(r"(?i)\b(?:nearly|almost|virtually|practically|most|majority)\b")
+
+
+# A condition before the claim, in its clause or leading its sentence: "If / Until / Unless all clauses are covered".
+_ALL_CONDITION = re.compile(r"(?i)\b(?:if|once|unless|until|when|whenever|after|before|provided|providing|assuming|"
+                            r"as\s+soon\s+as|in\s+case|subject\s+to|pending)\b")
+
+
+def _all_stated(text: str, match: re.Match) -> bool:
+    """An "all covered" claim the sentence makes, not one it negates, asks or sets as a condition: "Not all clauses are
+    covered", "并非所有条款均已覆盖", "If all clauses are covered, a person still signs off", "Until all clauses are
+    covered, the bid stays blocked", "Are all clauses covered?" say the opposite or nothing (review of #71, 2026-09-27).
+
+    Only those three let a sentence through. Reported, quoted, hedged ("would appear", "as expected") or trailing
+    conditions ("... covered following the rev B update", "... after the latest run") do not: the coverage is the
+    record's fact, and a sentence that says every statement is covered contradicts a record where one is not, whoever
+    it is attributed to (review of #74: the claim check's full exemption list let those seven through, main struck them)."""
+    from packing_assistant.tools import claim_check, verdict_guard
+
+    if _NEARLY.search(text, 0, match.start()):
+        return False            # "nearly all ... covered" is a count; claim_check holds it to the record
+    if not re.search(r"[A-Za-z]", match.group(0)):
+        return claim_check._zh_stated(text, match)
+    if not verdict_guard._english_stated(text, match, negation=True, conditions=False, questions=True, reported=False,
+                                         quotes=False):
+        return False            # negated in its clause (a leading "with no ..." phrase does not count), or asked
+    clause = text[verdict_guard._last_break(verdict_guard._EN_CLAUSE_BREAK_BEFORE, text, match.start()): match.start()]
+    sentence = text[verdict_guard._last_break(verdict_guard._EN_SENTENCE_BREAK, text, match.start()): match.start()]
+    for m in _ALL_CONDITION.finditer(clause):
+        if m.group(0).lower() not in ("after", "when") or verdict_guard._EN_SUBORDINATE.match(clause[m.end():] + match.group(0)):
+            return False
+    return not verdict_guard._en_condition_lead(sentence)
+
+
 def _status_problem(text: str, statuses: Dict[str, str]) -> str:
     negated = bool(_NOT_COVERED.search(text))
     claimed = {k for k, rx in _STATUS.items() if rx.search(text)}
     if negated:
         claimed.discard("covered")
-    if _ALL.search(text) and not negated and any(v != "covered" for v in statuses.values()):
+    if (not negated and any(v != "covered" for v in statuses.values())
+            and any(_all_stated(text, m) for m in _ALL.finditer(text))):
         return "the record does not have every statement covered"
+    if _NEARLY_OR_MOST.search(text):
+        # "nearly all / most ... covered" is a count: held to the statuses the same way claim_check holds it to a
+        # link record file (a read_link_record turn has the statuses but may have no file)
+        from packing_assistant.tools import claim_check
+
+        view = {"statements": [{"id": sid, "clause": sid, "status": status} for sid, status in statuses.items()]}
+        if any(item["kind"] in ("near", "most") for item in claim_check.overclaims(text, view)):
+            return "the record has fewer statements covered than the sentence says"
     for sid in _ids(text):
         if claimed and sid in statuses and statuses[sid] not in claimed:
             return f"the record gives {sid} the status {statuses[sid]}"
@@ -215,13 +271,21 @@ def mismatches(reply: str, facts: Dict[str, Any]) -> List[Dict[str, Any]]:
     statuses: Dict[str, str] = facts.get("statuses") or {}
     ctype = str(facts.get("container_type") or "").upper()
     clauses: Dict[str, str] = facts.get("clauses") or {}
+    from packing_assistant.tools.verdict_guard import INVISIBLE, visible_variants
+
     for s in sentences(reply):
         text = s["text"]
-        why = ((_status_problem(text, statuses) if statuses else "")
-               or (_type_problem(text, ctype) if ctype else "")
-               or _mass_problem(text, facts)
-               or (_clause_problem(text, clauses) if clauses else "")
-               or _approval_problem(text))
+        # a zero-width space or soft hyphen hides no claim: the sentence is also read with them as spaces and dropped
+        # (review of #74, dev_round3_review.json); the struck span stays the original sentence
+        why = ""
+        for variant in ([text] + [v for v, _ in visible_variants(text)] if INVISIBLE.search(text) else [text]):
+            why = ((_status_problem(variant, statuses) if statuses else "")
+                   or (_type_problem(variant, ctype) if ctype else "")
+                   or _mass_problem(variant, facts)
+                   or (_clause_problem(variant, clauses) if clauses else "")
+                   or _approval_problem(variant))
+            if why:
+                break
         if why:
             found.append({"kind": "record", "text": text.strip(), "start": s["start"], "end": s["end"], "why": why})
     return found

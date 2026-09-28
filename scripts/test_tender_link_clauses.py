@@ -313,6 +313,108 @@ class Reading(unittest.TestCase):
         self.assertEqual(found[0]["kinds"], ["container_type", "unplaced"])
         self.assertEqual(found[0]["unplaced_text"], "the terminal accepts up to 32 t.")
 
+    # round 3 (the two reviews of PR #68, 2026-09-27): every sentence below was read wrongly or not at all on 923ed38
+    def test_crate_crane_and_aframe_limits_are_never_the_container_limit(self):
+        def read(text):
+            found = [c for c in clauses(HEAD + text) if c["clause"] != "4.8"]
+            return {k: v for c in found for k, v in (("kinds", c["kinds"]), ("limits_kg", c.get("limits_kg")),
+                                                      ("package_limits_kg", c.get("package_limits_kg"))) if v}
+
+        # was: a 1,500 kg / 8,000 kg container limit, and [2000, 20000] as two container limits
+        self.assertEqual(read("4.13 Crates delivered in containers shall weigh no more than 1,500 kg each."),
+                         {"kinds": ["per_package_limit", "crating"], "package_limits_kg": [1500.0]})
+        self.assertEqual(read("4.13 The mobile crane capacity for container offloading is limited to 8 tonnes."),
+                         {"kinds": ["per_package_limit"], "package_limits_kg": [8000.0]})
+        self.assertEqual(read("4.13 Each container load shall not exceed 20 t and each A-frame shall not exceed 2 t."),
+                         {"kinds": ["gross_mass", "per_package_limit", "handling"], "limits_kg": [20000.0],
+                          "package_limits_kg": [2000.0]})
+        # a limit on what a container holds is a container limit (was: a 5,000 / 18,000 kg per-panel limit)
+        self.assertEqual(read("4.9 The total mass of panels in each container shall not exceed 5 t."),
+                         {"kinds": ["gross_mass"], "limits_kg": [5000.0]})
+        self.assertEqual(read("4.9 The weight of panels in any container, including stillages and dunnage, shall not exceed 18 t.")
+                         ["limits_kg"], [18000.0])
+        # one limit for a crate, a stillage and a container: whose? a person reads it (was: a per-package limit)
+        shared = read("4.13 The loaded weight of any one crate, stillage or container shall not exceed 25 t.")
+        self.assertIn("unplaced", shared["kinds"])
+        self.assertNotIn("limits_kg", shared)
+        self.assertNotIn("package_limits_kg", shared)
+        # and what stays as it was: the stillage is the subject; "8 stillages of 2 t each" stays with a person
+        self.assertEqual(read("4.9 Each stillage loaded into a container shall not exceed 1.5 t.")["package_limits_kg"], [1500.0])
+        self.assertEqual(read("4.9 Loaded 40HQ containers shall weigh no more than 26 t each.")["limits_kg"], [26000.0])
+        self.assertIn("unplaced", read("4.9 Each container shall carry no more than 8 stillages of 2 t each.")["kinds"])
+        self.assertNotIn("limits_kg", read("4.9 Each container shall be unloaded with the site crane of 50 t."))
+
+    def test_limits_that_went_silent_are_read_or_quoted(self):
+        def one(text):
+            (found,) = [c for c in clauses(text) if c["clause"] not in ("4.8",)]
+            return found
+
+        for text, kg, basis in (("4.9 Each 40HQ shall not exceed 26 t.", 26000.0, "unstated"),
+                                ("4.9 Max. gross wt. per 40HQ: 26,500kg.", 26500.0, "gross"),
+                                ("5.2 Max payload 20 mt per 40HQ.", 20000.0, "cargo"),
+                                ("4.9 Containers: the maximum permissible weight is 44,000 lbs gross per container.", 19958.1, "gross"),
+                                ("4.9 The maximum gross mass of each loaded container is 20 short tons.", 18143.7, "gross")):
+            with self.subTest(text=text):
+                found = one(text)
+                self.assertIn("gross_mass", found["kinds"])
+                self.assertEqual((found["limits_kg"], found["basis"]), ([kg], basis))
+        self.assertEqual(one("4.9 Containers: the maximum permissible weight is 44,000 lbs gross per container.")["limits_written"],
+                         {"19,958.1": "44,000 lbs"})
+        # a limit with no figure goes to a person, quoted
+        vgm = "5.10 The VGM of each container shall be declared and shall not exceed the MGW on the CSC plate."
+        self.assertEqual((one(vgm)["kinds"], one(vgm)["unplaced_text"]), (["unplaced"], vgm))
+        # a bare number under a "(t)" header is tonnes; the row is quoted as written
+        table = ("SECTION 4 LOGISTICS\n\nTable 4-1 Container limits\n\n| Item | Max gross mass (t) |\n|---|---|\n"
+                 "| Loaded 40HQ container | 5 |")
+        row = one(table)
+        self.assertEqual((row["cite"], row["kinds"], row["limits_kg"]), ("Table 4-1, row 1", ["container_type", "gross_mass"], [5000.0]))
+        self.assertEqual(row["text"], "| Loaded 40HQ container | 5 |")
+        # delivery hours and vehicle length, as a clause and as a table row
+        hours = "4.11 Deliveries to site are limited to 08:00 to 17:00 on weekdays; vehicles no longer than 12 m."
+        self.assertEqual((one(hours)["kinds"], one(hours)["access_terms"]),
+                         (["site_access"], ["delivery hours 08:00 to 17:00", "vehicle length"]))
+        row = one("Table 4-1 Site logistics\n\n| Ref | Requirement |\n|---|---|\n| 4.11 | " + hours[5:] + " |")
+        self.assertEqual((row["cite"], row["kinds"]), ("Table 4-1, row 4.11", ["site_access"]))
+        # ... and nothing over-reaches: "30 mt long" is a length, a bin is not a shipping container, clause numbers
+        # are no delivery hours
+        self.assertFalse([c for c in clauses("4.9 Panels shall ship in 40HQ; units 30 mt long shall be split.") if c.get("limits_kg")])
+        self.assertEqual(clauses("9.22 Refuse containers on each floor shall not exceed 1,100 litres."), [])
+        self.assertEqual(clauses("SECTION 4 LOGISTICS\n\n4.13 Clauses 4.10 to 4.12 apply to every delivery."), [])
+
+    def test_in_the_demo_itt_a_table_and_a_continuation_are_read(self):
+        # the demo ITT is read as a document (tools/tender_document.py): a captioned table and an unnumbered paragraph
+        # after 4.11 were container_type only, their 5 t and 26 t silent
+        text = ITT.replace("4.12 Insurance:", "Table 4-1 Container limits\n\n| Item | Max gross mass (t) |\n|---|---|\n"
+                                              "| Loaded 40HQ container | 5 |\n\nEach 40HQ shall not exceed 26 t.\n\n4.12 Insurance:")
+        found = clauses(text, "itt.md")
+        mass = {c["cite"]: c["limits_kg"] for c in found if "gross_mass" in c["kinds"]}
+        self.assertEqual(mass, {"Clause 4.9": [20000.0], "Table 4-1, row 1": [5000.0], "Clause 4.11": [26000.0]})
+        self.assertFalse([c for c in found if c["text"] == "Table 4-1 Container limits"])     # the caption is no requirement
+
+    def test_a_130_kB_tender_is_read_in_under_5_s(self):
+        # _subject re-read the whole sentence before every figure: a 130 kB clause with no sentence break took 152-258 s
+        # on 923ed38, so an upload outlived the 60 s tool timeout and kept its worker busy (429 for minutes). CPU time of
+        # this process, so a busy machine does not fail it
+        import time
+
+        clauses("4.9 warm up: 20 t per container.")
+        run_on = "4.9 " + " ".join(f"the loaded weight of crate {i} in container {i} is limited to {i % 30 + 1} t and"
+                                   for i in range(1, 4000))
+        body = ITT.split("SECTION 4", 1)[1]
+        document = ITT.split("SECTION 4", 1)[0] + "".join(f"SECTION {n}" + body.replace("4.", f"{n}.") for n in range(4, 80))
+        table = "SECTION 4 LOGISTICS\n\nTable 4-1 Limits\n\n| Ref | Item | Max gross mass (t) |\n|---|---|---|\n" + "\n".join(
+            f"| 4.{i} | Loaded 40HQ container type {i} | {i % 30 + 1} |" for i in range(1, 3000))
+        for name, text in (("one clause, no sentence break", run_on), ("a document of many clauses", document),
+                           ("one long table", table)):
+            text = text[:130_000]
+            with self.subTest(name):
+                self.assertGreaterEqual(len(text), 128_000)
+                start = time.process_time()
+                found = clauses(text, "big.md")
+                took = time.process_time() - start
+                self.assertTrue(found)
+                self.assertLess(took, 5.0, f"{name}: {took:.1f} s")
+
     def test_clauses_are_cited_the_way_the_tender_writes_them(self):
         def cite(text, kind, source="itt.md"):
             return next(c["cite"] for c in clauses(text, source) if kind in c["kinds"])
@@ -404,7 +506,14 @@ class Linked(unittest.TestCase):
                                             "between 10 pm and 7 am.\n\n4.12 Insurance:"),
             "itt_lettered.md": ITT.replace(MASS_CLAUSE, "4.9 Container limits\n\n(a) The gross mass of each loaded container shall not "
                                                         "exceed 20,000 kg including the container tare."),
+            # round 3: a limit on the panels in each container; a continuation paragraph that the document reads as 4.9;
+            # a limit in pounds
+            "itt_panels_5t.md": ITT.replace(MASS_CLAUSE, "4.9 The total mass of panels in each container shall not exceed 5 t."),
+            "itt_continuation.md": ITT.replace(MASS_CLAUSE, MASS_CLAUSE + "\n\nAll loaded containers shall not exceed 24 tonnes "
+                                                                          "gross including tare."),
+            "itt_lbs.md": ITT.replace(MASS_CLAUSE, "4.9 Containers: the maximum permissible weight is 44,000 lbs gross per container."),
         }
+        shutil.copyfile(FIXTURES / "facade_panels_rev_b.xlsx", cls.job / "facade_panels_rev_b.xlsx")
         for name, text in variants.items():
             assert text != ITT, name
             (cls.job / name).write_text(text, encoding="utf-8")
@@ -498,6 +607,52 @@ class Linked(unittest.TestCase):
         (access,) = self.statements("itt_new_kinds.md", "site_access")
         self.assertEqual((access["clause"], access["status"], access["owner"]), ("4.14", "human_required", "project manager"))
 
+    def test_a_limit_on_the_panels_in_each_container_is_checked_per_container(self):
+        # 923ed38: a 5,000 kg per-PANEL limit "not compared with any container's gross mass", while the heaviest
+        # container weighs 6,472.8 kg gross. Now it is the container's limit; the clause does not say whether the tare
+        # counts (cargo 2,582.8 kg is within it, gross is not), so a person decides - never a pass
+        (mass,) = self.statements("itt_panels_5t.md", "gross_mass")
+        self.assertEqual((mass["clause"], mass["figures"]["limit_kg"], mass["status"]), ("4.9", 5000.0, "human_required"))
+        self.assertIn("gross mass is 6,472.8 kg", mass["text"])
+        self.assertFalse(self.statements("itt_panels_5t.md", "per_package_limit"))
+
+    def test_a_limit_in_pounds_is_converted_and_said_as_written(self):
+        (mass,) = self.statements("itt_lbs.md", "gross_mass")
+        self.assertEqual((mass["figures"]["limit_kg"], mass["status"]), (19958.1, "partial"))
+        self.assertIn("to 19,958.1 kg (written as 44,000 lbs; 1 lb = 0.45359237 kg)", mass["text"])
+
+    def test_the_gross_mass_statement_names_its_container(self):
+        # independent review of PR #76: on 8282779 the sentence after the limit lost its f-prefix, so every gross-mass
+        # statement (and the bid book) read "The heaviest planned container (no. {heaviest.get('container_no')} of
+        # {len(per)})"
+        for tender in ("itt.md", "itt_lbs.md"):
+            with self.subTest(tender=tender):
+                (mass,) = self.statements(tender, "gross_mass")
+                self.assertIn("The heaviest planned container (no. 1 of 6) carries", mass["text"])
+                self.assertFalse([s["id"] for s in self.link(tender)["statements"] if "{" in s["text"] or "}" in s["text"]])
+
+    def test_statement_keys_are_unique_and_a_rerun_reports_every_change(self):
+        from packing_assistant.tender_packing_link import compare, run_link
+
+        first = self.link("itt_continuation.md")
+        keys = [s["key"] for s in first["statements"]]
+        self.assertEqual(len(keys), len(set(keys)), keys)
+        self.assertEqual([s["key"] for s in first["statements"] if s["kind"] == "gross_mass"], ["gross_mass@4.9", "gross_mass@4.9#2"])
+        again = run_link(str(self.job / "itt_continuation.md"), str(self.job / "facade_panels_rev_b.xlsx"),
+                         previous=first["record"])
+        changes = again["record"]["changes_since_previous"]
+        moved = {c["id"]: c["figures"].get("max_gross_kg") for c in changes["changed"]}
+        # 923ed38: both keys were "gross_mass@4.9"; S3 (6,472.8 -> 6,752.8 kg) was in neither list
+        self.assertEqual((moved.get("S3"), moved.get("S4")), ([6472.8, 6752.8], [6472.8, 6752.8]))
+        self.assertIn("S3", changes["needs_reconfirmation"])
+        listed = {c["id"] for c in changes["changed"] + changes["unchanged"] + changes["new"]}
+        self.assertEqual(listed, {s["id"] for s in again["statements"]})
+        # a record written with repeated keys (before this change) matches nothing: every statement is re-confirmed
+        doubled = {**first["record"], "statements": [{**s, "key": s["key"].split("#")[0]} for s in first["record"]["statements"]]}
+        failed_closed = compare(doubled, again["record"])
+        self.assertEqual(failed_closed["needs_reconfirmation"], [s["id"] for s in again["statements"]])
+        self.assertIn("statement keys repeat (gross_mass@4.9)", failed_closed["summary"])
+
     def test_no_invented_clause_and_the_bidbook_cites_as_written(self):
         out = self.link("itt_lettered.md")
         (mass,) = self.statements("itt_lettered.md", "gross_mass")
@@ -525,6 +680,40 @@ class DevSet(unittest.TestCase):
         self.assertGreaterEqual(t["decision_ok"], 18, summary)
         self.assertGreaterEqual(t["cite_ok"], 22, summary)
 
+    def test_round_3_dev_set(self):
+        # test/benchmarks/tender_link/dev_round3.json: the two reviews' failing inputs and the builder's counter-probes
+        # (DEV, used while building). 923ed38 scored kind recall 11/26, silently lost 14, false container limits 3,
+        # false covered 1
+        import bench_tender_link
+
+        result = bench_tender_link.run(ROOT / "test" / "benchmarks" / "tender_link" / "dev_round3.json")
+        t = result["totals"]
+        summary = "\n".join(bench_tender_link.summary_lines(t))
+        for never in ("silently_lost", "false_container_limit", "invalid_cites", "false_covered", "unplaced_on_no_kind_cases",
+                      "extra_kinds"):
+            self.assertEqual(t[never], 0, f"{never}\n{summary}")
+        for got, of in (("kinds_found", "kinds_expected"), ("limit_ok", "limit_labelled"), ("package_ok", "package_labelled"),
+                        ("basis_ok", "basis_labelled"), ("decision_ok", "decision_labelled"), ("cite_ok", "cite_labelled")):
+            self.assertEqual(t[got], t[of], f"{got}\n{summary}")
+
+
+    def test_round_3_reviewer_dev_set(self):
+        # test/benchmarks/tender_link/dev_round3_review.json: the independent reviewer's adversarial inputs for PR #76
+        # (DEV). On the PR head 8282779: a trailing "each" gave a container's 24 t to the crates, "5,000 pounds per
+        # container per day" was a 2,268 kg container limit, "20.000 kg" a 20 kg one, "1:50 to 1:100" delivery hours, and
+        # a bare number under "(lbs)" or a five-digit one under "(kg)" was silent (kind recall 12/20, 5 false container
+        # limits, 1 false covered)
+        import bench_tender_link
+
+        result = bench_tender_link.run(ROOT / "test" / "benchmarks" / "tender_link" / "dev_round3_review.json")
+        t = result["totals"]
+        summary = "\n".join(bench_tender_link.summary_lines(t))
+        for never in ("silently_lost", "false_container_limit", "invalid_cites", "false_covered", "unplaced_on_no_kind_cases",
+                      "extra_kinds"):
+            self.assertEqual(t[never], 0, f"{never}\n{summary}")
+        for got, of in (("kinds_found", "kinds_expected"), ("limit_ok", "limit_labelled"), ("package_ok", "package_labelled"),
+                        ("basis_ok", "basis_labelled"), ("decision_ok", "decision_labelled")):
+            self.assertEqual(t[got], t[of], f"{got}\n{summary}")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

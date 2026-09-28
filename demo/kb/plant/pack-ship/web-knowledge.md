@@ -1,6 +1,6 @@
 # 装箱拼柜 · 联网知识（2026-08-15 现场）
 
-岗位对应：工地/钢构物料的成箱与拼柜作业单。硬数值只走本仓 **packing 引擎**（https://github.com/LUOaini1213/civil-buddy），本岗不写 xyz、不拍柜数。网上是入口，柜内尺寸、N0*、重心只抄工具回传或标 UNSPECIFIED。
+岗位对应：工地/钢构物料的成箱与拼柜作业单。硬数值只走本仓 **packing 引擎**（https://github.com/LUOaini1213/civil-buddy-sme），本岗不写 xyz、不拍柜数。网上是入口，柜内尺寸、N0*、重心只抄工具回传或标 UNSPECIFIED。
 
 ## 2026-08-17
 

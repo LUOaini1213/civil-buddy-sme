@@ -274,8 +274,37 @@ impl WorkerHost {
         arguments: Value,
         cancel: &CancellationToken,
     ) -> Result<Value, String> {
-        self.call("packing_assistant.documents.worker", &json!({"version":1,"call_id":uuid::Uuid::new_v4().to_string(),
+        let call_id = uuid::Uuid::new_v4().to_string();
+        self.document_as(&call_id, workspace, operation, source, expected, arguments, cancel)
+            .await
+    }
+
+    /// `call_id` is the document worker's replay key: an apply delivered again
+    /// with the same call_id and request returns the first draft
+    /// (`replayed: true`) instead of writing another one.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn document_as(
+        &self,
+        call_id: &str,
+        workspace: &WorkspaceContext,
+        operation: &str,
+        source: &str,
+        expected: Option<&str>,
+        arguments: Value,
+        cancel: &CancellationToken,
+    ) -> Result<Value, String> {
+        self.call("packing_assistant.documents.worker", &json!({"version":1,"call_id":call_id,
             "operation":operation,"workspace":workspace.root(),"source":source,"expected_sha256":expected,
             "arguments":arguments,"output_dir":workspace.output_root()}), cancel).await
     }
+}
+
+/// Deterministic apply call_id: the same turn delivering the same previewed
+/// patch (the preview's sha256) maps to one worker call, so a repeat replays.
+/// A later turn gets a new id and may deliberately write a new draft.
+pub fn document_call_id(turn: &str, preview_sha256: &str) -> String {
+    format!(
+        "apply-{}",
+        super::tools::sha256(format!("{turn}\n{preview_sha256}").as_bytes())
+    )
 }

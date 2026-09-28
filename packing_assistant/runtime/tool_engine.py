@@ -39,6 +39,10 @@ _PATH_KEYS = ("path", "write_path", "output_path", "dest", "file")
 # error visible, but do not latch the shared tool off before that object exists.
 # Exact tool/code pairs only: unreadable records, exceptions and timeouts fail.
 _EXPECTED_ABSENCE = frozenset({("read_link_record", "no_link_record")})
+# A handler that answers with one of these judged the call, not the tool: bad arguments, a policy or sandbox
+# refusal, or a cancel. They say nothing about whether the tool works, so they neither add to nor clear the fault
+# streak. A handler that raises is a crash and still counts (its result keeps the historical invalid_args label).
+_VERDICTS = frozenset({ERR_INVALID, ERR_DENIED, ERR_CANCELLED})
 
 
 def _write_path(args: Dict[str, Any]) -> Optional[str]:
@@ -84,10 +88,58 @@ class ToolEngine:
     tools: Dict[str, ToolSpec] = field(default_factory=dict)
     _fail_streak: Dict[str, int] = field(default_factory=dict)
     circuit_threshold: int = 3
+    # Closed -> open after circuit_threshold consecutive faults; open refuses for circuit_cooldown_s, then lets one
+    # trial call through (half-open). The trial's success closes the circuit, its fault re-opens it for a new
+    # cool-down, and every other call is refused while the trial runs.
+    circuit_cooldown_s: float = 45.0
     audit_log: List[Audit] = field(default_factory=list)
     ledger: Any = None
     _workers: Dict[str, set] = field(default_factory=dict, repr=False)
     _worker_lock: Any = field(default_factory=threading.Lock, repr=False)
+    _opened_at: Dict[str, float] = field(default_factory=dict, repr=False)
+    _trial: set = field(default_factory=set, repr=False)
+    _circuit_lock: Any = field(default_factory=threading.Lock, repr=False)
+
+    def circuit_state(self, name: str) -> str:
+        """closed, open (cooling down) or half_open (the next call is the trial, or the trial is running)."""
+        with self._circuit_lock:
+            return self._state(name)
+
+    def _state(self, name: str) -> str:
+        if self._fail_streak.get(name, 0) < self.circuit_threshold:
+            return "closed"
+        opened = self._opened_at.setdefault(name, time.monotonic())
+        if name in self._trial or time.monotonic() - opened >= self.circuit_cooldown_s:
+            return "half_open"
+        return "open"
+
+    def _gate(self, name: str) -> tuple[bool, bool]:
+        """(refuse, trial): an open circuit, or a half-open one whose trial is taken, refuses; otherwise this call
+        may run, and it is the trial when the circuit is half-open."""
+        with self._circuit_lock:
+            state = self._state(name)
+            if state == "closed":
+                return False, False
+            if state == "open" or name in self._trial:
+                return True, False
+            self._trial.add(name)
+            return False, True
+
+    def _settle(self, name: str, fault: Optional[bool], trial: bool = False) -> None:
+        """fault=True adds to the streak (opening, or re-opening after a failed trial), False closes the circuit,
+        None (a verdict on the call, not the tool) leaves it as it was and only frees a trial slot."""
+        with self._circuit_lock:
+            if trial:
+                self._trial.discard(name)
+            if fault is None:
+                return
+            if not fault:
+                self._fail_streak[name] = 0
+                self._opened_at.pop(name, None)
+                return
+            self._fail_streak[name] = self._fail_streak.get(name, 0) + 1
+            if self._fail_streak[name] >= self.circuit_threshold:
+                self._opened_at[name] = time.monotonic()  # opens, or re-opens for a fresh cool-down
 
     def when_idle(self, run_id: str, callback: Callable[[], None]) -> None:
         """Release run resources only after timed-out workers really finish."""
@@ -171,7 +223,7 @@ class ToolEngine:
             return ERR_DENIED
         if spec.expert_id and expert_id and spec.expert_id != expert_id:
             return ERR_DENIED
-        if self._fail_streak.get(name, 0) >= self.circuit_threshold:
+        if self.circuit_state(name) == "open":
             return ERR_CIRCUIT
         return None
 
@@ -184,9 +236,11 @@ class ToolEngine:
         intent: str = "run",
         cancelled: bool = False,
         circuit: bool = True,
+        _circuit_refuse: Optional[bool] = None,
     ) -> tuple[Any, Optional[Dict[str, Any]]]:
         """Contract, then policy: (decision, None) or (None, refusal). Also for callers that run the handler themselves;
-        those never feed the fail streak, so they pass circuit=False rather than inherit a latch they cannot reset."""
+        those never feed the fail streak, so they pass circuit=False rather than inherit a latch they cannot reset.
+        execute() passes _circuit_refuse from the gate it has already taken (so a half-open trial is claimed once)."""
         args = {} if arguments is None else arguments
         spec = self.tools.get(name)
         from packing_assistant.runtime.tool_contracts import validate
@@ -198,6 +252,8 @@ class ToolEngine:
                           "reason": "工具参数不符合契约：" + problem}
         from packing_assistant.runtime.policy import evaluate as policy_evaluate
 
+        if _circuit_refuse is None:
+            _circuit_refuse = circuit and self.circuit_state(name) == "open"
         pol = policy_evaluate(
             tool=name,
             spec=spec,
@@ -206,7 +262,7 @@ class ToolEngine:
             args=args,
             cancelled=cancelled,
             ledger=self.ledger,
-            fail_streak=self._fail_streak.get(name, 0) if circuit else 0,
+            fail_streak=self._fail_streak.get(name, 0) if circuit and _circuit_refuse else 0,
             circuit_threshold=self.circuit_threshold,
         )
         if not pol.allow:
@@ -236,9 +292,33 @@ class ToolEngine:
         run_id: str = "",
         wait_resources: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
+        refuse, trial = self._gate(name)
+        outcome: Dict[str, Optional[bool]] = {"fault": None}
+        try:
+            return self._execute(name, arguments, expert_id=expert_id, intent=intent, cancelled=cancelled,
+                                 run_id=run_id, wait_resources=wait_resources, refuse=refuse, outcome=outcome)
+        finally:
+            self._settle(name, outcome["fault"], trial)
+
+    def _execute(
+        self,
+        name: str,
+        arguments: Optional[Dict[str, Any]],
+        *,
+        expert_id: str,
+        intent: str,
+        cancelled: bool,
+        run_id: str,
+        wait_resources: Optional[List[str]],
+        refuse: bool,
+        outcome: Dict[str, Optional[bool]],
+    ) -> Dict[str, Any]:
+        """One call; sets outcome["fault"] to True (a fault), False (the tool worked) or leaves None (a verdict on
+        the call: refused, bad arguments, cancelled, denied)."""
         t0 = time.perf_counter()
         args = {} if arguments is None else arguments
-        pol, refused = self.admit(name, args, expert_id=expert_id, intent=intent, cancelled=cancelled)
+        pol, refused = self.admit(name, args, expert_id=expert_id, intent=intent, cancelled=cancelled,
+                                  _circuit_refuse=refuse)
         if refused is not None:
             return refused
         spec = self.tools[name]
@@ -307,7 +387,7 @@ class ToolEngine:
         ms = int((time.perf_counter() - t0) * 1000)
         if th.is_alive():
             timed_out.set()  # stop this worker at its next cooperative checkpoint
-            self._fail_streak[name] = self._fail_streak.get(name, 0) + 1
+            outcome["fault"] = True
             self.audit_log.append(Audit(name=name, error_code=ERR_TIMEOUT, duration_ms=ms, expert_id=expert_id))
             return {
                 "ok": False,
@@ -336,7 +416,7 @@ class ToolEngine:
                 if sandbox_info:
                     denied["sandbox"] = sandbox_info
                 return denied
-            self._fail_streak[name] = self._fail_streak.get(name, 0) + 1
+            outcome["fault"] = True  # the handler crashed: a fault, whatever label the result carries
             self.audit_log.append(Audit(name=name, error_code=ERR_INVALID, duration_ms=ms, expert_id=expert_id))
             return {
                 "ok": False,
@@ -355,8 +435,10 @@ class ToolEngine:
                         "reason": "工具返回值不符合契约：" + problem,
                         "duration_ms": ms, "contract_error": True}
         error_code = str(data.get("error_code") or ERR_UNSPECIFIED) if failed else ERR_OK
-        fault = failed and (name, error_code) not in _EXPECTED_ABSENCE
-        self._fail_streak[name] = self._fail_streak.get(name, 0) + 1 if fault else 0
+        if not failed or (name, error_code) in _EXPECTED_ABSENCE:
+            outcome["fault"] = False
+        elif error_code not in _VERDICTS:
+            outcome["fault"] = True
         self.audit_log.append(Audit(name=name, error_code=error_code, duration_ms=ms, expert_id=expert_id))
         out: Dict[str, Any] = {
             "ok": not failed,

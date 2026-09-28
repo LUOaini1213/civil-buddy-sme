@@ -6,6 +6,8 @@
     python scripts/eval_verdicts.py --english         # the English DEV set (english_dev.json)
     python scripts/eval_verdicts.py --file PATH       # any set in the same format (e.g. a held-out one kept elsewhere)
     python scripts/eval_verdicts.py --overlap ...     # a flag counts when it overlaps a wanted phrase, not only when equal
+    python scripts/eval_verdicts.py --file dev_round3.json   # round-3 DEV set (bypass phrasings and look-alikes)
+    python scripts/eval_verdicts.py --file dev_round3_review.json   # the review of #74's adversarial probes (DEV)
     python scripts/eval_verdicts.py --check           # CI floors: P >= 0.95, R >= 0.95
 """
 from __future__ import annotations
@@ -83,11 +85,15 @@ def main() -> int:
     if args.check:
         shipped, unseen = score(ABLATIONS["shipped"]), score(ABLATIONS["shipped"], "heldout2.json")
         english = score(ABLATIONS["shipped"], "english_dev.json")
+        round3 = score(ABLATIONS["shipped"], "dev_round3.json")
+        review = score(ABLATIONS["shipped"], "dev_round3_review.json")     # the review of #74's adversarial probes
         ok = (shipped["p"] >= FLOOR_P and shipped["r"] >= FLOOR_R and unseen["p"] >= HELDOUT_P and unseen["r"] >= HELDOUT_R
-              and english["p"] >= FLOOR_P and english["r"] >= FLOOR_R)
+              and english["p"] >= FLOOR_P and english["r"] >= FLOOR_R and round3["p"] >= FLOOR_P and round3["r"] >= FLOOR_R
+              and review["p"] >= FLOOR_P and review["r"] >= FLOOR_R)
         print(f"dev {shipped['p']:.3f}/{shipped['r']:.3f}  heldout2 {unseen['p']:.3f}/{unseen['r']:.3f}  "
-              f"english dev {english['p']:.3f}/{english['r']:.3f}")
-        print(("PASS" if ok else "FAIL") + f" verdicts floors (dev and English dev P/R >= {FLOOR_P}, heldout2 P >= {HELDOUT_P}, R >= {HELDOUT_R})")
+              f"english dev {english['p']:.3f}/{english['r']:.3f}  round-3 dev {round3['p']:.3f}/{round3['r']:.3f}  "
+              f"round-3 review dev {review['p']:.3f}/{review['r']:.3f}")
+        print(("PASS" if ok else "FAIL") + f" verdicts floors (dev, English dev and both round-3 dev sets P/R >= {FLOOR_P}, heldout2 P >= {HELDOUT_P}, R >= {HELDOUT_R})")
         return 0 if ok else 1
     return 0
 

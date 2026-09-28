@@ -12,8 +12,9 @@ _DIR = default_out_root(_ROOT)
 
 
 def _path(session_id: str) -> Path:
-    sid = (session_id or "default").replace("..", "_")
-    return _DIR / sid / "packing_summary.json"
+    from packing_assistant.runtime.agent_loop import _safe_sid     # one rule for a session's folder name
+
+    return _DIR / _safe_sid(session_id) / "packing_summary.json"
 
 
 def save_packing_snapshot(session_id: str, summary: Optional[Dict[str, Any]]) -> None:

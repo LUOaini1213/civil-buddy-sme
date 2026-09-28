@@ -10,6 +10,13 @@ release of this competition entry.
 Features recovered after this first integration, and their remaining acceptance limits, are listed in the notes
 of the v0.8.0 preview releases.
 
+On 2026-09-28 `main` merged the later review rounds of the development line (its pull requests #67 to #69 and #71 to #77:
+mass limits read per subject and per direction, clauses cited as written, English verdict / claim / record guards,
+panel lists with title rows, tonnes and packaging-equipment rows, a hardened `/demo` upload, and the deployment kit
+rehearsal). Where both lines had fixed the same thing, the stricter behaviour was kept: a message approves on the
+Python surfaces only when the whole of it is the sign-off sentence, `/confirm` in the terminal still only retries
+the task waiting for approval, and parse records stay per task. The façade demo figures are unchanged.
+
 ## What is being integrated
 
 - An authenticated Rust host with one named user, private workspace and state directory per instance.

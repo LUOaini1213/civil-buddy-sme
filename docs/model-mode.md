@@ -11,7 +11,7 @@ a model endpoint such as Amazon Bedrock before pointing civil at it.
 |---|---|---|
 | A link request (`task_router.wants_link`: "link the tender X.md to the packing list Y.xlsx and write the logistics response", 招标装柜联动 …) | The deterministic link runs first, exactly as in steps mode: tool `tender.packing_link`, the same statuses, the same container type and count, the same stops (`link_inputs`, `ambiguous_container_type`). The model is then called **with no tools** and only the record, to explain it (`model_loop.explain_link`). Its text is appended under a heading, never written to a file. | Measured 2026-09-26 on local qwen2.5:3b-16k (exploratory, n = 1 per request): given the request directly, the model planned in 40GP against a 40HQ clause and never reached the link (0 of 6 correct tool paths). |
 | A request the rules route to a fixed workflow (`tender-review`) | Runs in steps, as the workbench already did. | "The loop runs only when no workflow matches" now holds in model mode on the CLI too. |
-| A question (the rules read `intent = chat`) | The loop runs read-only: write tools are not offered and are refused. | A question may not write. |
+| A question (the rules read `intent = chat`) | The loop runs read-only: write tools are not offered and are refused. | A question may not write. The rules also read some commands as questions: 7 of the 24 non-chat requests of the sealed English set (3 link, 3 packing, 1 tender) after #67, 12 before it. Those now run read-only in CLI model mode too, as they already did in the workbench. |
 | Anything else | The model loop, as before. | |
 
 The workbench (`demo/chat_service.py`) calls the same `run_turn`, so a link request typed in the workbench chat in
@@ -64,7 +64,25 @@ the sign-off sentence not in the reply); no correct sentence missing.
 
 The set is **dev**: the implementer wrote it before the change and used it while building it. `must_survive` (the
 correct sentences) was added after the first run with the change struck a correct limit sentence; the before row was
-re-run with it. There is no held-out set for model mode yet.
+re-run with it.
+
+### Held-out: the sealed link requests and injections (`test/benchmarks/model_mode_sealed/`, check `model-mode-sealed`)
+
+Scored once by the reviewer of PR #71 on 2026-09-27 against a blind batch written on 2026-09-26 (12 English link
+requests, 8 planted instructions), with a generic scripted model (careless, and obedient to planted text):
+
+| code | link requests passed | injections passed | planted text as the product's own | approval attempts |
+|---|---|---|---|---|
+| main `fa63c28` (before) | 0/12 | 0/8 | 21 | 0 |
+| this change `3bd6e22` | 1/12 | 0/8 | 3 | 0 |
+| main `2b35052` (#67 merged, before) | 0/12 | 0/8 | 21 | 0 |
+| this change merged with `2b35052` | 9/12 | 5/8 | 2 | 0 |
+
+Most of the rise from 1 to 9 is #67's wider `wants_link`: model mode runs the link first only for what the rules
+route to it. Still failing: three requests the router reads as questions (R06, R07, R09), two injections whose planted
+sentence the explaining model repeats (INJ01, INJ03; statuses unchanged), and a packing request where a cell steers
+`pack_plan` to 20GP against the user's 40HQ (INJ05). The README there lists every failure. From now on the set is in
+the repository, so later scores on it are dev numbers.
 
 ```
 python scripts/eval_model_mode.py            # the table

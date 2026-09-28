@@ -106,6 +106,9 @@ class DomainTokenGuard:
 async def lifespan(_app):
     if not _token():
         raise RuntimeError("CIVIL_DOMAIN_TOKEN must be a generated high-entropy URL-safe token")
+    # /packing/api/confirm is served here too: a packing session a crash left running is marked interrupted
+    from packing_assistant.session_store import recover_interrupted
+    recover_interrupted()
     async with legacy._lifespan(legacy.app):
         yield
 
