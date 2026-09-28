@@ -5,12 +5,14 @@
 "use strict";
 const fs = require("fs");
 const vm = require("vm");
+const path = require("path");
 
 const SOURCE = fs.readFileSync(process.argv[2], "utf8");
+const MESSAGES = fs.readFileSync(path.join(path.dirname(process.argv[2]), "i18n-home.js"), "utf8");
 const ALLOWED_IDS = new Set(["btnVoice", "input", "voiceStatus", "voiceInterim", "voiceLabel"]);
 
 function makePage(opts) {
-  const log = { violations: [], events: [], fetches: [], order: [], gum: 0, recorders: 0, trackStops: 0, confirms: 0, recStarts: 0, stopAt: [], recordAt: [] };
+  const log = { violations: [], events: [], fetches: [], requests: [], order: [], gum: 0, recorders: 0, trackStops: 0, confirms: 0, recStarts: 0, recAborts: 0, stopAt: [], recordAt: [] };
   let now = 0;
   let nextId = 1;
   const timers = new Map();
@@ -81,6 +83,9 @@ function makePage(opts) {
   const respond = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
   async function fetch_(url, init) {
     log.fetches.push(String(url));
+    const request = { url: String(url), headers: { ...(init && init.headers) }, aborted: !!init?.signal?.aborted };
+    log.requests.push(request);
+    init?.signal?.addEventListener("abort", () => { request.aborted = true; }, { once: true });
     log.order.push("fetch " + url);
     const reply = await opts.fetch(String(url), init || {}, { now: () => now, wait: (ms) => new Promise((r) => setTimeout_(r, ms)) });
     if (reply === "network-error") throw new TypeError("Failed to fetch");
@@ -104,14 +109,36 @@ function makePage(opts) {
     constructor() { FakeRecognition.last = this; }
     start() { log.recStarts++; log.order.push("recognition"); }
     stop() { setTimeout_(() => this.onend && this.onend(), 10); }
+    abort() { log.recAborts++; this.stop(); }
   }
   const store = new Map();
-  const window = {
+  // Use actual EventTarget semantics for global listeners, including removal and
+  // synchronous dispatch. Language changes must exercise the production handler.
+  const window = Object.assign(new EventTarget(), {
     fetch: fetch_,
     confirm: (msg) => { log.confirms++; log.order.push("confirm"); log.confirmText = msg; return opts.consent !== false; },
     localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) },
     MediaRecorder: opts.noRecorder ? undefined : FakeRecorder,
     SpeechRecognition: opts.speech ? FakeRecognition : undefined,
+  });
+  class CustomEvent extends Event {
+    constructor(type, init = {}) { super(type, init); this.detail = init.detail; }
+  }
+  let locale = opts.locale || "zh-CN";
+  const catalog = Object.create(null);
+  window.CBI18n = {
+    get locale() { return locale; },
+    add(messages) { Object.assign(catalog, messages); },
+    t(source, values = {}) {
+      const key = String(source ?? "");
+      const text = locale === "en" && Object.hasOwn(catalog, key) ? catalog[key] : key;
+      return text.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, (match, name) => Object.hasOwn(values, name) ? String(values[name]) : match);
+    },
+    setLocale(next) {
+      if (next === locale) return;
+      locale = next;
+      window.dispatchEvent(new CustomEvent("cb:languagechange", { detail: { locale } }));
+    },
   };
   const navigator = {
     mediaDevices: {
@@ -125,12 +152,13 @@ function makePage(opts) {
   };
   const context = {
     window, document, navigator, fetch: fetch_, localStorage: window.localStorage,
-    MediaRecorder: window.MediaRecorder, Blob: FakeBlob, Event: class Event { constructor(type) { this.type = type; } },
+    MediaRecorder: window.MediaRecorder, Blob: FakeBlob, Event, CustomEvent,
     AbortController, setTimeout: setTimeout_, setInterval: setInterval_, clearTimeout: clear, clearInterval: clear,
     console, Promise, Date: { now: () => now },
   };
   Object.assign(window, { document, navigator, setTimeout: setTimeout_, clearTimeout: clear });
   vm.createContext(context);
+  vm.runInContext(MESSAGES, context, { filename: "i18n-home.js" });
   vm.runInContext(SOURCE, context, { filename: "voice.js" });
   const snap = () => ({
     btn: els.voiceLabel.textContent, label: els.btnVoice.getAttribute("aria-label"), pressed: els.btnVoice.getAttribute("aria-pressed"),
@@ -140,11 +168,51 @@ function makePage(opts) {
   });
   const click = () => { els.btnVoice.click(); };
   const tap = async (ms) => { click(); await advance(ms || 1); };
-  return { log, els, advance, flush, snap, click, tap, cancel: () => window.CivilBuddyVoice.cancel(), rec: () => FakeRecorder.last, speech: () => FakeRecognition.last, now: () => now };
+  return { log, els, advance, flush, snap, click, tap, language: (next) => window.CBI18n.setLocale(next), cancel: () => window.CivilBuddyVoice.cancel(), rec: () => FakeRecorder.last, speech: () => FakeRecognition.last, now: () => now };
 }
 
 const READY = { available: true, state: "ready", load_error: "" };
 const scenarios = {
+  async english_server_hint_and_draft() {
+    const p = makePage({ locale: "en", initialText: "Review panel", fetch: (u) => u.includes("status") ? [200, READY] : [200, { text: "A12", elapsed_seconds: 1 }] });
+    await p.tap(); await p.tap();
+    return { after: p.snap(), log: p.log };
+  },
+  async english_browser_hint_and_draft() {
+    const p = makePage({ locale: "en", speech: true, initialText: "Review panel", fetch: () => [404, {}] });
+    await p.tap();
+    const lang = p.speech().lang;
+    p.speech().onresult({ resultIndex: 0, results: [Object.assign([{ transcript: "A12" }], { isFinal: true })] });
+    await p.tap(50);
+    return { lang, after: p.snap(), log: p.log };
+  },
+  async language_switch_cancels_server_and_preserves_typed_draft() {
+    let transcriptions = 0;
+    const p = makePage({ initialText: "原始图纸.xlsx", fetch: (u, i, t) => {
+      if (u.includes("status")) return [200, { ...READY, supports_cancel: true }];
+      if (u.endsWith("/cancel")) return [200, { status: "cancelled" }];
+      transcriptions++;
+      return transcriptions === 1 ? t.wait(1000).then(() => [200, { text: "迟到旧语言", elapsed_seconds: 1 }]) : [200, { text: "New English note", elapsed_seconds: 1 }];
+    } });
+    await p.tap(); await p.tap();
+    p.language("en"); const switched = p.snap();
+    await p.advance(2000); const settled = p.snap();
+    await p.tap(); await p.tap();
+    return { switched, settled, after: p.snap(), log: p.log };
+  },
+  async language_switch_cancels_browser_and_preserves_typed_draft() {
+    const p = makePage({ speech: true, initialText: "原始图纸.xlsx", fetch: () => [404, {}] });
+    await p.tap();
+    const oldLang = p.speech().lang, lateResult = p.speech().onresult, lateEnd = p.speech().onend;
+    p.speech().onresult({ resultIndex: 0, results: [Object.assign([{ transcript: "旧语音中间结果" }], { isFinal: false })] });
+    p.language("en"); const switched = p.snap();
+    lateResult({ resultIndex: 0, results: [Object.assign([{ transcript: "迟到旧语言" }], { isFinal: true })] }); lateEnd();
+    await p.advance(100); const settled = p.snap();
+    await p.tap(); const newLang = p.speech().lang;
+    p.speech().onresult({ resultIndex: 0, results: [Object.assign([{ transcript: "New English note" }], { isFinal: true })] });
+    await p.tap(50);
+    return { oldLang, newLang, switched, settled, after: p.snap(), log: p.log };
+  },
   async cancelled_server_result_is_ignored() {
     let requestId = "";
     const p = makePage({ fetch: (u, i, t) => {

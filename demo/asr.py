@@ -315,11 +315,13 @@ def decode(data: bytes):
 
 # ---------------- transcription ----------------
 
-def run_model_detail(model, audio, prompt: str | None) -> dict:
+def run_model_detail(model, audio, prompt: str | None, *, language: str = "zh") -> dict:
     """The one decode call shared by the endpoint and eval/asr, so the eval measures what ships.
 
     Also reports whether Whisper fell back to sampling (temperature > 0), which is random."""
-    segments = list(model.transcribe(audio, initial_prompt=prompt, **DECODE_OPTIONS)[0])
+    if language not in {"zh", "en"}:
+        raise AsrInputError("Unsupported speech language")
+    segments = list(model.transcribe(audio, initial_prompt=prompt, **{**DECODE_OPTIONS, "language": language})[0])
     return {
         "text": "".join(segment.text for segment in segments).strip(),
         "temperature": max((getattr(s, "temperature", 0.0) or 0.0 for s in segments), default=0.0),
@@ -327,14 +329,17 @@ def run_model_detail(model, audio, prompt: str | None) -> dict:
     }
 
 
-def run_model(model, audio, prompt: str | None) -> str:
-    return run_model_detail(model, audio, prompt)["text"]
+def run_model(model, audio, prompt: str | None, *, language: str = "zh") -> str:
+    return run_model_detail(model, audio, prompt, language=language)["text"]
 
 
-def transcribe(data: bytes, *, use_lexicon: bool = True) -> dict:
+def transcribe(data: bytes, *, use_lexicon: bool = True, language: str = "zh") -> dict:
+    if language not in {"zh", "en"}:
+        raise AsrInputError("Unsupported speech language")
     check_size(len(data))  # before the decoder, so the guard does not depend on which decoder runs
     try:
-        prompt = build_prompt(load_lexicon() if use_lexicon else None)
+        prompt = ("English speech about civil engineering, tender review, facade panels and container packing."
+                  if language == "en" else build_prompt(load_lexicon() if use_lexicon else None))
     except OSError as exc:
         raise AsrUnavailable("缺少术语表 demo/asr_lexicon.txt") from exc
     audio = decode(data)
@@ -344,7 +349,7 @@ def transcribe(data: bytes, *, use_lexicon: bool = True) -> dict:
     try:
         started = time.perf_counter()
         try:
-            text = run_model(model, audio, prompt)
+            text = run_model(model, audio, prompt, language="en") if language == "en" else run_model(model, audio, prompt)
         except Exception as exc:  # native runtime failure, e.g. the VAD's onnxruntime
             raise AsrUnavailable(f"本机识别运行失败：{type(exc).__name__}") from exc
         elapsed = time.perf_counter() - started
@@ -356,5 +361,6 @@ def transcribe(data: bytes, *, use_lexicon: bool = True) -> dict:
         "model": MODEL_NAME,
         "audio_seconds": round(len(audio) / SAMPLE_RATE, 2),
         "elapsed_seconds": round(elapsed, 2),
-        "lexicon": use_lexicon,
+        "lexicon": use_lexicon and language == "zh",
+        "language": language,
     }

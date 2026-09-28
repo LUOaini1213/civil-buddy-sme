@@ -51,6 +51,11 @@ CHECKS = (
     Check("engineering-api", ("scripts/test_engineering_api.py",), timeout=300),
     Check("ui-modules", ("scripts/test_modules.cjs",), "node"),  # demo/static/modules/*.js on their own
     Check("agent-ui", ("scripts/test_agent_ui.cjs",), "node"),
+    Check("product-i18n", ("scripts/test_i18n.cjs",), "node"),
+    Check("product-language", ("scripts/test_product_language.py",)),
+    Check("engineering-i18n", ("scripts/test_engineering_i18n.cjs",), "node"),
+    Check("logistics-language", ("scripts/test_logistics_language.py",)),
+    Check("logistics-i18n", ("scripts/test_logistics_language.cjs",), "node"),
     Check("document-worker", ("scripts/test_document_worker.py",)),
     Check("source-retrieval", ("scripts/test_source_retrieval.py",)),
     Check("host-worker", ("scripts/test_host_worker.py",)),

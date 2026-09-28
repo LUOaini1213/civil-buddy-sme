@@ -1,3 +1,13 @@
+const translatedUI = new Map();
+const trEngineering = (source, values) => {
+  const result = (globalThis.CBI18n || globalThis.window?.CBI18n)?.t(source, values) ?? source.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, (match, key) => values && Object.hasOwn(values, key) ? String(values[key]) : match);
+  translatedUI.set(result, { source, values });
+  if (translatedUI.size > 2500) translatedUI.delete(translatedUI.keys().next().value);
+  return result;
+};
+// Only explicitly named app-owned status nodes are refreshed here. Source text and inputs are excluded.
+const relocalizeOwned = (doc, ids) => { for (const id of ids) { const node = doc.getElementById(id); if (!node) continue; const nodes = node.tagName === 'SELECT' ? [...node.options] : [node]; for (const target of nodes) { const item = translatedUI.get(target.textContent); if (item) target.textContent = trEngineering(item.source, item.values); } } };
+const uiLocale = () => (globalThis.CBI18n || globalThis.window?.CBI18n)?.locale || 'zh-CN';
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
 /** A mouse gesture is one edit, even when the chart emits several callbacks. */
@@ -10,12 +20,12 @@ export class GanttGesture {
   begin(id) {
     if (this.active) return this.active.token;
     const before = clone(this.read());
-    if (!before.tasks.some((task) => task.id === id)) throw new Error('拖动的任务已不存在，请重新打开计划。');
+    if (!before.tasks.some((task) => task.id === id)) throw new Error(trEngineering("拖动的任务已不存在，请重新打开计划。"));
     this.active = {id, before, token: ++this.sequence};
     return this.active.token;
   }
   update(id, patch) {
-    if (!this.active || this.active.id !== id) throw new Error('拖动任务与当前手势不一致。');
+    if (!this.active || this.active.id !== id) throw new Error(trEngineering("拖动任务与当前手势不一致。"));
     const next = clone(this.read());
     next.tasks = next.tasks.map((task) => task.id === id ? {...task,...patch} : task);
     this.validate(next.tasks);

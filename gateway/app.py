@@ -130,8 +130,25 @@ app.add_middleware(access_guard.AccessGuard,
                    public=lambda path: path in {"/", "/workbench", "/api/health"} or path.startswith("/static/"))
 
 FRONTEND_DIR = ROOT / "frontend"
+
+
+class _FrontendStatic(StaticFiles):
+    """frontend/ plus the two language catalogs workbench.html loads, kept as one copy in demo/static.
+
+    Served through the /static mount rather than as extra routes, so the mount stays the only public
+    surface under /static (scripts/test_web_link.py); exactly these two file names, nothing else of demo/static."""
+
+    SHARED = {"i18n.js": ROOT / "demo/static/i18n.js", "i18n-logistics.js": ROOT / "demo/static/i18n-logistics.js"}
+
+    async def get_response(self, path: str, scope):  # noqa: ANN001 - starlette Scope
+        shared = self.SHARED.get(path)
+        if shared is not None and scope.get("method") in {"GET", "HEAD"}:
+            return FileResponse(shared, media_type="application/javascript")
+        return await super().get_response(path, scope)
+
+
 if FRONTEND_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+    app.mount("/static", _FrontendStatic(directory=str(FRONTEND_DIR)), name="static")
 # The link from a browser: upload a tender + panel list, the /demo page (all behind the token; gateway/web_link.py)
 from gateway.web_link import router as _web_link_router  # noqa: E402
 

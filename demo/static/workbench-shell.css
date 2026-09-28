@@ -1,4 +1,8 @@
 /* Shared Civil Buddy chrome. Page layouts keep their own scoped styles. */
+.cb-language-toggle { min-height: 34px; padding: 6px 12px; border: 1px solid var(--cb-line, #64748b); border-radius: 7px; background: var(--cb-panel, #fff); color: var(--cb-text, #172033); font: inherit; cursor: pointer; white-space: nowrap; }
+.cb-language-toggle:focus-visible { outline: 2px solid var(--cb-blue, #2563eb); outline-offset: 3px; }
+.cb-language-floating { position: fixed; top: 10px; right: 10px; z-index: 1000; }
+html[lang="en"] .cb-app-nav a { white-space: nowrap; }
 .cb-app-header {
   display: flex;
   flex-wrap: wrap;

@@ -7,6 +7,8 @@
   <link rel="manifest" href="/static/manifest.webmanifest" />
   <link rel="icon" href="/static/icons/cb-icon.svg" type="image/svg+xml" />
   <title>Civil Buddy</title>
+  <script src="/static/i18n.js"></script>
+  <script src="/static/i18n-home.js"></script>
   <script src="/static/theme.js?v=unified1"></script>
   <link rel="stylesheet" href="/static/theme.css?v=unified1" />
   <link rel="stylesheet" href="/static/styles.css?v=unified1" />
@@ -67,7 +69,7 @@
       <!-- ux(round19) 项目树（两级：工程项目 > 该项目下历次会话）。
            数据来自 Rust 的 /api/projects 与 /api/sessions；没有这两个接口的后端
            会静默降级为「只列会话」，不报错、不留空白。 -->
-      <div id="projTree" class="rail-projects" role="tree" aria-label="工程项目与会话"></div>
+      <div id="projTree" data-i18n-skip class="rail-projects" role="tree" aria-label="工程项目与会话"></div>
       <div class="rail-foot">
         <button type="button" id="btnNewProject" class="ghost tiny">+ 新建项目</button>
       </div>
@@ -162,7 +164,7 @@
         </details>
         <!-- ux(round19)：点名岗位贴着输入框（公理①一个输入框）。空时整条隐藏；
              #summonBar / #clearExperts 的 id 不可删——renderSummon 与其回调读它们。 -->
-        <div class="summon-bar" id="summonBar" hidden></div>
+        <div class="summon-bar" id="summonBar" data-i18n-skip hidden></div>
         <button type="button" id="clearExperts" class="cb-sum-clear" hidden>清空</button>
         <!-- ux(round14) 输入条重做（参考图）：大圆角容器 · 左"+"开快捷指令面板 · 中间 textarea · 右侧圆形发送键 -->
         <div class="composer-shell">
@@ -197,7 +199,7 @@
         <p id="voiceStatus" class="cb-voice-status" role="status" aria-live="polite"></p>
         <p id="voiceInterim" class="cb-voice-interim" aria-hidden="true"></p>
         <!-- 已选附件：一行 chip，可 × 移除；空时整条隐藏 -->
-        <div id="attaches" class="attaches" hidden></div>
+        <div id="attaches" data-i18n-skip class="attaches" hidden></div>
         <div id="ctxBar" class="ctx-bar" data-zone="room">
           <div class="ctx-meter" role="meter" aria-label="上下文使用比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="ctxFill"></i></div>
           <p id="ctxText" class="ctx-text" role="status">上下文按完整请求估算；原文在本机保留。</p>
@@ -226,12 +228,12 @@
         <button type="button" id="ctxRebuild" class="top-btn" aria-describedby="ctxRebuildHint">重新整理记忆</button>
         <p id="ctxRebuildHint">撤回模型摘要，并从原文重建记忆和本地搜索。保留对话、附件与交付物，不调用模型。</p>
         <p id="ctxMemoryStatus" role="status" aria-live="polite"></p>
-        <pre id="ctxMemory" class="cb-context-memory">发送消息后自动保存任务记忆。检索仅使用本任务历史和当前选择的附件。</pre>
+        <pre id="ctxMemory" data-i18n-skip class="cb-context-memory">发送消息后自动保存任务记忆。检索仅使用本任务历史和当前选择的附件。</pre>
         <label for="ctxQuery">搜索本任务资料</label>
         <input id="ctxQuery" type="search" maxlength="2000" placeholder="例如：之前约定的交付日期" />
         <button type="button" id="ctxSearch" class="top-btn">本地搜索</button>
         <p id="ctxSearchStatus" role="status"></p>
-        <div id="ctxResults"></div>
+        <div id="ctxResults" data-i18n-skip></div>
       </section>
       <!-- ux(round6) 跨运行审计时间线：决策置顶不可折叠 · 四色节点（docs/ux 附录 E） -->
       <div id="auditPanel" class="cb-audit" data-cb-audit-panel="true">
@@ -240,10 +242,10 @@
           <button type="button" class="top-btn" id="auditCopy" hidden>复制 JSON</button>
           <button type="button" class="top-btn" id="auditDownload" hidden>下载 JSON</button>
         </div>
-        <div id="auditBody" class="cb-audit-body"></div>
+        <div id="auditBody" data-i18n-skip class="cb-audit-body"></div>
       </div>
       <h2 class="dock-h">本岗库</h2>
-      <ul id="kblist"></ul>
+      <ul id="kblist" data-i18n-skip></ul>
     </aside>
   </main>
 
@@ -315,7 +317,7 @@
           <button type="button" id="btnNewFile">新建文件</button>
           <button type="button" id="btnDelFile">删除当前文件</button>
         </div>
-        <div id="studioTree"></div>
+        <div id="studioTree" data-i18n-skip></div>
       </div>
       <div class="studio-main">
         <form id="expertForm" class="expert-form">
@@ -341,11 +343,11 @@
           </div>
         </form>
         <div class="editor-meta">
-          <span id="filePath">未打开文件</span>
+          <span id="filePath" data-i18n-skip>未打开文件</span>
           <span id="fileSize"></span>
           <button type="button" id="saveFile" disabled>保存文件</button>
         </div>
-        <textarea id="editor" spellcheck="false" placeholder="在左侧点开一篇。同部门专家读大类共享；只有被召唤的这位专家先读本岗知识。"></textarea>
+        <textarea id="editor" data-i18n-skip spellcheck="false" placeholder="在左侧点开一篇。同部门专家读大类共享；只有被召唤的这位专家先读本岗知识。"></textarea>
       </div>
     </div>
   </div>

@@ -207,6 +207,31 @@ test("chat rejects truncated responses, keeps partial output and unlocks compose
   assert.match(h.errors[0], /连接已中断/);
 });
 
+test("English task examples use stable specialist IDs and carry locale without translating source text", async () => {
+  const calls = [];
+  const h = ui(async (url, init) => {
+    calls.push({ url: String(url), body: JSON.parse(init.body) });
+    return { ok: true, body: bytesStream(encoder.encode(frame("token", { text: "原文：已完成" }) + frame("done", { text: "原文：已完成" }))) };
+  });
+  h.evaluate('window.CBI18n = { locale: "en", catalog: {}, add(values) { Object.assign(this.catalog, values); }, t(source) { return this.locale === "en" ? this.catalog[source] || source : source; } }; globalThis.CBI18n = window.CBI18n;');
+  h.evaluate(fs.readFileSync(path.join(__dirname, "../demo/static/i18n-home.js"), "utf8"));
+  h.evaluate('cbEmptyPrefill("tender-review")');
+  assert.match(h.elements.input.value, /^Review the selected tender/);
+  assert.match(h.elements.input.value, /do not certify eligibility/);
+  assert.equal(calls.length, 0);
+  assert.match(h.evaluate('cbSlashTemplate("bid", "Keep clause 4.8", null)'), /^@bid-parse Analyse this tender/);
+  assert.match(h.evaluate('cbSlashTemplate("bid", "Keep clause 4.8", null)'), /Keep clause 4.8/);
+  h.elements.input.value = "@b"; h.elements.input.selectionStart = 2;
+  h.evaluate('cbAtApply($("input"), 0, { id: "bid-parse", name: "Tender analysis" })');
+  assert.equal(h.elements.input.value, "@bid-parse ");
+  await h.submit("Review clause 4.8; preserve 原文：已完成");
+  assert.equal(calls[0].body.locale, "en");
+  assert.equal(calls[0].body.message, "Review clause 4.8; preserve 原文：已完成");
+  assert.equal(h.messages.find(item => item.role === "assistant").body.textContent, "原文：已完成");
+  h.evaluate('window.CBI18n.locale = "zh-CN"; cbEmptyPrefill("tender-review")');
+  assert.match(h.elements.input.value, /^根据当前选择的附件/);
+});
+
 const idFrame = (id, name, data) => "id: " + id + "\n" + frame(name, data);
 
 test("a dropped stream resumes from the last id via /events, skips repeats and completes", async () => {

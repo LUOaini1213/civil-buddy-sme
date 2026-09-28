@@ -51,6 +51,18 @@ def config(mode: str = "building") -> dict:
 
 
 class CadCommandsTests(unittest.TestCase):
+    def test_exact_english_product_examples_preserve_source_and_units(self):
+        doc, params = document(), config()
+        source, original = deepcopy(doc), deepcopy(params)
+        result = apply_command(doc, params, "Set wall height to 3.6 m; set column base elevation to 0.2 m.")
+        self.assertEqual(result["config"]["parameters"]["wall"]["height_m"], 3.6)
+        self.assertEqual(result["config"]["parameters"]["column"]["base_m"], .2)
+        self.assertEqual(result["config"]["unit"], "mm")
+        self.assertEqual(doc, source)
+        self.assertEqual(params, original)
+        section = apply_command(doc, config("section"), "Set extrusion length to 6 m")
+        self.assertEqual(section["config"]["parameters"]["section"]["height_m"], 6)
+
     def test_chinese_role_edit_preserves_source_and_unrelated_parameters(self):
         doc, params = document(), config()
         before_doc, before_params = deepcopy(doc), deepcopy(params)

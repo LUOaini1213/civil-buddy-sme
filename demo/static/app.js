@@ -9,6 +9,23 @@ import { createDeliverables } from "./modules/deliverables.js";
 import { createSessionWatch } from "./modules/session-watch.js";
 import { createSessionNav, sessionId, cadProjectFromUrl } from "./modules/session-nav.js";
 
+const cbHomeText = (source, values = {}) => window.CBI18n?.t(source, values) ?? String(source || "").replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
+// Only app-owned empty/loading messages have a translation binding. Loaded memory is source text.
+let cbContextMemoryUi = null;
+function cbContextMemoryUiSet(source) {
+  const box = $("ctxMemory");
+  if (!box) return;
+  const rendered = cbHomeText(source);
+  cbContextMemoryUi = { source, rendered };
+  box.textContent = rendered;
+}
+function cbContextMemoryUiRefresh() {
+  const box = $("ctxMemory");
+  if (cbContextMemoryUi && box && box.textContent === cbContextMemoryUi.rendered) {
+    cbContextMemoryUiSet(cbContextMemoryUi.source);
+  }
+}
+
 const state = {
   experts: [],
   catalog: null,
@@ -94,14 +111,14 @@ function cbPlanningProjectRender() {
   banner.replaceChildren();
   const link = document.createElement("a");
   link.href = "/engineering/planning?project_id=" + state.planningProjectId;
-  link.textContent = "当前施工计划 · 返回排程核对";
+  link.textContent = cbHomeText("当前施工计划 · 返回排程核对");
   banner.appendChild(link);
   const notice = document.createElement("span");
-  notice.textContent = "对话生成建议，应用前须确认。";
+  notice.textContent = cbHomeText("对话生成建议，应用前须确认。");
   banner.appendChild(notice);
   const clear = document.createElement("button");
   clear.type = "button";
-  clear.textContent = "取消选择";
+  clear.textContent = cbHomeText("取消选择");
   clear.addEventListener("click", () => { state.planningProjectId = ""; cbPlanningProjectRender(); });
   banner.appendChild(clear);
 }
@@ -149,14 +166,14 @@ function cbLogisticsProjectRender() {
   banner.replaceChildren();
   const link = document.createElement("a");
   link.href = "/logistics?project_id=" + state.logisticsProjectId;
-  link.textContent = "当前箱单 · 返回物流材料核对";
+  link.textContent = cbHomeText("当前箱单 · 返回物流材料核对");
   banner.appendChild(link);
   const notice = document.createElement("span");
-  notice.textContent = "对话只提出建议，修改须在箱单页确认。";
+  notice.textContent = cbHomeText("对话只提出建议，修改须在箱单页确认。");
   banner.appendChild(notice);
   const clear = document.createElement("button");
   clear.type = "button";
-  clear.textContent = "取消选择";
+  clear.textContent = cbHomeText("取消选择");
   clear.addEventListener("click", () => { state.logisticsProjectId = ""; cbLogisticsProjectRender(); });
   banner.appendChild(clear);
 }
@@ -185,11 +202,11 @@ function cbCadProjectRender() {
   banner.replaceChildren();
   const link = document.createElement("a");
   link.href = "/cad?project_id=" + state.cadProjectId;
-  link.textContent = "当前 CAD 项目 · 返回三维模型";
+  link.textContent = cbHomeText("当前 CAD 项目 · 返回三维模型");
   banner.appendChild(link);
   const clear = document.createElement("button");
   clear.type = "button";
-  clear.textContent = "取消选择";
+  clear.textContent = cbHomeText("取消选择");
   clear.addEventListener("click", () => { state.cadProjectId = ""; cbCadProjectRender(); });
   banner.appendChild(clear);
 }
@@ -223,7 +240,7 @@ function cbEnableServerHitl(data) {
   // Keep this ephemeral: restored history and cached policy never enter here.
   if (!cbServerHitlInput) cbServerHitlInput = { disabled: !!input.disabled, placeholder: input.placeholder || "" };
   input.disabled = false;
-  input.placeholder = "服务器要求本轮确认，请键入完整签认句";
+  input.placeholder = cbHomeText("服务器要求本轮确认，请键入完整签认句");
   const disclosure = $("riskDisclosure");
   if (disclosure) disclosure.open = true;
 }
@@ -242,7 +259,7 @@ function cbRunPaint(running) {
   const send = $("send");
   if (send) {
     send.textContent = "↑";
-    send.setAttribute("aria-label", running ? "运行中…" : "发送");
+    send.setAttribute("aria-label", running ? cbHomeText("运行中…") : cbHomeText("发送"));
     if (running) {
       send.dataset.running = "1";
       send.disabled = true;
@@ -253,7 +270,7 @@ function cbRunPaint(running) {
   }
   const stop = $("stop");
   /* 没有取消能力的后端上，停止只会断开浏览器这一端，服务端那轮照跑：不要摆一个假按钮。 */
-  if (stop) { stop.hidden = !running || cbCapability("cancel") === false; stop.disabled = false; stop.textContent = "停止"; }
+  if (stop) { stop.hidden = !running || cbCapability("cancel") === false; stop.disabled = false; stop.textContent = cbHomeText("停止"); }
   const form = $("form");
   if (form) form.setAttribute("aria-busy", String(running));
 }
@@ -339,11 +356,11 @@ function cbCheckForegroundTurn(reason) {
     .catch(() => {});
 }
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") cbCheckForegroundTurn("回到前台；");
+  if (document.visibilityState === "visible") cbCheckForegroundTurn(cbHomeText("回到前台；"));
 });
 if (typeof window.addEventListener === "function") {
-  window.addEventListener("pageshow", (ev) => { if (ev && ev.persisted) cbCheckForegroundTurn("回到页面；"); });
-  window.addEventListener("online", () => cbCheckForegroundTurn("网络恢复；"));
+  window.addEventListener("pageshow", (ev) => { if (ev && ev.persisted) cbCheckForegroundTurn(cbHomeText("回到页面；")); });
+  window.addEventListener("online", () => cbCheckForegroundTurn(cbHomeText("网络恢复；")));
 }
 
 async function cbRequestCancellation(run) {
@@ -355,7 +372,7 @@ async function cbRequestCancellation(run) {
     const response = await fetch(`/api/sessions/${encodeURIComponent(run.session)}/cancel`, {
       method: "POST", signal: controller.signal,
     });
-    if (!response.ok) throw new Error(await apiError(response) || "停止请求失败");
+    if (!response.ok) throw new Error(await apiError(response) || cbHomeText("停止请求失败"));
     return await response.json();
   } catch (error) {
     run.cancelRequested = false;
@@ -377,25 +394,25 @@ function cbApplyHealth(health) {
   const offline = state.health.mode === "offline" && cbCapability("chat") === true;
   const badge = $("keyBadge");
   if (badge) {
-    badge.textContent = configured ? "模型已配置" : offline ? "离线工作台可用" : "未配置模型";
+    badge.textContent = configured ? cbHomeText("模型已配置") : offline ? cbHomeText("离线工作台可用") : cbHomeText("未配置模型");
     badge.className = configured || offline ? "pill ok" : "pill warn";
-    badge.title = configured ? "开放式问答使用当前配置；岗位工具按任务运行。" :
-      offline ? "无需 API Key 即可使用当前离线岗位功能。" : "可浏览岗位与知识库，模型能力尚未配置。";
+    badge.title = configured ? cbHomeText("开放式问答使用当前配置；岗位工具按任务运行。") :
+      offline ? cbHomeText("无需 API Key 即可使用当前离线岗位功能。") : cbHomeText("可浏览岗位与知识库，模型能力尚未配置。");
   }
   const byUrl = $("btnAttachUrl");
   if (byUrl) byUrl.hidden = cbCapability("upload_url") !== true;   /* health 到了才知道服务端能不能自己去取 */
   const availability = $("cbAvailability");
   if (availability) availability.textContent = offline
-    ? "无需 API Key：先问岗位能力" + (cbCapability("drafts") === true ? "，或生成模板草稿。" : "。") + "开放式问答可在模型设置中配置。"
-    : configured ? "模型已配置。选择岗位、添加材料，再描述你的任务。"
-      : "先浏览岗位与知识库。可用任务以当前工作台能力为准，开放式问答需配置模型。";
+    ? cbHomeText("无需 API Key：先问岗位能力") + (cbCapability("drafts") === true ? cbHomeText("，或生成模板草稿。") : "。") + cbHomeText("开放式问答可在模型设置中配置。")
+    : configured ? cbHomeText("模型已配置。选择岗位、添加材料，再描述你的任务。")
+      : cbHomeText("先浏览岗位与知识库。可用任务以当前工作台能力为准，开放式问答需配置模型。");
   for (const [id, capability, title] of [
-    ["cbLlmOpen", "model_settings", "当前工作台未提供模型设置"],
-    ["cbEmptyModel", "model_settings", "当前工作台未提供模型设置"],
-    ["btnAttach", "attachments", "当前工作台未提供附件上传"],
-    ["cbPackSample", "packing", "装箱示例执行需连接装箱服务；可从上方装箱拼柜入口查看状态"],
-    ["cbBackupExport", "session_backup", "当前服务不支持任务备份"],
-    ["cbBackupImport", "session_backup", "当前服务不支持任务导入"],
+    ["cbLlmOpen", "model_settings", cbHomeText("当前工作台未提供模型设置")],
+    ["cbEmptyModel", "model_settings", cbHomeText("当前工作台未提供模型设置")],
+    ["btnAttach", "attachments", cbHomeText("当前工作台未提供附件上传")],
+    ["cbPackSample", "packing", cbHomeText("装箱示例执行需连接装箱服务；可从上方装箱拼柜入口查看状态")],
+    ["cbBackupExport", "session_backup", cbHomeText("当前服务不支持任务备份")],
+    ["cbBackupImport", "session_backup", cbHomeText("当前服务不支持任务导入")],
   ]) {
     const element = $(id);
     if (!element) continue;
@@ -425,7 +442,7 @@ async function boot() {
       return r.json();
     });
     if (health && health.capabilities && health.capabilities.auth && !hasToken()) {
-      await askToken("这个工作台开了访问口令");
+      await askToken(cbHomeText("这个工作台开了访问口令"));
     }
     cbApplyHealth(health);
     if (health.context) state.context = { ...state.context, ...health.context };
@@ -487,32 +504,32 @@ function cbAttachRender() {
     if (u.error) {
       const er = document.createElement("span");
       er.className = "cb-att-size";
-      er.textContent = "失败：" + u.error;
+      er.textContent = cbHomeText("失败：") + u.error;
       er.title = u.error;
       chip.appendChild(er);
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "cb-att-x";
-      retry.textContent = "重试";
+      retry.textContent = cbHomeText("重试");
       retry.addEventListener("click", () => uploads.retry(u));
       chip.appendChild(retry);
     } else {
       const bar = document.createElement("span");
       bar.className = "cb-att-bar";
       bar.setAttribute("role", "progressbar");
-      bar.setAttribute("aria-label", "上传 " + u.name);
+      bar.setAttribute("aria-label", cbHomeText("上传 ") + u.name);
       bar.appendChild(document.createElement("i"));
       chip.appendChild(bar);
       const pct = document.createElement("span");
       pct.className = "cb-att-pct";
-      pct.textContent = u.xhr ? "0%" : "排队";
+      pct.textContent = u.xhr ? "0%" : cbHomeText("排队");
       chip.appendChild(pct);
     }
     const x = document.createElement("button");
     x.type = "button";
     x.className = "cb-att-x";
     x.textContent = "\u00d7";
-    x.setAttribute("aria-label", "取消上传 " + u.name);
+    x.setAttribute("aria-label", cbHomeText("取消上传 ") + u.name);
     x.addEventListener("click", () => uploads.cancel(u));
     chip.appendChild(x);
     box.appendChild(chip);
@@ -525,7 +542,7 @@ function cbAttachRender() {
     const nm = document.createElement(byRef ? "a" : "span");
     nm.className = "cb-att-name";
     nm.textContent = f.name || f.id;
-    nm.title = byRef ? "下载原件 " + (f.name || f.id) : (f.name || f.id);
+    nm.title = byRef ? cbHomeText("下载原件 ") + (f.name || f.id) : (f.name || f.id);
     if (byRef) {
       nm.href = `/api/file?session=${encodeURIComponent(state.session)}&upload=${encodeURIComponent(f.id)}&name=${encodeURIComponent(f.name || f.id)}`;
       nm.setAttribute("download", f.name || f.id);
@@ -533,8 +550,8 @@ function cbAttachRender() {
     chip.appendChild(nm);
     const role = document.createElement("select");
     role.className = "cb-att-role";
-    role.setAttribute("aria-label", "资料用途：" + (f.name || f.id));
-    for (const [value, label] of [["", "自动判断"], ["tender", "招标原文"], ["response", "投标响应"], ["reference", "参考资料"]]) {
+    role.setAttribute("aria-label", cbHomeText("资料用途：") + (f.name || f.id));
+    for (const [value, label] of [["", cbHomeText("自动判断")], ["tender", cbHomeText("招标原文")], ["response", cbHomeText("投标响应")], ["reference", cbHomeText("参考资料")]]) {
       const option = document.createElement("option");
       option.value = value;
       option.textContent = label;
@@ -556,7 +573,7 @@ function cbAttachRender() {
     x.type = "button";
     x.className = "cb-att-x";
     x.textContent = "\u00d7"; /* U+00D7，符号纪律显式豁免 */
-    x.setAttribute("aria-label", "移除附件 " + (f.name || f.id));
+    x.setAttribute("aria-label", cbHomeText("移除附件 ") + (f.name || f.id));
     x.addEventListener("click", () => {
       state.attachments = state.attachments.filter((a) => a.id !== f.id);
       delete state.attachmentRoles[f.id];
@@ -586,21 +603,21 @@ const uploads = createUploads({
 
 /* 从网址取文件：服务端去取（demo/uploads.py fetch_upload / workbench attach::import_url），回来的形状与 /api/upload 相同。 */
 async function cbAttachFromUrl() {
-  const address = (window.prompt("招标文件或招标公告的网址（工作台去取；只取公网地址，20 MB 以内）：") || "").trim();
+  const address = (window.prompt(cbHomeText("招标文件或招标公告的网址（工作台去取；只取公网地址，20 MB 以内）：")) || "").trim();
   if (!address) return;
   if (cbUploadSlotsLeft(state.session) <= 0) { addStatus(`同一会话最多 ${CB_UPLOAD_LIMITS.maxFiles} 个附件`); return; }
-  addStatus("正在从网址取文件…");
+  addStatus(cbHomeText("正在从网址取文件…"));
   try {
     const res = await fetch("/api/upload-url", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: state.session, url: address }) });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { addStatus("没有取到：" + (data.detail || data.error || res.status)); return; }
+    if (!res.ok) { addStatus(cbHomeText("没有取到：") + (data.detail || data.error || res.status)); return; }
     const why = cbUploadAccept(null, data);
     if (why) { addStatus(why); return; }
     cbAttachRender();
-    addStatus("已取回并作为附件：" + (data.files || []).map((f) => f.name).join("、"));
+    addStatus(cbHomeText("已取回并作为附件：") + (data.files || []).map((f) => f.name).join("、"));
   } catch (err) {
-    addStatus("没有取到：" + (err && err.message ? err.message : "网络错误"));
+    addStatus(cbHomeText("没有取到：") + (err && err.message ? err.message : cbHomeText("网络错误")));
   }
 }
 
@@ -715,7 +732,7 @@ if ($("btnNewProject")) {
     const inp = document.createElement("input");
     inp.type = "text";
     inp.className = "rail-rename";
-    inp.placeholder = "项目名，Enter 确认";
+    inp.placeholder = cbHomeText("项目名，Enter 确认");
     let settled = false;
     const done = async (save) => {
       if (settled) return;
@@ -732,7 +749,7 @@ if ($("btnNewProject")) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         await loadThreads();
       } catch (e) {
-        addStatus("新建项目失败：" + ((e && e.message) || e));
+        addStatus(cbHomeText("新建项目失败：") + ((e && e.message) || e));
       }
     };
     inp.addEventListener("keydown", (ev) => {
@@ -757,12 +774,12 @@ function cbContextReset() {
   cbCapabilityRequest += 1;
   if ($("cbCapabilityBody")) {
     $("cbCapabilityBody").replaceChildren();
-    $("cbCapabilityBody").textContent = "查看开始前需要的资料、可用工具与草稿检查标准。";
+    $("cbCapabilityBody").textContent = cbHomeText("查看开始前需要的资料、可用工具与草稿检查标准。");
     $("cbCapabilityBody").setAttribute("aria-busy", "false");
   }
   state.context.lastReport = null;
   if ($("ctxMemory")) {
-    $("ctxMemory").textContent = "查看本任务记忆；检索仅使用本任务历史和当前选择的附件。";
+    cbContextMemoryUiSet("查看本任务记忆；检索仅使用本任务历史和当前选择的附件。");
     $("ctxMemory").setAttribute("aria-busy", "false");
   }
   if ($("ctxQuery")) $("ctxQuery").value = "";
@@ -789,7 +806,7 @@ const nav = createSessionNav({
   addStatus: (text) => addStatus(text),
   addMsg: (role, who, text) => addMsg(role, who, text),
   reset: {
-    cancelVoice: () => window.CivilBuddyVoice?.cancel("已切换项目或会话，旧语音草稿已取消。"),
+    cancelVoice: () => window.CivilBuddyVoice?.cancel(cbHomeText("已切换项目或会话，旧语音草稿已取消。")),
     toEmpty: () => cbResetToEmpty(),
     contextReset: () => cbContextReset(),
     clearServerHitl: () => cbClearServerHitl(),
@@ -840,10 +857,10 @@ function cbRelTime(ts) {
   const t = Number(ts);
   if (!t || !isFinite(t)) return "";
   const diff = Math.max(0, Date.now() / 1000 - t);
-  if (diff < 60) return "刚刚";
-  if (diff < 3600) return Math.floor(diff / 60) + " 分钟";
-  if (diff < 86400) return Math.floor(diff / 3600) + " 小时";
-  if (diff < 86400 * 30) return Math.floor(diff / 86400) + " 天";
+  if (diff < 60) return cbHomeText("刚刚");
+  if (diff < 3600) return Math.floor(diff / 60) + cbHomeText(" 分钟");
+  if (diff < 86400) return Math.floor(diff / 3600) + cbHomeText(" 小时");
+  if (diff < 86400 * 30) return Math.floor(diff / 86400) + cbHomeText(" 天");
   return new Date(t * 1000).toISOString().slice(0, 10);
 }
 
@@ -899,11 +916,11 @@ if ($("btnNewThread")) {
 async function cbRunBackground(text) {
   const body = String(text || "").trim();
   if (!body) {
-    addStatus("/bg 先写任务内容");
+    addStatus(cbHomeText("/bg 先写任务内容"));
     return;
   }
   if (cbCapability("background_turns") === false) {
-    addStatus("当前后端不支持并行任务（需要 background_turns 能力）");
+    addStatus(cbHomeText("当前后端不支持并行任务（需要 background_turns 能力）"));
     return;
   }
   const sid = cbSessionId();
@@ -913,6 +930,7 @@ async function cbRunBackground(text) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         message: body,
+        locale: window.CBI18n?.locale || "zh-CN",
         background: true,
         session_id: sid,
         project_id: cbProj.cur || "",
@@ -932,7 +950,7 @@ async function cbRunBackground(text) {
     await loadThreads();
     cbBgSchedule();
   } catch (e) {
-    addStatus("并行任务未能开始：" + ((e && e.message) || e));
+    addStatus(cbHomeText("并行任务未能开始：") + ((e && e.message) || e));
   }
 }
 
@@ -970,7 +988,7 @@ async function handleSlash(message) {
   }
   if (cmd === "threads") {
     await loadThreads();
-    addStatus("threads 已刷新");
+    addStatus(cbHomeText("threads 已刷新"));
     return true;
   }
   if (cmd === "help") {
@@ -1031,7 +1049,7 @@ function renderSummon() {
   });
   const names = [...state.summoned].map((id) => {
     const e = state.experts.find((x) => x.id === id);
-    return e ? `${e.category_name}/${e.name}` : id;
+    return e ? `${cbHomeText(e.category_name)}/${cbHomeText(e.name)}` : id;
   });
   const bar = $("summonBar");
   if (!bar) return;
@@ -1056,15 +1074,15 @@ function renderSummon() {
     const details = document.createElement("button");
     details.type = "button";
     details.className = "cb-post-details";
-    details.textContent = e ? `${e.category_name}/${e.name}` : id;
-    details.setAttribute("aria-label", "查看 " + (e ? e.name : id) + " 的资料与工具");
+    details.textContent = e ? `${cbHomeText(e.category_name)}/${cbHomeText(e.name)}` : id;
+    details.setAttribute("aria-label", cbHomeText("查看 ") + (e ? e.name : id) + cbHomeText(" 的资料与工具"));
     details.addEventListener("click", () => cbExpertCapability(id));
     chip.appendChild(details);
     const x = document.createElement("button");
     x.type = "button";
     x.className = "cb-sum-x";
     x.textContent = "×";
-    x.setAttribute("aria-label", "取消点名 " + (e ? e.name : id));
+    x.setAttribute("aria-label", cbHomeText("取消点名 ") + (e ? e.name : id));
     x.addEventListener("click", () => {
       state.summoned.delete(id);
       renderSummon();
@@ -1109,13 +1127,13 @@ async function refreshKb() {
 }
 
 function layerName(layer) {
-  if (layer === "history") return "任务历史";
-  if (layer === "expert") return "本岗知识";
-  if (layer === "category") return "大类共享";
-  if (layer === "web") return "网上检索";
-  if (layer === "upload") return "用户上传";
-  if (layer === "job") return "作业根";
-  return "公司规则";
+  if (layer === "history") return cbHomeText("任务历史");
+  if (layer === "expert") return cbHomeText("本岗知识");
+  if (layer === "category") return cbHomeText("大类共享");
+  if (layer === "web") return cbHomeText("网上检索");
+  if (layer === "upload") return cbHomeText("用户上传");
+  if (layer === "job") return cbHomeText("作业根");
+  return cbHomeText("公司规则");
 }
 
 function fmtBytes(n) {
@@ -1164,7 +1182,7 @@ function estimateLocalContext() {
   if (pct >= 90) zone = "full";
   else if (pct >= (policy.compress_pct || 70)) zone = "compact";
   else if (pct >= (policy.warn_pct || 50)) zone = "warn";
-  const note = `编辑中：仅对话文字约 ${fmtNum(used)} token。发送时按完整请求安排记忆和来源，上限 ${fmtNum(limit)}，回答预留 ${fmtNum(reserve)}。`;
+  const note = cbHomeText("编辑中：仅对话文字约 {used} token。发送时按完整请求安排记忆和来源，上限 {limit}，回答预留 {reserve}。", { used: fmtNum(used), limit: fmtNum(limit), reserve: fmtNum(reserve) });
   return { used, limit, usable, pct, zone, note, estimated: true, compress_at: compressAt, keep_recent: keep };
 }
 
@@ -1181,17 +1199,17 @@ function paintContext(ctx) {
   const meter = bar.querySelector('[role="meter"]');
   if (meter) meter.setAttribute("aria-valuenow", String(pct));
   if (ctx.note) {
-    text.textContent = ctx.note + (ctx.history_count != null ? ` · 历史 ${ctx.history_count} 条 · 找回 ${ctx.retrieved || 0} 段` : "");
+    text.textContent = ctx.note + (ctx.history_count != null ? cbHomeText(" · 历史 {history} 条 · 找回 {retrieved} 段", { history: ctx.history_count, retrieved: ctx.retrieved || 0 }) : "");
   } else {
-    text.textContent = `上下文 ${fmtNum(ctx.used)} / ${fmtNum(ctx.limit)} · ${pct}%`;
+    text.textContent = cbHomeText("上下文 {used} / {limit} · {pct}%", { used: fmtNum(ctx.used), limit: fmtNum(ctx.limit), pct });
   }
   const semantic = ctx.semantic;
   if (semantic && typeof semantic === "object" && !Array.isArray(semantic)) {
     const parts = [];
     if (typeof semantic.note === "string" && semantic.note) parts.push(semantic.note);
-    else if (typeof semantic.status === "string") parts.push("语义摘要状态：" + semantic.status);
-    for (const [key, label, unit] of [["model_calls", "摘要调用", " 次"], ["input_tokens", "摘要输入估算", " token"],
-      ["output_reserve", "摘要输出预留", " token"], ["covered_messages", "已处理历史", " 条"]]) {
+    else if (typeof semantic.status === "string") parts.push(cbHomeText("语义摘要状态：") + semantic.status);
+    for (const [key, label, unit] of [["model_calls", cbHomeText("摘要调用"), cbHomeText(" 次")], ["input_tokens", cbHomeText("摘要输入估算"), " token"],
+      ["output_reserve", cbHomeText("摘要输出预留"), " token"], ["covered_messages", cbHomeText("已处理历史"), cbHomeText(" 条")]]) {
       if (Number.isSafeInteger(semantic[key]) && semantic[key] >= 0) parts.push(label + " " + fmtNum(semantic[key]) + unit);
     }
     if (parts.length) text.textContent += " · " + parts.join(" · ");
@@ -1257,17 +1275,17 @@ $("form").addEventListener("submit", async (ev) => {
   if (runState.active) return;
   if (runState.watched) {
     /* 服务端这一轮还占着会话，现在发只会得到 409，还会把正在轮询的结果顶掉。 */
-    addStatus("这个任务还在后台运行：等它完成，或先点「停止」。输入内容已保留。");
+    addStatus(cbHomeText("这个任务还在后台运行：等它完成，或先点「停止」。输入内容已保留。"));
     return;
   }
   if (cbContextRebuilding()) {
-    const note = "正在重新整理记忆，请完成后发送；输入内容已保留。";
+    const note = cbHomeText("正在重新整理记忆，请完成后发送；输入内容已保留。");
     if ($("ctxMemoryStatus")) $("ctxMemoryStatus").textContent = note;
     cbAnnounce(note);
     return;
   }
   if (cbCapability("chat") === false) {
-    addStatus("当前工作台暂未提供任务运行能力，请检查服务状态。");
+    addStatus(cbHomeText("当前工作台暂未提供任务运行能力，请检查服务状态。"));
     return;
   }
   let message = $("input").value.trim();
@@ -1289,7 +1307,7 @@ $("form").addEventListener("submit", async (ev) => {
     $("input").value = message;
   } else if (/^\/(pack|bid|safety)\s*$/.test(message)) {
     /* ux(round9)：模板命令未带参 → 用法提示（不发送） */
-    addStatus("用法：/pack <票名>（如 /pack small_one_container）、/bid <要点>、/safety <要点>；或输入 / 从面板选。");
+    addStatus(cbHomeText("用法：/pack <票名>（如 /pack small_one_container）、/bid <要点>、/safety <要点>；或输入 / 从面板选。"));
     return;
   }
   state.lastSend = message; /* ux(round7)：重试=重放同 payload */
@@ -1301,7 +1319,7 @@ $("form").addEventListener("submit", async (ev) => {
   cbCmdClose();
   if (message.startsWith("/")) {
     cbHideWelcome();
-    addMsg("user", "你", message);
+    addMsg("user", cbHomeText("你"), message);
     try {
       const ok = await handleSlash(message);
       if (!ok) addStatus(`未知命令 ${message}。/help`);
@@ -1311,7 +1329,7 @@ $("form").addEventListener("submit", async (ev) => {
     return;
   }
   cbHideWelcome();
-  addMsg("user", "你", message);
+  addMsg("user", cbHomeText("你"), message);
   const cbDirect = cbDirectMatch(message);
   if (cbDirect) {
     await cbDirectRun(cbDirect);
@@ -1330,17 +1348,17 @@ $("form").addEventListener("submit", async (ev) => {
     if (runState.active !== run) return;
     const stopped = err.name === "AbortError";
     const dropped = err.name === "StreamDroppedError";
-    const raw = stopped ? "已停止接收回答。已有内容已保留。" : String(err.message || err);
+    const raw = stopped ? cbHomeText("已停止接收回答。已有内容已保留。") : String(err.message || err);
     if (dropped) {
       /* 断流（锁屏 / 切 App / 网络切换）：服务端这一轮不会被取消，轮询拿回结果。 */
       const note = document.createElement("p");
       note.className = "status-line";
       note.textContent = raw;
       run.bodyEl.parentElement.appendChild(note);
-      cbAnnounce("连接中断，正在恢复结果");
+      cbAnnounce(cbHomeText("连接中断，正在恢复结果"));
       runState.active = null;
       cbRunPaint(false);
-      cbWatchSession(run.session, { bodyEl: run.bodyEl, reason: "连接曾中断；" });
+      cbWatchSession(run.session, { bodyEl: run.bodyEl, reason: cbHomeText("连接曾中断；") });
       return;
     }
     // Preserve partial output so an interrupted connection does not erase work.
@@ -1349,7 +1367,7 @@ $("form").addEventListener("submit", async (ev) => {
     note.textContent = raw;
     run.bodyEl.parentElement.appendChild(note);
     if (!stopped) cbFixMount(run.bodyEl.parentElement, typeof CB_FIX !== "undefined" ? CB_FIX.classify(raw, { retryable: true }) : null);
-    cbAnnounce(stopped ? "已停止接收回答" : "本轮失败：请看纠偏卡的建议动作");
+    cbAnnounce(stopped ? cbHomeText("已停止接收回答") : cbHomeText("本轮失败：请看纠偏卡的建议动作"));
   } finally {
     if (runState.active === run) {
       runState.active = null;
@@ -1365,15 +1383,15 @@ if ($("stop")) $("stop").addEventListener("click", async () => {
   const current = () => runState.active === run || runState.watched === run;
   if (cbCapability("cancel") !== true) { if (run.controller) run.controller.abort(); return; }
   $("stop").disabled = true;
-  $("stop").textContent = "停止中…";
+  $("stop").textContent = cbHomeText("停止中…");
   try {
     const result = await cbRequestCancellation(run);
-    if (current() && result && result.cancel_requested) cbAnnounce("已请求停止，正在保存已有结果");
+    if (current() && result && result.cancel_requested) cbAnnounce(cbHomeText("已请求停止，正在保存已有结果"));
   } catch (error) {
     if (current()) {
       $("stop").disabled = false;
-      $("stop").textContent = "停止";
-      addStatus("停止请求未完成，请重试。" + String(error.message || error));
+      $("stop").textContent = cbHomeText("停止");
+      addStatus(cbHomeText("停止请求未完成，请重试。") + String(error.message || error));
     }
   }
 });
@@ -1388,7 +1406,7 @@ function cbBackupPaint(busy) {
 
 if ($("cbBackupExport")) $("cbBackupExport").addEventListener("click", async () => {
   if (cbBackupBusy) return;
-  if (runState.active) { addStatus("请停止或等待本轮完成后备份任务。"); return; }
+  if (runState.active) { addStatus(cbHomeText("请停止或等待本轮完成后备份任务。")); return; }
   const session = state.session;
   cbBackupPaint(true);
   try {
@@ -1396,7 +1414,7 @@ if ($("cbBackupExport")) $("cbBackupExport").addEventListener("click", async () 
     const probe = await fetch(`/api/sessions/${encodeURIComponent(session)}`);
     const detail = probe.ok ? await probe.json() : null;
     if (detail && detail.turn_state && detail.turn_state.active) {
-      addStatus("这个任务仍在后台运行，请等待完成后再备份。");
+      addStatus(cbHomeText("这个任务仍在后台运行，请等待完成后再备份。"));
       return;
     }
     /* 不再 fetch→blob→createObjectURL：128 MB 的包会整个进内存，手机上直接崩；
@@ -1409,50 +1427,50 @@ if ($("cbBackupExport")) $("cbBackupExport").addEventListener("click", async () 
     document.body.appendChild(link);
     link.click();
     link.remove();
-    if (state.session === session) addStatus("已发起任务备份下载；请确认浏览器已保存 ZIP 文件。备份包含对话、上传资料和生成的文书。");
+    if (state.session === session) addStatus(cbHomeText("已发起任务备份下载；请确认浏览器已保存 ZIP 文件。备份包含对话、上传资料和生成的文书。"));
   } catch (error) { addStatus(String(error.message || error)); }
   finally { cbBackupPaint(false); }
 });
 
 if ($("cbBackupImport")) $("cbBackupImport").addEventListener("click", () => {
   if (cbBackupBusy) return;
-  if (runState.active) { addStatus("请停止或等待本轮完成后导入任务。"); return; }
+  if (runState.active) { addStatus(cbHomeText("请停止或等待本轮完成后导入任务。")); return; }
   $("cbBackupFile").click();
 });
 
 if ($("cbBackupFile")) $("cbBackupFile").addEventListener("change", async () => {
   const file = $("cbBackupFile").files[0];
   if (!file || cbBackupBusy) return;
-  if (file.size > 128 * 1024 * 1024) { addStatus("备份包不能超过 128 MB。"); $("cbBackupFile").value = ""; return; }
+  if (file.size > 128 * 1024 * 1024) { addStatus(cbHomeText("备份包不能超过 128 MB。")); $("cbBackupFile").value = ""; return; }
   const request = cbSessionRequest;
   cbBackupPaint(true);
   try {
     const response = await fetch("/api/session-import", {
       method: "POST", headers: { "Content-Type": "application/zip" }, body: file,
     });
-    if (!response.ok) throw new Error(await apiError(response) || "导入失败");
+    if (!response.ok) throw new Error(await apiError(response) || cbHomeText("导入失败"));
     const result = await response.json();
     await loadThreads();
     if (request === cbSessionRequest && !runState.active) {
       await cbProjOpenSession({ session_id: result.session_id, title: result.title });
-      addStatus("已导入为新任务，原任务保持不变。可在左侧将它移动到工程项目；后续高风险操作需重新确认。");
+      addStatus(cbHomeText("已导入为新任务，原任务保持不变。可在左侧将它移动到工程项目；后续高风险操作需重新确认。"));
     }
   } catch (error) { addStatus(String(error.message || error)); }
   finally { $("cbBackupFile").value = ""; cbBackupPaint(false); }
 });
 
 function skillWho(id, source) {
-  if (!id) return "未点名岗位";
+  if (!id) return cbHomeText("未点名岗位");
   const names = String(id).split(",").map((value) => value.trim()).filter(Boolean).map((value) => {
     const name = (state.experts.find((e) => e.id === value) || {}).name || value;
     return `$${value} · ${name}`;
   });
-  const how = source === "given" ? "已点名" : source === "matched" ? "规则选用" : "当前岗位";
+  const how = source === "given" ? cbHomeText("已点名") : source === "matched" ? cbHomeText("规则选用") : cbHomeText("当前岗位");
   return names.join(" / ") + " · " + how;
 }
 
 function namesOrPlain() {
-  if (!state.summoned.size) return "未点名岗位";
+  if (!state.summoned.size) return cbHomeText("未点名岗位");
   return [...state.summoned].map((id) => skillWho(id, "given")).join(" / ");
 }
 
@@ -1596,24 +1614,24 @@ function cbTaskRoutePaint(route, bodyEl, message) {
   if (!card) {
     card = document.createElement("section");
     card.className = "cb-route-card";
-    card.setAttribute("aria-label", "任务选择与步骤");
+    card.setAttribute("aria-label", cbHomeText("任务选择与步骤"));
     host.cbRouteCard = card;
     host.appendChild(card);
   }
   card.replaceChildren();
   const heading = document.createElement("h4");
-  heading.textContent = route.ambiguous ? "选择本次要处理的事项" : "本次任务安排";
+  heading.textContent = route.ambiguous ? cbHomeText("选择本次要处理的事项") : cbHomeText("本次任务安排");
   card.appendChild(heading);
   const reason = document.createElement("p");
-  reason.textContent = route.reason || "按本次明确选择的岗位处理。";
+  reason.textContent = route.reason || cbHomeText("按本次明确选择的岗位处理。");
   card.appendChild(reason);
   const steps = Array.isArray(route.steps) ? route.steps : [];
   if (steps.length > 1) {
     const names = new Map(steps.map(step => [step.id, step.label]));
-    cbTaskList(card, "步骤与依赖", steps.map(step => step.label + (
+    cbTaskList(card, cbHomeText("步骤与依赖"), steps.map(step => step.label + (
       Array.isArray(step.depends_on) && step.depends_on.length
-        ? " · 前置步骤：“" + step.depends_on.map(id => names.get(id) || id).join("、") + "”"
-        : " · 起始步骤")));
+        ? cbHomeText(" · 前置步骤：“") + step.depends_on.map(id => names.get(id) || id).join("、") + "”"
+        : cbHomeText(" · 起始步骤"))));
   }
   if (route.ambiguous) {
     const sid = state.session;
@@ -1621,7 +1639,7 @@ function cbTaskRoutePaint(route, bodyEl, message) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "top-btn cb-route-choice";
-      button.textContent = candidate.label + " · " + (candidate.reason || "按此岗位处理");
+      button.textContent = candidate.label + " · " + (candidate.reason || cbHomeText("按此岗位处理"));
       button.addEventListener("click", () => {
         if (state.session !== sid) return;
         state.summoned = new Set((candidate.expert_ids || []).filter(id => typeof id === "string"));
@@ -1631,7 +1649,7 @@ function cbTaskRoutePaint(route, bodyEl, message) {
         cbAutosize($("input"));
         cbSyncSend();
         $("input").focus();
-        cbAnnounce("已选择岗位，检查任务内容后发送。");
+        cbAnnounce(cbHomeText("已选择岗位，检查任务内容后发送。"));
       });
       card.appendChild(button);
     }
@@ -1645,7 +1663,7 @@ function cbCollaborationPaint(data, bodyEl) {
   if (!card) {
     card = document.createElement("section");
     card.className = "cb-collaboration-card";
-    card.setAttribute("aria-label", "协作进度与证据");
+    card.setAttribute("aria-label", cbHomeText("协作进度与证据"));
     host.cbCollaborationCard = card;
     host.appendChild(card);
   }
@@ -1661,47 +1679,47 @@ function cbCollaborationPaint(data, bodyEl) {
   }
   const result = card.cbSnapshot;
   card.replaceChildren();
-  const states = { pending: "待开始", parsing: "解析原文中", running: "处理中", done: "已完成",
-    failed: "未完成", cancelled: "已停止", timed_out: "已超时", interrupted: "已中断", restored: "已导入历史记录",
-    waiting_hitl: "等待本轮确认" };
+  const states = { pending: cbHomeText("待开始"), parsing: cbHomeText("解析原文中"), running: cbHomeText("处理中"), done: cbHomeText("已完成"),
+    failed: cbHomeText("未完成"), cancelled: cbHomeText("已停止"), timed_out: cbHomeText("已超时"), interrupted: cbHomeText("已中断"), restored: cbHomeText("已导入历史记录"),
+    waiting_hitl: cbHomeText("等待本轮确认") };
   const heading = document.createElement("h4");
-  heading.textContent = "协作进度 · " + (states[result.state] || "等待更新");
+  heading.textContent = cbHomeText("协作进度 · ") + (states[result.state] || cbHomeText("等待更新"));
   card.appendChild(heading);
   for (const child of Array.isArray(result.children) ? result.children : []) {
     const details = document.createElement("details");
     const summary = document.createElement("summary");
     const expert = state.experts.find(item => item.id === child.skill);
-    summary.textContent = (expert ? expert.name : child.skill || child.task_id || "子任务") + " · " + (states[child.status] || "待更新");
+    summary.textContent = (expert ? expert.name : child.skill || child.task_id || cbHomeText("子任务")) + " · " + (states[child.status] || cbHomeText("待更新"));
     details.appendChild(summary);
-    cbTaskList(details, "结论", (child.conclusions || []).map(item => cbTaskText(item) + (item.origin === "model_analysis" ? "（模型分析，未核实）" : "")));
-    cbTaskList(details, "来源证据", (child.evidence || []).map(item =>
+    cbTaskList(details, cbHomeText("结论"), (child.conclusions || []).map(item => cbTaskText(item) + (item.origin === "model_analysis" ? cbHomeText("（模型分析，未核实）") : "")));
+    cbTaskList(details, cbHomeText("来源证据"), (child.evidence || []).map(item =>
       [item.title || item.source_id, item.source_id, item.quote].filter(Boolean).join(" · ")));
-    cbTaskList(details, "未解决事项", child.unresolved);
+    cbTaskList(details, cbHomeText("未解决事项"), child.unresolved);
     card.appendChild(details);
   }
   const review = result.review || {};
-  cbTaskList(card, "汇总待核项", [...(Array.isArray(review.gaps) ? review.gaps : []), ...(Array.isArray(review.conflicts) ? review.conflicts : [])]);
-  cbTaskList(card, "需修正的表述", review.forbidden_hits);
+  cbTaskList(card, cbHomeText("汇总待核项"), [...(Array.isArray(review.gaps) ? review.gaps : []), ...(Array.isArray(review.conflicts) ? review.conflicts : [])]);
+  cbTaskList(card, cbHomeText("需修正的表述"), review.forbidden_hits);
   if (Array.isArray(review.response_comparison) && review.response_comparison.length) {
     const heading = document.createElement("h4");
-    heading.textContent = "招标要求与投标响应对照（待核验）";
+    heading.textContent = cbHomeText("招标要求与投标响应对照（待核验）");
     card.appendChild(heading);
     const table = document.createElement("table");
     const header = document.createElement("tr");
-    for (const label of ["招标要求", "响应原文", "状态"]) {
+    for (const label of [cbHomeText("招标要求"), cbHomeText("响应原文"), cbHomeText("状态")]) {
       const th = document.createElement("th");
       th.scope = "col";
       th.textContent = label;
       header.appendChild(th);
     }
     table.appendChild(header);
-    const statuses = { candidate_requires_review: "找到候选，待人工核验", conflict_requires_review: "数值与招标不一致，待人工核验",
-      not_matched: "未匹配到响应", not_provided: "未提供响应资料" };
+    const statuses = { candidate_requires_review: cbHomeText("找到候选，待人工核验"), conflict_requires_review: cbHomeText("数值与招标不一致，待人工核验"),
+      not_matched: cbHomeText("未匹配到响应"), not_provided: cbHomeText("未提供响应资料") };
     for (const comparison of review.response_comparison) {
       const row = document.createElement("tr");
       for (const value of [comparison.requirement || comparison.requirement_ref,
         (comparison.response_evidence || []).map(evidence => [evidence.source_id, evidence.quote].filter(Boolean).join(" · ")).join("\n") || "—",
-        [statuses[comparison.status] || "待核验", ...(comparison.conflicts || []).map(conflict => conflict.note)].filter(Boolean).join("\n")]) {
+        [statuses[comparison.status] || cbHomeText("待核验"), ...(comparison.conflicts || []).map(conflict => conflict.note)].filter(Boolean).join("\n")]) {
         const cell = document.createElement("td");
         cell.textContent = value;
         row.appendChild(cell);
@@ -1712,7 +1730,7 @@ function cbCollaborationPaint(data, bodyEl) {
   }
   if (result.submit_blocked === true || result.state === "done") {
     const note = document.createElement("p");
-    note.textContent = "协作产出是内部讨论草稿，仍需人工核验与正式签认。";
+    note.textContent = cbHomeText("协作产出是内部讨论草稿，仍需人工核验与正式签认。");
     card.appendChild(note);
   }
   const metrics = result.aggregate_metrics || result.metrics;
@@ -1725,14 +1743,14 @@ function cbCollaborationPaint(data, bodyEl) {
     const limit = Number(metrics.limit) || 0;
     label.textContent = `汇总预算${metrics.estimated ? "（估算）" : ""}：输入 ${fmtNum(input)} · 输出 ${fmtNum(output)}` +
       (limit > 0 ? ` · 总额度 ${fmtNum(limit)} · 总预留 ${fmtNum(metrics.reserved_tokens)}` : "") +
-      (metrics.counter === "utf8-bytes" ? " · 按 UTF-8 字节保守估算" : "");
+      (metrics.counter === "utf8-bytes" ? cbHomeText(" · 按 UTF-8 字节保守估算") : "");
     box.appendChild(label);
     if (limit > 0) {
       const meter = document.createElement("meter");
       meter.min = 0;
       meter.max = limit;
       meter.value = Math.min(limit, input + output);
-      meter.setAttribute("aria-label", "协作汇总预算使用量");
+      meter.setAttribute("aria-label", cbHomeText("协作汇总预算使用量"));
       box.appendChild(meter);
     }
     card.appendChild(box);
@@ -1746,12 +1764,12 @@ function cbCapabilityCatalog() {
   select.replaceChildren();
   const prompt = document.createElement("option");
   prompt.value = "";
-  prompt.textContent = "请选择岗位";
+  prompt.textContent = cbHomeText("请选择岗位");
   select.appendChild(prompt);
   for (const expert of state.experts) {
     const option = document.createElement("option");
     option.value = expert.id;
-    option.textContent = (expert.category_name ? expert.category_name + " / " : "") + expert.name;
+    option.textContent = (expert.category_name ? cbHomeText(expert.category_name) + " / " : "") + cbHomeText(expert.name);
     select.appendChild(option);
   }
   select.value = selected;
@@ -1764,28 +1782,28 @@ async function cbExpertCapability(id) {
   cbDockSet(true, true);
   if ($("cbCapabilityPost")) $("cbCapabilityPost").value = id;
   box.replaceChildren();
-  box.textContent = "正在读取岗位资料…";
+  box.textContent = cbHomeText("正在读取岗位资料…");
   box.setAttribute("aria-busy", "true");
   try {
     const response = await fetch("/api/experts/" + encodeURIComponent(id) + "/capability");
-    if (response.status === 404) throw new Error("本岗没有内置专用工具契约；自定义岗位请查看其用户 SOP，不借用其他岗位能力。");
+    if (response.status === 404) throw new Error(cbHomeText("本岗没有内置专用工具契约；自定义岗位请查看其用户 SOP，不借用其他岗位能力。"));
     if (!response.ok) throw new Error(await apiError(response));
     const data = await response.json();
     if (request !== cbCapabilityRequest) return;
-    if (!data || data.expert_id !== id) throw new Error("岗位能力数据不完整");
+    if (!data || data.expert_id !== id) throw new Error(cbHomeText("岗位能力数据不完整"));
     box.textContent = "";
     const heading = document.createElement("h4");
-    heading.textContent = data.name + (data.risk === "high" ? " · 成稿需人工确认" : "");
+    heading.textContent = data.name + (data.risk === "high" ? cbHomeText(" · 成稿需人工确认") : "");
     box.appendChild(heading);
-    cbTaskList(box, "开始前需要的资料", data.inputs);
-    cbTaskList(box, "本岗工具", (data.tools || []).map(tool =>
-      (tool.label || tool.name) + "（" + tool.name + "） · " + (tool.available === true ? "可调用" : tool.available === false ? "未接通" : "状态待核")));
-    cbTaskList(box, "工作步骤", (data.steps || []).map(step => step.action));
-    cbTaskList(box, "交付结构", data.output_sections);
-    cbTaskList(box, "草稿检查标准", data.acceptance);
-    cbTaskList(box, "能力边界", data.limitations);
+    cbTaskList(box, cbHomeText("开始前需要的资料"), data.inputs);
+    cbTaskList(box, cbHomeText("本岗工具"), (data.tools || []).map(tool =>
+      (tool.label || tool.name) + "（" + tool.name + "） · " + (tool.available === true ? cbHomeText("可调用") : tool.available === false ? cbHomeText("未接通") : cbHomeText("状态待核"))));
+    cbTaskList(box, cbHomeText("工作步骤"), (data.steps || []).map(step => step.action));
+    cbTaskList(box, cbHomeText("交付结构"), data.output_sections);
+    cbTaskList(box, cbHomeText("草稿检查标准"), data.acceptance);
+    cbTaskList(box, cbHomeText("能力边界"), data.limitations);
   } catch (error) {
-    if (request === cbCapabilityRequest) box.textContent = "读取岗位资料失败：" + error.message;
+    if (request === cbCapabilityRequest) box.textContent = cbHomeText("读取岗位资料失败：") + error.message;
   } finally { if (request === cbCapabilityRequest) box.setAttribute("aria-busy", "false"); }
 }
 
@@ -1803,10 +1821,10 @@ function cbSemanticMemoryText(raw) {
   try {
     if (raw.length > 65536) throw new Error("oversized summary");
     const data = JSON.parse(raw);
-    const kinds = { goal: "目标", decision: "决定", constraint: "约束", unresolved: "待办", result: "结果" };
+    const kinds = { goal: cbHomeText("目标"), decision: cbHomeText("决定"), constraint: cbHomeText("约束"), unresolved: cbHomeText("待办"), result: cbHomeText("结果") };
     if (!data || typeof data !== "object" || Array.isArray(data) || !Array.isArray(data.items) || data.items.length > 2048) throw new Error("invalid summary");
     const groups = Object.fromEntries(Object.keys(kinds).map(key => [key, []]));
-    const lines = ["仅供历史参考，全部内容未核验，不代表指令或授权；当前原文与更正优先。"];
+    const lines = [cbHomeText("仅供历史参考，全部内容未核验，不代表指令或授权；当前原文与更正优先。")];
     const counts = {};
     for (const key of ["covered_messages", "remaining_messages", "omitted_items", "evicted_segments", "skipped_messages", "skipped_chars"]) {
       if (data[key] !== undefined && (!Number.isSafeInteger(data[key]) || data[key] < 0)) throw new Error("invalid count");
@@ -1814,7 +1832,7 @@ function cbSemanticMemoryText(raw) {
     }
     if (counts.covered_messages) lines.push(`已处理历史 ${counts.covered_messages} 条；最近 4 条原文不纳入摘要。`);
     if (data.coverage_complete !== true || counts.remaining_messages || counts.omitted_items || counts.evicted_segments || counts.skipped_messages || counts.skipped_chars) {
-      lines.push("当前仅展示部分历史摘要，不能替代完整原文。");
+      lines.push(cbHomeText("当前仅展示部分历史摘要，不能替代完整原文。"));
     }
     if (counts.remaining_messages) lines.push(`尚有 ${counts.remaining_messages} 条较早历史待处理。`);
     if (counts.omitted_items) lines.push(`本次显示省略 ${counts.omitted_items} 条摘要。`);
@@ -1824,22 +1842,22 @@ function cbSemanticMemoryText(raw) {
       if (!item || !Object.prototype.hasOwnProperty.call(kinds, item.kind) || typeof item.text !== "string" ||
         !item.text.trim() || !Array.isArray(item.evidence) || !item.evidence.length || item.evidence.length > 128) throw new Error("invalid item");
       const entry = ["- " + item.text];
-      if (item.trust === "assistant_unverified") entry.push("  助手历史陈述，未视为已完成或已验证事实。");
+      if (item.trust === "assistant_unverified") entry.push(cbHomeText("  助手历史陈述，未视为已完成或已验证事实。"));
       for (const ref of item.evidence) {
         if (!ref || typeof ref.message_id !== "string" || !ref.message_id || typeof ref.quote !== "string" || !ref.quote ||
           !Number.isSafeInteger(ref.start) || !Number.isSafeInteger(ref.end) || ref.start < 0 || ref.end <= ref.start) throw new Error("invalid evidence");
         entry.push(`  来源消息 ${ref.message_id} · 字符 ${ref.start}–${ref.end}（左闭右开）`);
-        entry.push("  原文：“" + ref.quote + "”");
+        entry.push(cbHomeText("  原文：“") + ref.quote + "”");
       }
       groups[item.kind].push(entry.join("\n"));
     }
     for (const [key, label] of Object.entries(kinds)) {
       if (groups[key].length) lines.push("\n" + label + "（未核验）\n" + groups[key].join("\n\n"));
     }
-    if (!data.items.length) lines.push("当前没有可显示的摘要条目，请核对规则记忆或搜索原文。");
+    if (!data.items.length) lines.push(cbHomeText("当前没有可显示的摘要条目，请核对规则记忆或搜索原文。"));
     return lines.join("\n");
   } catch (_) {
-    return "模型语义摘要暂不可用，请刷新后重试；规则记忆与原文仍可查看。";
+    return cbHomeText("模型语义摘要暂不可用，请刷新后重试；规则记忆与原文仍可查看。");
   }
 }
 
@@ -1852,15 +1870,18 @@ function cbContextRebuildControls(busy) {
   for (const id of ["ctxRebuild", "ctxRefresh", "ctxSearch"]) {
     if ($(id)) $(id).disabled = busy;
   }
-  if ($("ctxRebuild")) $("ctxRebuild").textContent = busy ? "正在整理…" : "重新整理记忆";
+  if ($("ctxRebuild")) $("ctxRebuild").textContent = busy ? cbHomeText("正在整理…") : cbHomeText("重新整理记忆");
 }
 
 function cbContextDetailPaint(data) {
   const box = $("ctxMemory");
   if (box) {
-    box.textContent = typeof data.memory_text === "string" ? data.memory_text : "当前任务尚无可显示的记忆。";
+    if (typeof data.memory_text === "string") {
+      cbContextMemoryUi = null;
+      box.textContent = data.memory_text;
+    } else cbContextMemoryUiSet("当前任务尚无可显示的记忆。");
     const semanticText = cbSemanticMemoryText(data.semantic_memory_text);
-    if (semanticText) box.textContent += "\n\n模型语义摘要（未核验）\n" + semanticText;
+    if (semanticText) { cbContextMemoryUi = null; box.textContent += "\n\n模型语义摘要（未核验）\n" + semanticText; }
   }
   const notes = [data.note, data.memory_status && data.memory_status.note, data.semantic_status && data.semantic_status.note]
     .filter(note => typeof note === "string" && note.trim());
@@ -1876,7 +1897,7 @@ async function cbContextLoad() {
   const current = () => state.session === sid && navigation === cbSessionRequest && request === cbContextRequest;
   const box = $("ctxMemory");
   if (!box) return;
-  box.textContent = "正在读取任务记忆…";
+  cbContextMemoryUiSet("正在读取任务记忆…");
   box.setAttribute("aria-busy", "true");
   try {
     const response = await fetch("/api/context?session_id=" + encodeURIComponent(sid));
@@ -1885,7 +1906,7 @@ async function cbContextLoad() {
     if (!current()) return;
     cbContextDetailPaint(data);
   } catch (error) {
-    if (current()) box.textContent = `读取失败：${error.message}`;
+    if (current()) { cbContextMemoryUi = null; box.textContent = `读取失败：${error.message}`; }
   } finally { if (current()) box.setAttribute("aria-busy", "false"); }
 }
 
@@ -1895,7 +1916,7 @@ async function cbContextRebuild() {
   const box = $("ctxMemory");
   if (!box || !status) return;
   if (runState.active && runState.active.session === state.session) {
-    status.textContent = "任务正在处理中，请结束后再重新整理记忆。";
+    status.textContent = cbHomeText("任务正在处理中，请结束后再重新整理记忆。");
     return;
   }
   const run = { session: state.session, navigation: cbSessionRequest };
@@ -1906,7 +1927,7 @@ async function cbContextRebuild() {
   cbContextSourceEpoch += 1;
   cbContextRebuildControls(true);
   box.setAttribute("aria-busy", "true");
-  status.textContent = "正在从原文重新整理记忆和本地搜索，不会调用模型…";
+  status.textContent = cbHomeText("正在从原文重新整理记忆和本地搜索，不会调用模型…");
   if ($("ctxSearchStatus")) $("ctxSearchStatus").textContent = "";
   try {
     const response = await fetch("/api/context/rebuild", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1914,17 +1935,17 @@ async function cbContextRebuild() {
     if (!response.ok) throw new Error(await apiError(response));
     const data = await response.json();
     if (!current()) return;
-    if (!data || data.ok !== true || typeof data.memory_text !== "string") throw new Error("服务未返回有效的重建结果，请重新查看任务记忆。");
+    if (!data || data.ok !== true || typeof data.memory_text !== "string") throw new Error(cbHomeText("服务未返回有效的重建结果，请重新查看任务记忆。"));
     if ($("ctxResults")) $("ctxResults").replaceChildren();
     state.context.lastReport = null;
     cbContextDetailPaint(data);
     if (!data.context || !(data.context.note || Number(data.context.limit) > 0)) paintContext(estimateLocalContext());
-    if (!status.textContent) status.textContent = "任务记忆已重新整理；原始对话、附件和交付物已保留。";
-    cbAnnounce("任务记忆已重新整理，原始资料已保留。");
+    if (!status.textContent) status.textContent = cbHomeText("任务记忆已重新整理；原始对话、附件和交付物已保留。");
+    cbAnnounce(cbHomeText("任务记忆已重新整理，原始资料已保留。"));
   } catch (error) {
     if (current()) {
-      status.textContent = "重新整理失败：" + error.message;
-      if (box.textContent === "正在读取任务记忆…") box.textContent = "可重新查看任务记忆；原始对话、附件和交付物仍保留。";
+      status.textContent = cbHomeText("重新整理失败：") + error.message;
+      if (box.textContent === cbHomeText("正在读取任务记忆…")) cbContextMemoryUiSet("可重新查看任务记忆；原始对话、附件和交付物仍保留。");
     }
   } finally {
     if (current()) {
@@ -1948,14 +1969,14 @@ async function cbContextSearch() {
   const button = $("ctxSearch");
   result.replaceChildren();
   button.disabled = true;
-  status.textContent = "正在本机检索…";
+  status.textContent = cbHomeText("正在本机检索…");
   try {
     const response = await fetch("/api/context/search", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: sid, query, attachments: state.attachments.filter(a => !String(a.id).startsWith("job:")).map(a => a.id) }) });
     if (!response.ok) throw new Error(await apiError(response));
     const data = await response.json();
     if (!current()) return;
-    status.textContent = data.citations.length ? `找到 ${data.citations.length} 个原文片段。` : "没有找到匹配内容。可换用原文关键词，并检查附件是否已选择。";
+    status.textContent = data.citations.length ? `找到 ${data.citations.length} 个原文片段。` : cbHomeText("没有找到匹配内容。可换用原文关键词，并检查附件是否已选择。");
     const body = document.createElement("div");
     result.appendChild(body);
     renderCites(data.citations, body);
@@ -2056,7 +2077,7 @@ function cbAtFilter(posts, query, limit) {
   const q = String(query || "").trim().toLowerCase();
   const scored = [];
   for (const p of posts || []) {
-    const names = [p.name].concat(p.aliases || [], [p.id]).filter(Boolean).map((n) => String(n).toLowerCase());
+    const names = [p.name, cbHomeText(p.name)].concat(p.aliases || [], [p.id]).filter(Boolean).map((n) => String(n).toLowerCase());
     let score = -1;
     if (!q) score = 2;
     else if (names.some((n) => n.indexOf(q) === 0)) score = 0;
@@ -2069,7 +2090,7 @@ function cbAtFilter(posts, query, limit) {
 
 function cbAtApply(ta, start, post) {
   // codex token 替换模式：@token → 「@岗位名 」，光标落在尾部空格之后
-  const insert = "@" + post.name + " ";
+  const insert = "@" + (window.CBI18n?.locale === "en" ? post.id : post.name) + " ";
   const tail = ta.value.slice(ta.selectionEnd);
   ta.value = ta.value.slice(0, start) + insert + tail;
   const pos = start + insert.length;
@@ -2174,16 +2195,16 @@ function cbOnboardRender() {
   const head = document.createElement("div");
   head.className = "cb-ob-head";
   const title = document.createElement("strong");
-  title.textContent = cbOb.done ? "三步引导 · 已完成" : "三步上手";
+  title.textContent = cbOb.done ? cbHomeText("三步引导 · 已完成") : cbHomeText("三步上手");
   const sub = document.createElement("span");
   sub.className = "cb-ob-sub";
-  sub.textContent = cbOb.done ? "任何时候点右上角 ? 重看" : "第一次用？跟着走 30 秒";
+  sub.textContent = cbOb.done ? cbHomeText("任何时候点右上角 ? 重看") : cbHomeText("第一次用？跟着走 30 秒");
   const x = document.createElement("button");
   x.type = "button";
   x.className = "cb-ob-x";
-  x.setAttribute("aria-label", "收起新手引导");
-  x.title = "收起（不再自动弹出）";
-  x.textContent = "关闭";
+  x.setAttribute("aria-label", cbHomeText("收起新手引导"));
+  x.title = cbHomeText("收起（不再自动弹出）");
+  x.textContent = cbHomeText("关闭");
   x.addEventListener("click", () => {
     cbOb.dismissed = true;
     cbOnboardSave(cbOb);
@@ -2201,13 +2222,13 @@ function cbOnboardRender() {
     dot.setAttribute("aria-hidden", "true");
     const t = document.createElement("span");
     t.className = "cb-ob-t";
-    t.textContent = "①②③"[i] + " " + s.t;
+    t.textContent = "①②③"[i] + " " + cbHomeText(s.t);
     li.append(dot, t);
     ol.appendChild(li);
   });
   const foot = document.createElement("div");
   foot.className = "cb-ob-foot";
-  foot.textContent = "产出永远是 AI 草稿，高风险岗需人工确认 · 全部完成自动收起";
+  foot.textContent = cbHomeText("产出永远是 AI 草稿，高风险岗需人工确认 · 全部完成自动收起");
   box.append(head, ol, foot);
 }
 
@@ -2224,15 +2245,15 @@ function cbEmptyPrefill(id) {
   if (!ta) return;
   let text = "";
   const samples = {
-    skills: "@施工方案 你能做什么？",
-    daily: "@项目日报 写一份项目日报模板；项目、日期、人数与进度均未提供，缺失项保持待填，不编造完成情况。",
-    "bid-guide": "@招标解析 说明你能帮我检查哪些招标响应项，以及开始前需要哪些材料。",
-    "tender-review": "根据当前选择的附件，综合检查投标响应：先解析招标原文，再整理技术响应与响应缺口，汇总证据和未解决事项。未提供的内容保持待填，不判断可以投标。",
-    "backup-plan": "帮我制定备份策略；按系统整理数据分级、备份周期、介质与恢复演练记录，未提供的 RPO、RTO 和实测结果保持待填。",
-    "steel-note": "帮我写钢构说明草稿；项目地区、荷载、跨度与图号尚未提供，请列待补资料，不选择构件尺寸。",
+    skills: cbHomeText("@施工方案 你能做什么？"),
+    daily: cbHomeText("@项目日报 写一份项目日报模板；项目、日期、人数与进度均未提供，缺失项保持待填，不编造完成情况。"),
+    "bid-guide": cbHomeText("@招标解析 说明你能帮我检查哪些招标响应项，以及开始前需要哪些材料。"),
+    "tender-review": cbHomeText("根据当前选择的附件，综合检查投标响应：先解析招标原文，再整理技术响应与响应缺口，汇总证据和未解决事项。未提供的内容保持待填，不判断可以投标。"),
+    "backup-plan": cbHomeText("帮我制定备份策略；按系统整理数据分级、备份周期、介质与恢复演练记录，未提供的 RPO、RTO 和实测结果保持待填。"),
+    "steel-note": cbHomeText("帮我写钢构说明草稿；项目地区、荷载、跨度与图号尚未提供，请列待补资料，不选择构件尺寸。"),
   };
   if (samples[id]) {
-    text = samples[id];
+    text = cbHomeText(samples[id]);
     state.summoned.clear();
     if ($("confirmOk")) $("confirmOk").value = "";
     renderSummon();
@@ -2279,39 +2300,39 @@ function cbEmptyDownShow(err) {
   const h = document.createElement("p");
   const kb = document.createElement("strong");
   kb.className = "cb-empty-k";
-  kb.textContent = "工作台后端未启动或不可达";
+  kb.textContent = cbHomeText("工作台后端未启动或不可达");
   h.appendChild(kb);
-  h.appendChild(document.createTextNode(" —— 界面在，但任务发不出去（" + String(err && err.message || err || "fetch failed") + "）。"));
+  h.appendChild(document.createTextNode(cbHomeText(" —— 界面在，但任务发不出去（") + String(err && err.message || err || "fetch failed") + "）。"));
   const p1 = document.createElement("p");
-  p1.textContent = "现在能做什么：在仓库根目录启动工作台（或双击 zip 内 start-workbench.bat），然后点「重试检测」。";
+  p1.textContent = cbHomeText("现在能做什么：在仓库根目录启动工作台（或双击 zip 内 start-workbench.bat），然后点「重试检测」。");
   const code = document.createElement("code");
   code.textContent = "cargo run --release --bin civil-workbench";
   const acts = document.createElement("div");
   acts.className = "cb-empty-acts";
   const copyBtn = document.createElement("button");
   copyBtn.type = "button";
-  copyBtn.textContent = "复制启动命令";
+  copyBtn.textContent = cbHomeText("复制启动命令");
   copyBtn.addEventListener("click", async () => {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(code.textContent);
       else throw new Error("no clipboard");
-      copyBtn.textContent = "已复制";
+      copyBtn.textContent = cbHomeText("已复制");
     } catch (e) {
-      copyBtn.textContent = "复制失败，请手选";
+      copyBtn.textContent = cbHomeText("复制失败，请手选");
     }
-    setTimeout(() => { copyBtn.textContent = "复制启动命令"; }, 1600);
+    setTimeout(() => { copyBtn.textContent = cbHomeText("复制启动命令"); }, 1600);
   });
   const retry = document.createElement("button");
   retry.type = "button";
-  retry.textContent = "重试检测";
+  retry.textContent = cbHomeText("重试检测");
   retry.addEventListener("click", async () => {
-    retry.textContent = "检测中…";
+    retry.textContent = cbHomeText("检测中…");
     try {
-      if (await boot()) { card.remove(); addStatus("后端已恢复 · 工作台状态已更新"); return; }
-      throw new Error("工作台尚未恢复");
+      if (await boot()) { card.remove(); addStatus(cbHomeText("后端已恢复 · 工作台状态已更新")); return; }
+      throw new Error(cbHomeText("工作台尚未恢复"));
     } catch (e) {
-      retry.textContent = "仍未启动";
-      setTimeout(() => { retry.textContent = "重试检测"; }, 1600);
+      retry.textContent = cbHomeText("仍未启动");
+      setTimeout(() => { retry.textContent = cbHomeText("重试检测"); }, 1600);
     }
   });
   acts.append(copyBtn, retry);
@@ -2332,7 +2353,7 @@ function cbSlashFilter(items, query, limit) {
   const q = String(query || "").trim().toLowerCase();
   const scored = [];
   for (const it of items || []) {
-    const names = [it.id].concat(it.aliases || [], [it.name]).filter(Boolean).map((n) => String(n).toLowerCase());
+    const names = [it.id].concat(it.aliases || [], [it.name, cbHomeText(it.name)]).filter(Boolean).map((n) => String(n).toLowerCase());
     let score = -1;
     if (!q) score = 2;
     else if (names.some((n) => n.indexOf(q) === 0)) score = 0;
@@ -2409,7 +2430,7 @@ function cbLlmSetBusy(busy) {
 
 function cbLlmNormalize(cfg) {
   if (!cfg || typeof cfg.configured !== "boolean" || typeof cfg.model !== "string" || typeof cfg.base_url !== "string") {
-    throw new Error("工作台返回的模型配置不完整，请检查服务版本。");
+    throw new Error(cbHomeText("工作台返回的模型配置不完整，请检查服务版本。"));
   }
   let base = "";
   if (cfg.base_url) {
@@ -2421,17 +2442,17 @@ function cbLlmNormalize(cfg) {
     base = url.toString().replace(/\/$/, "");
   }
   const masked = typeof cfg.key_masked === "string" && /^[^*\s]{0,4}\*+[^*\s]{0,4}$/.test(cfg.key_masked)
-    ? cfg.key_masked : "已隐藏";
+    ? cfg.key_masked : cbHomeText("已隐藏");
   const semantic = cfg.semantic_summary !== undefined ? cfg.semantic_summary : cfg.context && cfg.context.semantic_summary;
-  if (semantic !== undefined && typeof semantic !== "boolean") throw new Error("工作台返回的语义摘要设置无效。");
+  if (semantic !== undefined && typeof semantic !== "boolean") throw new Error(cbHomeText("工作台返回的语义摘要设置无效。"));
   return { configured: cfg.configured, model: cfg.model, base_url: base, key_masked: masked, source: cfg.source, context: cfg.context,
     semantic_summary: semantic === true };
 }
 
 function cbLlmError(error, secret) {
   let text = String(error && error.message || error);
-  if (secret) text = text.split(secret).join("[已隐藏]");
-  return text.replace(/sk-[A-Za-z0-9_-]+/g, "[已隐藏]");
+  if (secret) text = text.split(secret).join(cbHomeText("[已隐藏]"));
+  return text.replace(/sk-[A-Za-z0-9_-]+/g, cbHomeText("[已隐藏]"));
 }
 
 async function cbLlmRequest(payload) {
@@ -2443,17 +2464,17 @@ async function cbLlmRequest(payload) {
       ...(payload === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     });
     if (!response.ok) {
-      if (response.status === 404) throw new Error("当前工作台未提供模型设置，可继续使用已支持的岗位功能。");
+      if (response.status === 404) throw new Error(cbHomeText("当前工作台未提供模型设置，可继续使用已支持的岗位功能。"));
       throw new Error(await apiError(response) || "HTTP " + response.status);
     }
     try { return await response.json(); }
     catch (_) {
-      const error = new Error("工作台返回了无法读取的模型配置。");
+      const error = new Error(cbHomeText("工作台返回了无法读取的模型配置。"));
       error.submitted = payload !== undefined;
       throw error;
     }
   } catch (error) {
-    if (error.name === "AbortError") throw new Error("请求超时，请检查本地工作台状态。");
+    if (error.name === "AbortError") throw new Error(cbHomeText("请求超时，请检查本地工作台状态。"));
     throw error;
   } finally { clearTimeout(timeout); }
 }
@@ -2462,11 +2483,11 @@ function cbLlmPaint(cfg, note, tone) {
   const st = $("cbLlmStatus");
   if (!st) return;
   st.className = "cb-llm-status" + (tone ? " " + tone : "");
-  if (!cfg) { st.textContent = note || "读取失败：工作台未响应。"; return; }
-  const src = cfg.source === "runtime" ? "本次运行（界面设置）" : "启动配置";
+  if (!cfg) { st.textContent = note || cbHomeText("读取失败：工作台未响应。"); return; }
+  const src = cfg.source === "runtime" ? cbHomeText("本次运行（界面设置）") : cbHomeText("启动配置");
   st.textContent = (note ? note + "。" : "") + (cfg.configured
-    ? "当前：" + cfg.model + " · " + cfg.base_url + " · Key " + cfg.key_masked + " · 来源 " + src
-    : "尚未配置开放式问答模型（来源 " + src + "）。填写后点「保存并生效」，无需重启。");
+    ? cbHomeText("当前：") + cfg.model + " · " + cfg.base_url + " · Key " + cfg.key_masked + cbHomeText(" · 来源 ") + src
+    : cbHomeText("尚未配置开放式问答模型（来源 ") + src + cbHomeText("）。填写后点「保存并生效」，无需重启。"));
 }
 
 function cbLlmApply(cfg, note) {
@@ -2492,14 +2513,14 @@ function cbLlmApply(cfg, note) {
 async function cbLlmLoad() {
   if (cbLlmBusy) return null;
   cbLlmSetBusy(true);
-  cbLlmPaint(null, "正在读取模型配置…");
+  cbLlmPaint(null, cbHomeText("正在读取模型配置…"));
   if ($("cbLlmKey")) $("cbLlmKey").value = "";
   try {
     const cfg = cbLlmNormalize(await cbLlmRequest());
     cbLlmApply(cfg);
     return cfg;
   } catch (e) {
-    cbLlmPaint(null, "读取失败：" + cbLlmError(e), "err");
+    cbLlmPaint(null, cbHomeText("读取失败：") + cbLlmError(e), "err");
     return null;
   } finally { cbLlmSetBusy(false); }
 }
@@ -2507,7 +2528,7 @@ async function cbLlmLoad() {
 async function cbLlmSubmit(payload, okNote) {
   if (cbLlmBusy) return;
   cbLlmSetBusy(true);
-  cbLlmPaint(null, payload.clear ? "正在恢复启动配置…" : "正在保存模型配置…");
+  cbLlmPaint(null, payload.clear ? cbHomeText("正在恢复启动配置…") : cbHomeText("正在保存模型配置…"));
   const secret = String(payload.api_key || "");
   if ($("cbLlmKey")) $("cbLlmKey").value = "";
   let submitted = false;
@@ -2517,7 +2538,7 @@ async function cbLlmSubmit(payload, okNote) {
     const cfg = cbLlmNormalize(await cbLlmRequest());
     cbLlmApply(cfg, okNote);
   } catch (e) {
-    const prefix = submitted || e.submitted ? "设置已提交，但当前配置未能核对，请重新打开设置：" : "保存失败：";
+    const prefix = submitted || e.submitted ? cbHomeText("设置已提交，但当前配置未能核对，请重新打开设置：") : "保存失败：";
     cbLlmPaint(null, prefix + cbLlmError(e, secret), "err");
   } finally { cbLlmSetBusy(false); }
 }
@@ -2578,7 +2599,7 @@ function cbLlmWire() {
   }
   const reset = $("cbLlmReset");
   if (reset) {
-    reset.addEventListener("click", () => cbLlmSubmit({ clear: true }, "已恢复启动配置"));
+    reset.addEventListener("click", () => cbLlmSubmit({ clear: true }, cbHomeText("已恢复启动配置")));
   }
 }
 
@@ -2594,7 +2615,7 @@ let CB_PACK_STUDIO_ORIGIN = CB_PACK_PAGE_ORIGIN;
 let CB_PACK_STUDIO_PATH = "/packing";
 const CB_PACK_STUDIO_CMD = "python scripts/start_unified_workbench.py";
 const CB_PACK_LEGACY_ORIGIN = "http://127.0.0.1:8000";
-const CB_PACK_OPEN_WORDS = ["装箱", "装柜", "拼柜", "装箱拼柜", "装箱作业单", "装柜台"];
+const CB_PACK_OPEN_WORDS = ["装箱", "装柜", cbHomeText("拼柜"), cbHomeText("装箱拼柜"), "装箱作业单", "装柜台"];
 
 /* ux(round16) 直达词泛化：不止装箱，CB_SLASH 每一项都能整条直达。
    词源 = 该项的 name + aliases（与 / 面板同一份口径，杜绝两处漂移）+ 少量口语补充。 */
@@ -2708,7 +2729,7 @@ function cbPackCardRender(up) {
   const k = document.createElement("strong");
   k.className = "cb-empty-k";
   const trial = !up && CB_PACK_TRIAL === true;
-  k.textContent = up ? "装柜台已打开" : (trial ? "装箱组件未就绪" : "装柜台未启动");
+  k.textContent = up ? cbHomeText("装柜台已打开") : (trial ? cbHomeText("装箱组件未就绪") : cbHomeText("装柜台未启动"));
   h.appendChild(k);
   h.appendChild(document.createTextNode(up
     ? " —— 成箱 → 人确认 → 拼柜 3D / 重心，都在这一页。"
@@ -2733,7 +2754,7 @@ function cbPackCardRender(up) {
   if (!up && trial) {
     const retry = document.createElement("button");
     retry.type = "button";
-    retry.textContent = "重试";
+    retry.textContent = cbHomeText("重试");
     retry.addEventListener("click", () => { cbOpenPackStudio(); });
     acts.appendChild(retry);
     card.appendChild(acts);
@@ -2745,7 +2766,7 @@ function cbPackCardRender(up) {
     a.href = url;
     a.target = "_blank";
     a.rel = "noopener";
-    a.textContent = "打开装柜台";
+    a.textContent = cbHomeText("打开装柜台");
     acts.appendChild(a);
   } else {
     const code = document.createElement("code");
@@ -2755,21 +2776,21 @@ function cbPackCardRender(up) {
     card.appendChild(code);
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
-    copyBtn.textContent = "复制启动命令";
+    copyBtn.textContent = cbHomeText("复制启动命令");
     copyBtn.addEventListener("click", async () => {
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(startCommand);
         else throw new Error("no clipboard");
-        copyBtn.textContent = "已复制";
+        copyBtn.textContent = cbHomeText("已复制");
       } catch (e) {
-        copyBtn.textContent = "复制失败，请手选";
+        copyBtn.textContent = cbHomeText("复制失败，请手选");
       }
-      setTimeout(() => { copyBtn.textContent = "复制启动命令"; }, 1600);
+      setTimeout(() => { copyBtn.textContent = cbHomeText("复制启动命令"); }, 1600);
     });
     acts.appendChild(copyBtn);
     const retry = document.createElement("button");
     retry.type = "button";
-    retry.textContent = "重试";
+    retry.textContent = cbHomeText("重试");
     retry.addEventListener("click", () => { cbOpenPackStudio(); });
     acts.appendChild(retry);
   }
@@ -2808,7 +2829,7 @@ function cbPackEmbed() {
   const hide = document.createElement("button");
   hide.type = "button";
   hide.className = "top-btn";
-  hide.textContent = "收起";
+  hide.textContent = cbHomeText("收起");
   hide.addEventListener("click", () => box.remove());
   acts.append(max, hide);
   head.append(t, sub, acts);
@@ -2816,7 +2837,7 @@ function cbPackEmbed() {
 
   const frame = document.createElement("iframe");
   frame.className = "cb-pack-frame";
-  frame.title = "装柜台 3D 工程台";
+  frame.title = cbHomeText("装柜台 3D 工程台");
   frame.loading = "lazy";
   frame.referrerPolicy = "no-referrer";
   frame.setAttribute(
@@ -2842,7 +2863,7 @@ function cbPackEmbed() {
     a.href = CB_PACK_STUDIO_ORIGIN + CB_PACK_STUDIO_PATH;
     a.target = "_blank";
     a.rel = "noopener";
-    a.textContent = "打开装柜台";
+    a.textContent = cbHomeText("打开装柜台");
     box.append(p1, a);
   }, 4000);
 }
@@ -2850,7 +2871,7 @@ function cbPackEmbed() {
 async function cbOpenPackStudio() {
   const prev = document.getElementById("cbPackCard");
   if (prev && prev.parentElement) prev.parentElement.removeChild(prev);
-  addStatus("正在连接装箱拼柜工作台…");
+  addStatus(cbHomeText("正在连接装箱拼柜工作台…"));
   const up = await cbPackStudioUp(2500);
   /* CB_PACK_TRIAL 已由 boot 的 health 填好；仅当那次没拿到（如 Python 参考实现无该字段，
      或 boot 时 health 失败）才现场补探一次。 */
@@ -2901,6 +2922,14 @@ const CB_SLASH = [
 /* 模板填空：<待填> 占位提示（Raycast arguments placeholder 模式），数字一概不预编 */
 function cbSlashTemplate(id, arg, ticket) {
   const a = String(arg || "").trim();
+  if (window.CBI18n?.locale === "en") {
+    if (id === "pack") return "pack " + (ticket?.xlsx || "test/sim_materials/<example>/materials.xlsx") + (ticket?.story ? " (" + ticket.story + ")" : "") +
+      "\nRequirements: plan efficient 40HQ loading. Tools must calculate container counts and coordinates. Draft a loading list; human confirmation is required before container planning.";
+    if (id === "bid") return "@bid-parse Analyse this tender:\nProject: <to fill>\nKey clauses: <duration / qualifications / price ceiling>" + (a ? "\nSource requirements: " + a : "") +
+      "\nList eligibility conditions and disqualification risks. A person must verify eligibility and decide whether and how to bid.";
+    if (id === "safety") return "@safety-brief Draft a plain-language pre-task briefing:\nWork: <to fill>\nMain hazards and controls: <to fill>" + (a ? "\nAdditional information: " + a : "") +
+      "\nUse one action per point. Keep missing details unspecified and mark the output as a draft for human review.";
+  }
   if (id === "pack") {
     const t = ticket || {};
     const path = t.xlsx || "test/sim_materials/<票名>/materials.xlsx";
@@ -2959,10 +2988,10 @@ function cbAtRender() {
     row.setAttribute("aria-selected", i === cbAt.idx ? "true" : "false");
     const name = document.createElement("span");
     name.className = "cb-at-name";
-    name.textContent = "@" + p.name;
+    name.textContent = "@" + cbHomeText(p.name);
     const cat = document.createElement("span");
     cat.className = "cb-at-cat";
-    cat.textContent = (p.category_name || "") + (p.id ? " · " + p.id : "");
+    cat.textContent = cbHomeText(p.category_name) + (p.id ? " · " + p.id : "");
     row.appendChild(name);
     row.appendChild(cat);
     row.addEventListener("mousedown", (ev) => {
@@ -3085,11 +3114,11 @@ let cbLastDeliverables = []; /* ux(round9)：/doc 取最近一份交付物（don
 function cbSlashCmds() {
   /* 既有客户端命令一并进面板（发现性），确认后预填命令文本，Enter 由既有 handleSlash 执行 */
   return CB_SLASH.concat([
-    { id: "skills", ch: "技", tone: "gray", name: "技能列表", aliases: [], desc: "既有命令 · 列出 skills", kind: "client" },
-    { id: "new", ch: "新", tone: "gray", name: "新会话", aliases: [], desc: "既有命令 · 开新线程", kind: "client" },
-    { id: "threads", ch: "线", tone: "gray", name: "会话列表", aliases: [], desc: "既有命令 · 刷新 threads", kind: "client" },
-    { id: "bg", ch: "后", tone: "gray", name: "后台任务", aliases: [], desc: "既有命令 · /bg <任务>", kind: "client" },
-    { id: "help", ch: "帮", tone: "gray", name: "帮助", aliases: [], desc: "既有命令 · 命令清单", kind: "client" },
+    { id: "skills", ch: cbHomeText("技"), tone: "gray", name: cbHomeText("技能列表"), aliases: [], desc: cbHomeText("既有命令 · 列出 skills"), kind: "client" },
+    { id: "new", ch: cbHomeText("新"), tone: "gray", name: cbHomeText("新会话"), aliases: [], desc: cbHomeText("既有命令 · 开新线程"), kind: "client" },
+    { id: "threads", ch: cbHomeText("线"), tone: "gray", name: cbHomeText("会话列表"), aliases: [], desc: cbHomeText("既有命令 · 刷新 threads"), kind: "client" },
+    { id: "bg", ch: cbHomeText("后"), tone: "gray", name: cbHomeText("后台任务"), aliases: [], desc: cbHomeText("既有命令 · /bg <任务>"), kind: "client" },
+    { id: "help", ch: cbHomeText("帮"), tone: "gray", name: cbHomeText("帮助"), aliases: [], desc: cbHomeText("既有命令 · 命令清单"), kind: "client" },
   ]);
 }
 
@@ -3117,11 +3146,11 @@ function cbCmdCatItems() {
   for (const p of cbPostsAll()) {
     const id = p.category || p.category_name || "";
     if (!id) continue;
-    if (!seen.has(id)) seen.set(id, { id, name: p.category_name || id, n: 0 });
+    if (!seen.has(id)) seen.set(id, { id, name: cbHomeText(p.category_name) || id, n: 0 });
     seen.get(id).n += 1;
   }
   return [...seen.values()].map((c) => ({
-    id: c.id, name: c.name, ch: "类", tone: "gray", desc: c.n + " 岗",
+    id: c.id, name: c.name, ch: cbHomeText("类"), tone: "gray", desc: c.n + cbHomeText(" 岗"),
   }));
 }
 
@@ -3129,8 +3158,8 @@ function cbCmdPostItems(catId) {
   return cbPostsAll()
     .filter((p) => (p.category || p.category_name) === catId)
     .map((p) => ({
-      id: p.id, name: p.name, aliases: p.aliases || [],
-      ch: "岗", tone: "blue",
+      id: p.id, name: cbHomeText(p.name), aliases: p.aliases || [],
+      ch: cbHomeText("岗"), tone: "blue",
       desc: [p.category_name || "", p.delivers || ""].filter(Boolean).join(" · "),
     }));
 }
@@ -3161,13 +3190,13 @@ function cbCmdRow(row, i) {
   el.setAttribute("aria-selected", i === cbCmd.idx ? "true" : "false");
   const ico = document.createElement("span");
   ico.className = "cb-cmd-ico tone-" + (row.tone || "gray");
-  ico.textContent = row.ch || "·";
+  ico.textContent = cbHomeText(row.ch) || "·";
   const name = document.createElement("span");
   name.className = "cb-cmd-name";
-  name.textContent = row.title || "";
+  name.textContent = cbHomeText(row.title) || "";
   const desc = document.createElement("span");
   desc.className = "cb-cmd-desc";
-  desc.textContent = row.desc || "";
+  desc.textContent = cbHomeText(row.desc) || "";
   el.append(ico, name, desc);
   el.addEventListener("mousedown", (ev) => {
     ev.preventDefault();
@@ -3240,7 +3269,7 @@ function cbCmdRender() {
     } else {
       menu.appendChild(cbCmdRow({
         ch: it.ch, tone: it.tone,
-        title: it.name + " ",
+        title: cbHomeText(it.name) + " ",
         desc: it.desc,
       }, i));
       /* 名称里补 mono /id（同 codex 弹层：命令名+描述） */
@@ -3407,14 +3436,14 @@ function cbThemeWire() {
   const sync = () => {
     const dark = isDark();
     if (themeBtn) {
-      themeBtn.textContent = dark ? "暗" : "明"; /* 图标=文字：显示当前主题 */
+      themeBtn.textContent = dark ? cbHomeText("暗") : cbHomeText("明"); /* 图标=文字：显示当前主题 */
       themeBtn.setAttribute("aria-pressed", dark ? "true" : "false");
-      themeBtn.setAttribute("aria-label", dark ? "主题：当前深色，点击切换为浅色" : "主题：当前浅色，点击切换为深色");
+      themeBtn.setAttribute("aria-label", dark ? cbHomeText("主题：当前深色，点击切换为浅色") : cbHomeText("主题：当前浅色，点击切换为深色"));
     }
     if (largeBtn) {
       const on = document.documentElement.classList.contains("cb-large");
       largeBtn.setAttribute("aria-pressed", on ? "true" : "false");
-      largeBtn.setAttribute("aria-label", (on ? "关闭" : "开启") + "大字模式（全站字号放大）");
+      largeBtn.setAttribute("aria-label", (on ? cbHomeText("关闭") : cbHomeText("开启")) + cbHomeText("大字模式（全站字号放大）"));
     }
   };
   if (themeBtn) {
@@ -3429,7 +3458,7 @@ function cbThemeWire() {
     largeBtn.addEventListener("click", () => {
       const on = document.documentElement.classList.toggle("cb-large");
       try { localStorage.setItem("cb_large_v1", on ? "1" : "0"); } catch (e) {}
-      cbAnnounce(on ? "大字模式已开启" : "大字模式已关闭");
+      cbAnnounce(on ? cbHomeText("大字模式已开启") : cbHomeText("大字模式已关闭"));
       sync();
     });
   }
@@ -3439,6 +3468,7 @@ function cbThemeWire() {
     const onSys = () => sync();
     mq.addEventListener ? mq.addEventListener("change", onSys) : mq.addListener && mq.addListener(onSys);
   }
+  window.addEventListener?.("cb:languagechange", sync);
   sync();
 }
 cbThemeWire();
@@ -3547,11 +3577,11 @@ function cbTlCreate(bodyEl, sourceMessage) {
   root.className = "cb-tl";
   root.setAttribute("data-cb-timeline", "true");
   root.innerHTML =
-    '<div class="cb-tl-head"><span class="cb-tl-title">阶段时间线</span>' +
+    '<div class="cb-tl-head"><span class="cb-tl-title">' + escapeHtml(cbHomeText("阶段时间线")) + '</span>' +
     '<span class="cb-tl-badge tl-badge"></span>' +
-    '<button type="button" class="cb-tl-fold" hidden>展开时间线</button></div>' +
+    '<button type="button" class="cb-tl-fold" hidden>' + escapeHtml(cbHomeText("展开时间线")) + '</button></div>' +
     '<div class="cb-tl-summary tl-summary" hidden></div>' +
-    '<div class="cb-tl-track" role="list" aria-label="流水线阶段"></div>' +
+    '<div class="cb-tl-track" role="list" aria-label="' + escapeHtml(cbHomeText("流水线阶段")) + '"></div>' +
     '<div class="cb-tl-hitl tl-hitl" data-r5-approval-slot="true" hidden></div>' +
     '<div class="cb-tl-lines tl-lines"></div>' +
     '<div class="cb-tl-audit tl-audit" data-cb-audit="true" hidden></div>';
@@ -3577,7 +3607,7 @@ function cbTlCreate(bodyEl, sourceMessage) {
       const chip = stages[key].el || document.createElement("span");
       chip.setAttribute("data-cb-stage", key);
       chip.setAttribute("role", "listitem");
-      chip.title = label;
+      chip.title = cbHomeText(label);
       trackEl.appendChild(chip);
       stages[key].el = chip;
       stages[key].label = label;
@@ -3585,16 +3615,23 @@ function cbTlCreate(bodyEl, sourceMessage) {
     }
   }
   renderTrack();
+  const updateTimelineLanguage = () => {
+    if (!root.isConnected) { window.removeEventListener?.("cb:languagechange", updateTimelineLanguage); return; }
+    root.querySelector(".cb-tl-title").textContent = cbHomeText("阶段时间线");
+    trackEl.setAttribute("aria-label", cbHomeText("流水线阶段"));
+    renderTrack();
+  };
+  window.addEventListener?.("cb:languagechange", updateTimelineLanguage);
 
   function paintStage(key) {
     const st = stages[key];
     if (!st || !st.el) return;
     st.el.className = "cb-tl-stage " + st.state;
     if (st.state === "run") {
-      st.el.innerHTML = '<span class="cb-tl-spin" aria-hidden="true"></span>' + st.label;
+      st.el.innerHTML = '<span class="cb-tl-spin" aria-hidden="true"></span>' + escapeHtml(cbHomeText(st.label));
     } else {
       /* ux(round14)：done/warn/err 状态 = 单色 CSS 圆点（.cb-tl-st），不再写字符（规则见 spec 附录 L） */
-      st.el.innerHTML = '<span class="cb-tl-st" aria-hidden="true"></span>' + st.label;
+      st.el.innerHTML = '<span class="cb-tl-st" aria-hidden="true"></span>' + escapeHtml(cbHomeText(st.label));
     }
   }
 
@@ -3637,7 +3674,7 @@ function cbTlCreate(bodyEl, sourceMessage) {
       more.addEventListener("click", () => {
         open = !open;
         textEl.textContent = open ? t : t.slice(0, 96) + "…";
-        more.textContent = open ? "收起" : "展开";
+        more.textContent = open ? cbHomeText("收起") : "展开";
       });
       row.appendChild(more);
     }
@@ -3829,7 +3866,7 @@ function cbTlCreate(bodyEl, sourceMessage) {
     setStage("finalize", "done", "收口完成");
     if (hitlWait) hitlWait = false;
     hitlEl.hidden = true;
-    setBadge("完成", "");
+    setBadge(cbHomeText("完成"), "");
     doneFolded = true;
     /* 摘要数字只抄事件（deliverables / mode），不编造 */
     const files = Array.isArray(data && data.deliverables) ? data.deliverables : [];
@@ -3840,7 +3877,7 @@ function cbTlCreate(bodyEl, sourceMessage) {
     for (const f of files) {
       const chip = document.createElement("span");
       chip.className = "cb-tl-chip";
-      chip.textContent = (f.name || f.title || String(f.path || "").split("/").pop() || "文书").slice(0, 24);
+      chip.textContent = (f.name || f.title || String(f.path || "").split("/").pop() || cbHomeText("文书")).slice(0, 24);
       summaryEl.appendChild(chip);
     }
     summaryEl.hidden = false;
@@ -4097,6 +4134,9 @@ if (window.visualViewport) {
 cbCadProjectRender();
 cbPlanningProjectRender();
 cbLogisticsProjectRender();
+if ($("ctxMemory")?.textContent === "发送消息后自动保存任务记忆。检索仅使用本任务历史和当前选择的附件。") {
+  cbContextMemoryUiSet("发送消息后自动保存任务记忆。检索仅使用本任务历史和当前选择的附件。");
+}
 
 /* 模块脚本没有全局：给旧的经典脚本（studio.js 调 reloadCatalog）和 e2e（scripts/e2e/ui_dom.cjs）
    一个明确的窗口面，而不是把几百个函数都挂到 window 上。 */
@@ -4107,3 +4147,15 @@ window.__cb = Object.freeze({ state, runState, cbCapability, cbAttachUpload, cbP
 if ("serviceWorker" in navigator && typeof navigator.serviceWorker.register === "function") {
   navigator.serviceWorker.register("/sw.js").catch(() => { /* 非安全上下文（http://LAN 地址）或被禁用：照常工作 */ });
 }
+
+// A language change repaints chrome without clearing the current draft or making a model call.
+window.addEventListener?.("cb:languagechange", () => {
+  cbContextMemoryUiRefresh();
+  cbApplyHealth(state.health); cbRunPaint(!!runState.active || !!runState.watched);
+  renderSummon(); cbCapabilityCatalog(); cbOnboardRender(); cbProjRender();
+  cbPlanningProjectRender(); cbCadProjectRender(); cbLogisticsProjectRender();
+  cbAttachRender();
+  if (cbCmd.open) { cbCmd.items = cbCmdFiltered(cbCmd.mode, cbCmd.query); cbCmdRender(); }
+  if (cbAt.open) cbAtRender();
+  paintContext(state.context.lastReport || estimateLocalContext());
+});

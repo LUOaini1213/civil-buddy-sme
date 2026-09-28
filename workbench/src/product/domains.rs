@@ -122,6 +122,7 @@ async fn forward(request: Request) -> Response {
     for name in [
         "content-type",
         "x-civil-asr-id",
+        "x-civil-asr-language",
         "x-civil-operation-id",
         "x-cad-operation-id",
     ] {

@@ -283,6 +283,8 @@ pub struct TurnRequest {
     pub workspace: String,
     pub session_id: String,
     pub message: String,
+    #[serde(default = "default_locale")]
+    pub locale: String,
     #[serde(default = "default_mode")]
     pub mode: String,
     #[serde(default = "default_sandbox")]
@@ -299,6 +301,9 @@ pub struct TurnRequest {
     /// stored or fingerprinted, so a retry compares only what it asks for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
+}
+fn default_locale() -> String {
+    "zh-CN".into()
 }
 fn default_mode() -> String {
     "model".into()
@@ -342,6 +347,7 @@ async fn start(
         || req.engineering.len() > 4
         || req.risk_confirmation.chars().count() > 80
         || !matches!(req.mode.as_str(), "model" | "steps")
+        || !matches!(req.locale.as_str(), "zh-CN" | "en")
         || !matches!(req.sandbox.as_str(), "read-only" | "workspace-write")
     {
         return Err(bad(

@@ -15,6 +15,26 @@ ALIASES = {"箱数": "package_count", "包装数": "package_count", "件数": "q
            "净重": "net_kg", "毛重": "gross_kg", "箱号": "package_id", "材料编号": "material_id", "名称": "name", "规格": "spec",
            "单位": "unit", "集装箱号": "container_id", "柜号": "container_id", "包装类型": "package_type",
            "尺寸口径": "dimension_scope", "重量口径": "weight_scope"}
+ALIASES.update({
+    "package count": "package_count", "box count": "package_count", "quantity": "quantity",
+    "items per package": "units_per_package", "units per package": "units_per_package",
+    "length": "length_mm", "width": "width_mm", "height": "height_mm",
+    "net mass": "net_kg", "net weight": "net_kg", "gross mass": "gross_kg", "gross weight": "gross_kg",
+    "package id": "package_id", "box id": "package_id", "container id": "container_id",
+    "material id": "material_id", "name": "name", "specification": "spec", "unit": "unit",
+    "package type": "package_type", "dimension basis": "dimension_scope", "mass basis": "weight_scope",
+})
+
+
+def _english(context, message):
+    locale = (context or {}).get("locale")
+    return locale == "en" or locale is None and bool(re.search(r"[A-Za-z]", message)) and not re.search(r"[\u4e00-\u9fff]", message)
+
+
+def _undo_requested(message):
+    return bool(re.search(r"撤销", message) or re.fullmatch(
+        r"\s*(?:please\s+)?(?:undo(?:\s+(?:the\s+)?(?:last\s+)?change)?|revert\s+(?:the\s+)?last\s+change)\s*[.!]?\s*",
+        message, re.I))
 
 
 def propose_changes(document, changes, reason):
@@ -83,15 +103,21 @@ def propose_command(document, message):
 
     commands = [s.strip() for s in re.split(r"[;；\n]", message) if s.strip()]
     changes, explicit_quantity_units = [], []
-    fields = "|".join(sorted([*ALIASES, *NUMERIC, *TEXT], key=len, reverse=True))
+    fields = "|".join(re.escape(f) for f in sorted([*ALIASES, *NUMERIC, *TEXT], key=len, reverse=True))
     for command in commands:
-        match = re.fullmatch(r"(?:把|将)?\s*([A-Za-z][A-Za-z0-9_-]{0,63})\s*(?:的)?\s*(" + fields + r")\s*(?:改为|设为|设置为|=|：|:)\s*(.+?)\s*[。.]?", command)
+        match = re.fullmatch(r"(?:把|将|(?:change|set|update)\s+)?\s*([A-Za-z][A-Za-z0-9_-]{0,63})\s*(?:的)?\s*(" + fields + r")\s*(?:改为|设为|设置为|to\b|=|：|:)\s*(.+?)\s*[。.]?", command, re.I)
+        # Both English forms require an explicit existing row, field and value.
+        reverse = None if match else re.fullmatch(r"(?:change|set|update)\s+(?:the\s+)?(" + fields + r")\s+(?:of|for|in)\s+(?:row\s+)?([A-Za-z][A-Za-z0-9_-]{0,63})\s+(?:to|=)\s*(.+?)\s*[.]?", command, re.I)
+        if reverse:
+            field, ident, raw = reverse.groups()
+        elif match:
+            ident, field, raw = match.groups()
         if not match:
-            raise ValueError("请明确已有行号、字段和新值，例如：把 R00001 毛重改为 120 kg；不会猜测数据。")
-        ident, field, raw = match.groups()
-        field = ALIASES.get(field, field)
+            if not reverse:
+                raise ValueError("请明确已有行号、字段和新值，例如：把 R00001 毛重改为 120 kg；不会猜测数据。")
+        field = ALIASES.get(field.lower(), field.lower())
         value = raw.strip()
-        if value in {"未知", "未指定", "UNSPECIFIED"}:
+        if value.lower() in {"未知", "未指定", "unspecified", "unknown"}:
             value = "UNSPECIFIED"
         elif field in NUMERIC:
             number = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z]+|毫米|厘米|米|千克|公斤|克|吨|件|个|箱|卷|套)?", value, re.I)
@@ -107,7 +133,7 @@ def propose_command(document, message):
                     raise ValueError("重量须使用 kg、g 或 t。")
                 value *= {"g": .001, "克": .001, "t": 1000, "吨": 1000}.get(unit, 1)
             elif field == "package_count":
-                if unit not in {"", "箱"}:
+                if unit not in {"", "箱", "box", "boxes", "package", "packages"}:
                     raise ValueError("包装数使用箱；不混用箱与货物数量单位。")
             elif unit:
                 current_unit = rows.get(ident, {}).get("unit", "UNSPECIFIED")
@@ -117,7 +143,8 @@ def propose_command(document, message):
                     raise ValueError(f"指令数量单位 {unit} 与原单位 {current_unit} 不一致，请先核对并确认单位；未修改数量或换算单位。")
                 explicit_quantity_units.append((ident, unit))
         elif field in {"dimension_scope", "weight_scope"}:
-            value = {"每箱": "package", "包装": "package", "单件": "item", "每件": "item", "整行": "row"}.get(value, value)
+            value = {"每箱": "package", "包装": "package", "单件": "item", "每件": "item", "整行": "row",
+                     "per package": "package", "per box": "package", "per item": "item", "per row": "row"}.get(value.lower(), value)
         changes.append({"row_id": ident, "field": field, "value": value})
     revised_units = {change["row_id"]: change["value"] for change in changes if change["field"] == "unit"}
     for ident, unit in explicit_quantity_units:
@@ -173,50 +200,53 @@ def compare_documents(document, other):
 
 
 def operation(message, context=None):
-    if re.search(r"撤销", message):
+    if _undo_requested(message):
         return "logistics_undo"
-    if re.search(r"改为|设为|设置为|=", message):
+    if re.search(r"改为|设为|设置为|=|\b(?:change|set|update)\b.*\bto\b", message, re.I):
         return "logistics_propose"
-    if re.search(r"缺|检查|核对|审计", message):
+    if re.search(r"缺|检查|核对|审计|\b(?:check|audit|review|missing|issues?|errors?|anomalies)\b", message, re.I):
         return "logistics_audit"
-    if re.search(r"汇总|总计|多少", message):
+    if re.search(r"汇总|总计|多少|\b(?:summari[sz]e|summary|totals?|how many|how much)\b", message, re.I):
         return "logistics_summarize"
     return "logistics_inspect"
 
 
 def execute(context, name, args, user_text):
     from .ledger import validate_document, audit_document, summarize, FIELD_LABELS
+    english = _english(context, user_text)
+    choose = lambda zh, en: en if english else zh
+    label = lambda field: str(field or "check").replace("_", " ") if english else FIELD_LABELS.get(field, "检查")
     if args != {} or name not in {"logistics_inspect", "logistics_audit", "logistics_summarize", "logistics_propose", "logistics_undo"}:
-        return {"ok": False, "reply": "物流工具不接受路径、材料数组或模型生成的字段值。"}
+        return {"ok": False, "reply": choose("物流工具不接受路径、材料数组或模型生成的字段值。", "Logistics tools do not accept file paths, material arrays or model-generated field values.")}
     try:
         check()
         doc = validate_document(context["document"])
         if name == "logistics_propose":
             proposal = propose_command(doc, user_text)
-            return {"ok": True, "logistics_proposal": proposal, "reply": f"已提出 {len(proposal['changes'])} 项修订建议；台账未修改，请核对原值与新值后确认应用。"}
+            return {"ok": True, "logistics_proposal": proposal, "reply": choose(f"已提出 {len(proposal['changes'])} 项修订建议；台账未修改，请核对原值与新值后确认应用。", f"Proposed {len(proposal['changes'])} changes. The ledger is unchanged. Review the old and new values before approving.")}
         if name == "logistics_undo":
-            if not re.search(r"撤销", user_text) or not context.get("project", {}).get("can_undo"):
+            if not _undo_requested(user_text) or not context.get("project", {}).get("can_undo"):
                 raise ValueError("当前没有用户明确要求或没有可撤销的历史；未执行撤销。")
-            return {"ok": True, "logistics_action": "undo", "reply": "已准备撤销上次台账修改的建议，尚未执行；请在工作台确认。"}
+            return {"ok": True, "logistics_action": "undo", "reply": choose("已准备撤销上次台账修改的建议，尚未执行；请在工作台确认。", "An undo proposal is ready but has not been applied. Confirm it in the workbench.")}
         audit, summary = audit_document(doc), summarize(doc)
         errors = [i for i in audit.get("issues", []) if i.get("severity") == "error"]
-        lines = [f"当前台账有 {len(doc['rows'])} 行；检查发现 {len(errors)} 项错误、{len(audit.get('issues', [])) - len(errors)} 项提示。"]
+        lines = [choose(f"当前台账有 {len(doc['rows'])} 行；检查发现 {len(errors)} 项错误、{len(audit.get('issues', [])) - len(errors)} 项提示。", f"The ledger contains {len(doc['rows'])} rows. Checks found {len(errors)} errors and {len(audit.get('issues', [])) - len(errors)} warnings.")]
         if name in {"logistics_inspect", "logistics_audit"}:
-            lines.extend(f"{i.get('row_id') or '整表'} / {FIELD_LABELS.get(i.get('field'), '检查')}：{i['message'][:300]}" for i in audit.get("issues", [])[:12])
+            lines.extend(f"{i.get('row_id') or choose('整表', 'Whole ledger')} / {label(i.get('field'))}: " + (i.get('code', 'review required').replace('_', ' ') if english else i['message'][:300]) for i in audit.get("issues", [])[:12])
         if name == "logistics_summarize":
             def value(v):
                 if v == "UNSPECIFIED" or v is None:
-                    return "未确定"
+                    return choose("未确定", "unspecified")
                 if type(v) in (int, float) and v == int(v):
                     return str(int(v))
                 return str(v)
             totals = summary.get("totals", {})
-            lines.append(f"包装数：{value(totals.get('package_count'))}；净重：{value(totals.get('net_kg'))} kg；毛重：{value(totals.get('gross_kg'))} kg。")
+            lines.append(choose(f"包装数：{value(totals.get('package_count'))}；净重：{value(totals.get('net_kg'))} kg；毛重：{value(totals.get('gross_kg'))} kg。", f"Packages: {value(totals.get('package_count'))}; net mass: {value(totals.get('net_kg'))} kg; gross mass: {value(totals.get('gross_kg'))} kg."))
             quantities = summary.get("quantities_by_unit", {})
-            lines.append("货物数量按单位分别汇总：" + ("；".join(f"{value(count)} {unit[:100] if unit != 'UNSPECIFIED' else '（单位未明确）'}" for unit, count in list(quantities.items())[:20]) or "未确定") + "。")
+            lines.append(choose("货物数量按单位分别汇总：", "Item quantities by unit: ") + ("; ".join(f"{value(count)} {unit[:100] if unit != 'UNSPECIFIED' else choose('（单位未明确）', '(unit unspecified)')}" for unit, count in list(quantities.items())[:20]) or choose("未确定", "unspecified")) + ".")
             unknown = {f: sum(r.get(f, "UNSPECIFIED") == "UNSPECIFIED" and not r.get("evidence", {}).get(f, {}).get("group") for r in doc["rows"]) for f in NUMERIC | {"dimension_scope", "weight_scope", "unit"}}
-            lines.append("待补字段：" + ("；".join(f"{FIELD_LABELS.get(f, f)} {count} 行" for f, count in sorted(unknown.items()) if count) or "本次汇总字段均有明确值") + "。")
-        lines.append("本次仅检查台账，没有修改、装箱或导出。")
+            lines.append(choose("待补字段：", "Missing fields: ") + ("; ".join(f"{label(f)}: {count} " + choose("行", "rows") for f, count in sorted(unknown.items()) if count) or choose("本次汇总字段均有明确值", "all summary fields have explicit values")) + ".")
+        lines.append(choose("本次仅检查台账，没有修改、装箱或导出。", "This operation only inspected the ledger. It did not change, pack or export anything."))
         selected = doc["rows"][:50]
         selected += [r for r in doc["rows"][50:] if r["id"] in user_text][:10]
         catalog = [{"id": r["id"], "package_id": r["package_id"][:100], "material_id": r["material_id"][:100], "name": r["name"][:100],
@@ -230,6 +260,26 @@ def execute(context, name, args, user_text):
         return {"ok": True, "audit": bounded_audit, "summary": bounded_summary, "row_catalog": catalog,
                 "row_catalog_truncated": len(doc["rows"]) > len(catalog), "reply": "\n".join(lines)}
     except (ValueError, KeyError, TypeError) as exc:
+        errors_en = {
+            "请明确已有行号、字段和新值，例如：把 R00001 毛重改为 120 kg；不会猜测数据。": "Specify an existing row, field and value, for example: change R00001 gross mass to 120 kg. Values are never guessed.",
+            "当前没有用户明确要求或没有可撤销的历史；未执行撤销。": "No explicit undo request or no history to undo. Nothing was changed.",
+            "数字或单位不明确，未提出修订。": "The number or unit is unclear. No change was proposed.",
+            "只能修改已有台账行的受限字段。": "Only allowed fields on existing ledger rows can be changed.",
+            "尺寸须使用 mm、cm 或 m。": "Use mm, cm or m for dimensions.",
+            "重量须使用 kg、g 或 t。": "Use kg, g or t for mass.",
+            "包装数使用箱；不混用箱与货物数量单位。": "Use packages or boxes for package counts. Do not mix package and item units.",
+            "原数量单位未明确，请先核对并明确单位，再修改数量；不会自动填入单位。": "Confirm the original unit before changing quantity. Units are never filled automatically.",
+            "数值须为明确的正有限数，未知请用 UNSPECIFIED。": "Values must be positive finite numbers. Use UNSPECIFIED for unknown values.",
+            "箱数与件数必须是正整数。": "Package counts and item quantities must be positive integers.",
+            "所填值与台账一致，没有待应用的修订。": "The values already match the ledger. There is no change to apply.",
+            "同一提案中的数量单位与单位修订不一致，请分别核对单位和数量；未应用修改。": "The quantity unit conflicts with the unit change in this proposal. Review both; no change was applied.",
+            "同一字段不能重复修订。": "A proposal cannot change the same field more than once.",
+            "该字段属于原图跨行合并单元格，不能作为单行修改；请核对共享范围并提供拆分后的原件。": "This field comes from a merged source cell spanning rows. Review its scope and provide a separated source before editing it.",
+            "尺寸口径仅支持 package / item。": "Dimension basis must be package or item.",
+            "重量口径仅支持 package / item / row。": "Mass basis must be package, item or row.",
+        }
+        if english:
+            return {"ok": False, "reply": errors_en.get(str(exc), "The requested change could not be validated. Check the row, field, value and unit; the ledger is unchanged."), "detail": str(exc)}
         return {"ok": False, "reply": str(exc)}
 
 

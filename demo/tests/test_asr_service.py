@@ -16,6 +16,7 @@ from demo.asr_service import AsrService, worker_environment
 
 class Request:
     disconnected = False
+    headers = {}
 
     async def stream(self):
         yield b"fixture-audio"
@@ -125,7 +126,7 @@ def test_transcription_worker_uses_only_cached_model(monkeypatch, capsys):
     calls = []
     monkeypatch.setattr(module.asr, "engine_error", lambda: "")
     monkeypatch.setattr(module.asr, "_model", None)
-    monkeypatch.setattr(module.asr, "transcribe", lambda data: {"text": "cached fixture"})
+    monkeypatch.setattr(module.asr, "transcribe", lambda data, **kwargs: {"text": "cached fixture"})
     monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=lambda *args, **kwargs: calls.append(kwargs)))
     monkeypatch.setattr(sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO(b"audio")))
     monkeypatch.setattr(sys, "argv", ["asr_worker", "transcribe"])
@@ -161,3 +162,24 @@ def test_router_preserves_protocol_and_validates_request_ids(monkeypatch):
         assert client.post("/api/asr/pre-cancel/cancel").json()["status"] == "cancelled"
         assert client.post("/api/asr", content=b"audio", headers={"X-Civil-ASR-ID": "pre-cancel"}).status_code == 409
         assert client.post("/api/asr", content=b"audio", headers={"X-Civil-ASR-ID": "bad/id"}).status_code == 400
+
+
+def test_english_service_uses_fixed_offline_worker_and_rejects_unknown_language():
+    async def scenario():
+        service = ready_service()
+        started = asyncio.get_running_loop().create_future()
+        commands = []
+        async def spawn(command):
+            commands.append(command)
+            return await child(service, started, immediate=True)
+        service.spawn = spawn
+        req = Request(); req.headers = {"x-civil-asr-language": "en"}
+        await service.transcribe(req, "english")
+        assert commands == ["transcribe-en"]
+        assert worker_environment("transcribe-en")["HF_HUB_OFFLINE"] == "1"
+        req.headers = {"x-civil-asr-language": "invalid"}
+        with pytest.raises(HTTPException) as error:
+            await service.transcribe(req, "unsupported")
+        assert error.value.status_code == 400
+        assert commands == ["transcribe-en"]
+    asyncio.run(scenario())

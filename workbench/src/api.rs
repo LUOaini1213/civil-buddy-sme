@@ -1137,6 +1137,8 @@ struct ChatIn {
     project_id: String,
     message: String,
     #[serde(default)]
+    locale: String,
+    #[serde(default)]
     history: Vec<Value>,
     #[serde(default)]
     expert_ids: Vec<String>,
@@ -1183,6 +1185,14 @@ fn sse_offline_chat(text: String) -> Response {
 }
 
 async fn chat(State(st): State<Arc<AppState>>, Json(mut body): Json<ChatIn>) -> Result<Response, ApiError> {
+    // Older clients omit locale (or send an empty value). Normalize before the
+    // full request is forwarded to the Python service's explicit locale schema.
+    if body.locale.is_empty() {
+        body.locale = "zh-CN".into();
+    }
+    if !matches!(body.locale.as_str(), "zh-CN" | "en") {
+        return Err(err(StatusCode::BAD_REQUEST, "unsupported interface language"));
+    }
     let confirm_ok = request_confirmation(body.confirm_ok, &body.confirm_text)?;
     let session = if body.session_id.is_empty() {
         Uuid::new_v4().simple().to_string().chars().take(12).collect()
@@ -1276,6 +1286,9 @@ async fn chat(State(st): State<Arc<AppState>>, Json(mut body): Json<ChatIn>) -> 
         attach::bundle_for_prompt(&st.paths, &session, &attachment_ids, &body.message)
     };
     history.push(json!({"role": "user", "content": user_text}));
+    if body.locale == "en" {
+        history.push(json!({"role":"system","content":"Reply in English. Preserve source quotations, filenames, numeric values and units exactly. A language preference does not authorize document changes or professional sign-off."}));
+    }
     let (history, ctx_report) = crate::context::prepare_history(history);
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(32);

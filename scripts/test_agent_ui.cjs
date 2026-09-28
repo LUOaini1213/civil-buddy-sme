@@ -12,6 +12,11 @@ const caps = { available: true, models: { configured: false }, modes: ["steps", 
   features: { cancel: true, context: true, subagents: true, documents: true }, sandbox_controls: { policy: true, os_enforced: false } };
 const response = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 const storage = () => { const values = new Map(); return { getItem: (key) => values.get(key) || null, setItem: (key, value) => values.set(key, String(value)), values }; };
+function installLanguage(h, locale = "zh-CN") {
+  h.win.localStorage.setItem("cb_locale_v1", locale);
+  for (const file of ["i18n.js", "i18n-agent.js", "i18n-home.js"]) h.win.eval(fs.readFileSync(path.join(__dirname, "../demo/static", file), "utf8"));
+  h.doc.dispatchEvent(new h.win.Event("DOMContentLoaded"));
+}
 const event = (seq, kind, data = {}) => ({ seq, kind, data });
 
 function harness(route = () => undefined, saved = storage()) {
@@ -40,6 +45,57 @@ function harness(route = () => undefined, saved = storage()) {
     close() { app.dispose(); dom.window.close(); } };
   return h;
 }
+
+test("Agent bilingual UI: persisted English initializes empty states before opening a folder", async () => {
+  const h = harness(); installLanguage(h, "en");
+  try {
+    await h.app.start();
+    assert.equal(h.doc.documentElement.lang, "en");
+    assert.match(h.$("agentFiles").textContent, /Open a folder/);
+    assert.match(h.$("agentTurns").textContent, /No tasks/);
+    assert.equal(h.$("agentReply").textContent, "Results will appear here.");
+    assert.equal(h.$("agentExpert").options[0].textContent, "Automatic selection");
+    assert.equal(h.$("agentRiskConfirmation").placeholder, "我明白，将由持证人员签认");
+  } finally { h.close(); }
+});
+
+test("Agent bilingual UI: switches preserve drafts and source identities and send reply locale", async () => {
+  let payload;
+  const h = harness((url, init) => {
+    if (url === "/api/agent/turns") {
+      payload = JSON.parse(init.body);
+      return response({ turn_id: "turn-language", session_id: payload.session_id });
+    }
+    if (url.includes("/turn-language/events?")) return response({
+      turn: { turn_id: "turn-language", status: "completed", result: { reply: "已完成", partial: false } },
+      events: [event(1, "context", { used: 100, limit: 1000, reserve: 200, estimated: true }), event(2, "tool_started", { message: "已完成", name: "source_read" })]
+    });
+  });
+  installLanguage(h);
+  try {
+    await h.ready(); h.selectFirst();
+    h.$("agentMessage").value = "检查原文中的已完成，保留中文引用";
+    h.$("agentModelKey").value = "unsaved-local-key";
+    const selected = [...h.app.state.selected];
+    h.win.CBI18n.setLocale("en");
+    assert.equal(h.$("agentMessage").value, "检查原文中的已完成，保留中文引用");
+    assert.equal(h.$("agentModelKey").value, "unsaved-local-key");
+    assert.deepEqual([...h.app.state.selected], selected);
+    assert.match(h.$("agentFiles").textContent, /方案.docx/);
+    await h.app.send();
+    assert.equal(payload.locale, "en"); assert.equal(payload.message, "检查原文中的已完成，保留中文引用");
+    assert.equal(h.$("agentReply").textContent, "已完成");
+    assert.match(h.$("agentEvents").textContent, /Tool started/);
+    assert.match(h.$("agentEvents").textContent, /已完成/);
+    h.$("agentMessage").value = "Keep this unsent draft";
+    h.win.CBI18n.setLocale("zh-CN");
+    assert.equal(h.$("agentMessage").value, "Keep this unsent draft");
+    assert.equal(h.$("agentReply").textContent, "已完成");
+    assert.match(h.$("agentEvents").textContent, /工具开始/);
+    assert.equal(h.$("agentEvents").children.length, 2);
+    assert.equal(h.app.state.seq, 2);
+  } finally { h.close(); }
+});
 
 test("Agent UI: unavailable capability is honest and no task can be submitted", async (t) => {
   const h = harness((url) => ["/api/agent/capabilities", "/api/llm-config"].includes(url) ? response({ detail: "Not Found" }, 404) : undefined); t.after(h.close);

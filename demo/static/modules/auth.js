@@ -1,3 +1,4 @@
+const cbAuthText = (source, values = {}) => globalThis.CBI18n?.t(source, values) ?? String(source || "").replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
 /* Optional shared secret (CIVIL_TOKEN on the server, for CIVIL_HOST=0.0.0.0).
    Kept in a cookie so plain download links and uploads carry it too; asked for once — on
    boot when /api/health says auth is on, or on the first 401 — then the failed /api/ call is
@@ -45,7 +46,7 @@ export function createAuth({ win, doc, prompt } = {}) {
         return res;
       }
       if (res.status === 401 && url.startsWith("/api/") && !(init && init.cbRetried)) {
-        if (await askToken("口令缺失或不对")) return cbFetch(input, { ...(init || {}), cbRetried: true });
+        if (await askToken(cbAuthText("口令缺失或不对"))) return cbFetch(input, { ...(init || {}), cbRetried: true });
       }
       return res;
     };

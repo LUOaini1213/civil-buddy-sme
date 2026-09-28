@@ -1,3 +1,4 @@
+const cbSessionText = (source, values = {}) => globalThis.CBI18n?.t(source, values) ?? String(source || "").replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
 /* Session navigation: which session the page is on, remembering it across reloads, the
  * project / session list and its rendering, and opening a session (restoring its transcript,
  * attachments, deliverables and a still-running turn).
@@ -67,11 +68,11 @@ export function createSessionNav(deps) {
     banner.replaceChildren();
     const link = doc.createElement("a");
     link.href = "/cad?project_id=" + state.cadProjectId;
-    link.textContent = "当前 CAD 项目 · 返回三维模型";
+    link.textContent = cbSessionText("当前 CAD 项目 · 返回三维模型");
     banner.appendChild(link);
     const clear = doc.createElement("button");
     clear.type = "button";
-    clear.textContent = "取消选择";
+    clear.textContent = cbSessionText("取消选择");
     clear.addEventListener("click", () => { reset.cancelVoice?.(); state.cadProjectId = ""; renderCadProject(); });
     banner.appendChild(clear);
   }
@@ -139,6 +140,7 @@ export function createSessionNav(deps) {
   function fallback(msg) {
     const box = el("projTree");
     if (!box) return;
+    box.setAttribute("aria-label", cbSessionText("工程项目与会话"));
     box.innerHTML = "";
     const none = doc.createElement("div");
     none.className = "thread-none";
@@ -162,7 +164,7 @@ export function createSessionNav(deps) {
       hooks.render();
     } catch (e) {
       /* 降级：该后端没有项目接口。静默留一行弱文本，不写对话流。 */
-      fallback("本后端不提供项目列表");
+      fallback(cbSessionText("本后端不提供项目列表"));
     }
   }
 
@@ -173,14 +175,16 @@ export function createSessionNav(deps) {
   function renderProjects() {
     const box = el("projTree");
     if (!box) return;
+    box.setAttribute("aria-label", cbSessionText("工程项目与会话"));
     box.innerHTML = "";
     const groups = proj.projects.slice();
     if (proj.inbox) groups.push(proj.inbox); /* 未归类恒在最后 */
     if (!groups.length) {
-      fallback("还没有项目；跑一次任务后自动归入未归类");
+      fallback(cbSessionText("还没有项目；跑一次任务后自动归入未归类"));
       return;
     }
     for (const p of groups) {
+      const displayName = p.id === "p-inbox" && p.builtin ? cbSessionText("未归类") : p.name;
       const kids = sessionsOf(p.id);
       const open = proj.open.has(p.id);
       const wrap = doc.createElement("div");
@@ -194,7 +198,7 @@ export function createSessionNav(deps) {
       const tw = doc.createElement("button");
       tw.type = "button";
       tw.className = "proj-tw"; /* CSS 三角，不用字符（符号纪律） */
-      tw.setAttribute("aria-label", (open ? "折叠 " : "展开 ") + p.name);
+      tw.setAttribute("aria-label", (open ? cbSessionText("折叠 ") : cbSessionText("展开 ")) + displayName);
       tw.addEventListener("click", () => {
         if (proj.open.has(p.id)) proj.open.delete(p.id);
         else proj.open.add(p.id);
@@ -204,8 +208,8 @@ export function createSessionNav(deps) {
       const name = doc.createElement("button");
       name.type = "button";
       name.className = "proj-name";
-      name.textContent = p.name;
-      name.title = p.name;
+      name.textContent = displayName;
+      name.title = displayName;
       name.addEventListener("click", () => {
         proj.cur = p.id;
         proj.open.add(p.id);
@@ -222,8 +226,8 @@ export function createSessionNav(deps) {
         const more = doc.createElement("button");
         more.type = "button";
         more.className = "proj-more";
-        more.textContent = "改名";
-        more.setAttribute("aria-label", "重命名项目 " + p.name);
+        more.textContent = cbSessionText("改名");
+        more.setAttribute("aria-label", cbSessionText("重命名项目 ") + p.name);
         more.addEventListener("click", () => renameProject(p));
         row.appendChild(more);
       }
@@ -244,9 +248,9 @@ export function createSessionNav(deps) {
         t2.className = "t-time";
         const running = s.running === true || runState.background.has(s.session_id);
         const stale = !running && s.turn_state === "stale";
-        t2.textContent = running ? "运行中" : stale ? "已中断" : relTime(s.updated_at);
+        t2.textContent = running ? cbSessionText("运行中") : stale ? cbSessionText("已中断") : relTime(s.updated_at);
         if (running) t2.classList.add("t-running");
-        if (stale) { t2.classList.add("t-stale"); t2.title = "上一轮在服务重启时被中断"; }
+        if (stale) { t2.classList.add("t-stale"); t2.title = cbSessionText("上一轮在服务重启时被中断"); }
         b.append(t1, t2);
         b.addEventListener("click", () => hooks.openSession(s));
         kidBox.appendChild(b);
@@ -254,7 +258,7 @@ export function createSessionNav(deps) {
       if (!kids.length) {
         const none = doc.createElement("div");
         none.className = "sess-none";
-        none.textContent = "这个项目还没有会话";
+        none.textContent = cbSessionText("这个项目还没有会话");
         kidBox.appendChild(none);
       }
       wrap.appendChild(kidBox);
@@ -288,7 +292,7 @@ export function createSessionNav(deps) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         await hooks.loadThreads();
       } catch (e) {
-        addStatus("改名失败：" + ((e && e.message) || e));
+        addStatus(cbSessionText("改名失败：") + ((e && e.message) || e));
       }
     };
     inp.addEventListener("keydown", (ev) => {
@@ -311,7 +315,7 @@ export function createSessionNav(deps) {
       if (!response.ok) throw new Error(await apiError(response));
       const d = await response.json();
       if (request !== navRequest.current()) return;
-      if (!d || !d.session_id || !Array.isArray(d.transcript)) throw new Error("会话数据格式不完整");
+      if (!d || !d.session_id || !Array.isArray(d.transcript)) throw new Error(cbSessionText("会话数据格式不完整"));
       state.session = d.session_id;
       rememberSession(d.session_id);
       reset.clearServerHitl();
@@ -348,17 +352,17 @@ export function createSessionNav(deps) {
       if (state.history.length) {
         reset.hideWelcome();
         for (const t of state.history) {
-          const body = addMsg(t.role === "user" ? "user" : "assistant", t.role === "user" ? "你" : "岗位", t.content);
+          const body = addMsg(t.role === "user" ? "user" : "assistant", t.role === "user" ? cbSessionText("你") : "岗位", t.content);
           if (t.role !== "user" && typeof paint.markdown === "function") paint.markdown(body, t.content);
           if (t.role === "assistant") restoredBody = body;
           else restoredMessage = t.content;
         }
       } else {
         /* 诚实：没有留存正文就明说，不假装接上了 */
-        addStatus("这条会话没有留存对话正文；上文从此刻重新开始。");
+        addStatus(cbSessionText("这条会话没有留存对话正文；上文从此刻重新开始。"));
       }
       if (d.collaboration || d.route && (d.route.reason || d.route.ambiguous)) {
-        if (!restoredBody) restoredBody = addMsg("assistant", "本会话任务安排", "已恢复留存的任务状态。");
+        if (!restoredBody) restoredBody = addMsg("assistant", cbSessionText("本会话任务安排"), cbSessionText("已恢复留存的任务状态。"));
         if (d.route && (d.route.reason || d.route.ambiguous)) paint.routePaint(d.route, restoredBody, restoredMessage);
         if (d.collaboration) paint.collaborationPaint(d.collaboration, restoredBody);
       }
@@ -367,16 +371,16 @@ export function createSessionNav(deps) {
         paint.setLastDeliverables(files);
         reset.hideWelcome();
         const runs = Array.isArray(d.deliverable_runs) ? d.deliverable_runs : [];
-        const intro = runs.length > 1 ? `已恢复 ${runs.length} 轮留存的草稿（最近的在前），可继续预览或下载。` : "已恢复留存的草稿，可继续预览或下载。";
-        paint.appendDocCards(files, addMsg("assistant", "本会话交付物", intro), { runs });
+        const intro = runs.length > 1 ? `已恢复 ${runs.length} 轮留存的草稿（最近的在前），可继续预览或下载。` : cbSessionText("已恢复留存的草稿，可继续预览或下载。");
+        paint.appendDocCards(files, addMsg("assistant", cbSessionText("本会话交付物"), intro), { runs });
       }
-      if (d.truncated) addStatus("列表只展示近期对话节选。可在「任务记忆与本地搜索」找回已保留的历史原文。");
+      if (d.truncated) addStatus(cbSessionText("列表只展示近期对话节选。可在「任务记忆与本地搜索」找回已保留的历史原文。"));
       if (d.turn_state && d.turn_state.active) {
-        addStatus("这个任务仍在后台运行，完成后会自动显示结果。");
+        addStatus(cbSessionText("这个任务仍在后台运行，完成后会自动显示结果。"));
         hooks.attachToTurn(d.session_id, "");
       } else if (d.turn_state && d.turn_state.state === "stale") {
         /* 服务重启时这一轮还在跑：它不会再有结果了，别让人以为还在等 */
-        addStatus("上一轮在服务重启时被中断，已有内容已保留；需要的话重新发送一次。");
+        addStatus(cbSessionText("上一轮在服务重启时被中断，已有内容已保留；需要的话重新发送一次。"));
       }
       if (d.context && (d.context.note || Number(d.context.limit) > 0)) reset.paintContext(d.context);
       else reset.paintContext(reset.estimateLocalContext());
@@ -384,7 +388,7 @@ export function createSessionNav(deps) {
       hooks.render();
     } catch (e) {
       if (request !== navRequest.current()) return;
-      addStatus("载入会话失败：" + ((e && e.message) || e));
+      addStatus(cbSessionText("载入会话失败：") + ((e && e.message) || e));
     }
   }
 

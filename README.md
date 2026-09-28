@@ -4,6 +4,9 @@
 
 中文说明：[README.zh.md](README.zh.md)
 
+**Product language:** switch between English and 中文 in the workbench header.
+See [bilingual product support](docs/civil-buddy/bilingual-workbench.md) for scope and startup.
+
 [Public static showcase](https://huggingface.co/spaces/Niki68868/civil-buddy-sme)
 — workflow and recorded synthetic results, without an online Python backend.
 [Showcase source and publishing instructions](deploy/huggingface-space/README.md).

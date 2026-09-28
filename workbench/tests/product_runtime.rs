@@ -228,7 +228,7 @@ async fn api_runs_persistent_scoped_tools_and_shared_child_tasks() {
         base_url,
         model: "scripted".into(),
     }));
-    let (_,started)=request(&app,"POST","/api/agent/turns",json!({"workspace":wid,"session_id":"model","message":"Review selected source","mode":"model","files":["brief.txt"]})).await;
+    let (_,started)=request(&app,"POST","/api/agent/turns",json!({"workspace":wid,"session_id":"model","message":"Review selected source","mode":"model","locale":"en","files":["brief.txt"]})).await;
     let url = format!(
         "/api/agent/turns/{}/events?workspace={wid}&session_id=model",
         started["turn_id"].as_str().unwrap()
@@ -247,6 +247,7 @@ async fn api_runs_persistent_scoped_tools_and_shared_child_tasks() {
     assert_eq!(result["turn"]["result"]["usage"]["task_count"], 3);
     assert_eq!(result["turn"]["result"]["usage"]["model_calls"], 4);
     assert_eq!(captured.lock().unwrap().len(), 4);
+    assert!(captured.lock().unwrap().iter().all(|payload| payload["messages"][0]["content"].as_str().unwrap().contains("Respond in English")));
     assert_eq!(
         result["events"]
             .as_array()
