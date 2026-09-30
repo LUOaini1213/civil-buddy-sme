@@ -849,7 +849,7 @@ test("History recovery: fresh browser discovers persisted sessions and reopens o
   assert.equal(h.doc.querySelectorAll("#agentArtifacts .artifact").length, 1);
   assert.equal(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
   h.win.CBI18n.setLocale("en");
-  assert.match(h.$("agentSession").textContent, /1 tasks/);
+  assert.match(h.$("agentSession").textContent, /Tasks: 1/);
   assert.equal(h.$("agentReply").textContent, "已保存的原文");
 });
 
