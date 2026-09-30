@@ -2,7 +2,7 @@
   "date": "2026-09-30",
   "scope": "Windows local practical workbench preview",
   "synthetic": true,
-  "real_provider_calls": false,
+  "real_provider_calls": true,
   "cross_computer": false,
   "production_acceptance": false,
   "research_sources": [
@@ -59,7 +59,130 @@
       "total": 14
     },
     "packaged_same_machine_http": "passed after adding missing gateway/idempotency.py to release allowlist; existing local Python environment reused",
-    "docker_assertion_contract": "updated against actual local HTTP JSON and bash -n; full Linux container run delegated to CI"
+    "docker_assertion_contract": "updated against actual local HTTP JSON and bash -n; full Linux container run delegated to CI",
+    "fresh_venv_package_http": {
+      "passed": true,
+      "python": "3.11.5",
+      "requirements": [
+        "requirements.txt",
+        "requirements-documents.txt"
+      ],
+      "optional_packages_installed": false,
+      "cross_computer": false,
+      "scope": "Extracted preview .2 package; real startup/login/restart/isolation/session handoff/document copies; original hashes preserved"
+    },
+    "integrated_runtime_http": {
+      "passed": true,
+      "environment": "fresh core/document venv",
+      "synthetic": true,
+      "real_provider_calls": false,
+      "source_quotes_receipt": "verified"
+    },
+    "running_crash_recovery": {
+      "passed": true,
+      "platform": "Windows",
+      "before": "running",
+      "after": "interrupted",
+      "model_calls": 1,
+      "automatic_replay": false,
+      "originals_and_published_copies_unchanged": true,
+      "scope": "Forced termination of owned process tree while a read-only model request is pending; not a power-loss or mid-write test"
+    },
+    "rust_integrated_suite": {
+      "passed": 276,
+      "failed": 0,
+      "suites": 34
+    },
+    "preflight": {
+      "passed": 10,
+      "total": 10,
+      "missing_optional_nonblocking": true,
+      "check_writes_state": false
+    },
+    "launcher": {
+      "passed": 11,
+      "total": 11
+    },
+    "acceptance_http_client": {
+      "passed": 27,
+      "total": 27,
+      "live_provider_calls": false
+    },
+    "source_quote_receipts": {
+      "integration_passed": 5,
+      "unit_passed": 3,
+      "source_hash_changes_detected": true,
+      "all_model_claims_verified": false
+    },
+    "human_approval_current_contract": {
+      "passed": 21,
+      "total": 21,
+      "original_transport_instructions_preserved": true
+    },
+    "office_visual_attempt": {
+      "passed": false,
+      "reason": "Bundled rendering environment has no LibreOffice executable; structural checks are not visual or recalculation acceptance"
+    },
+    "final_source_ui_and_i18n": {
+      "passed": 46,
+      "total": 46,
+      "agent_ui": 42,
+      "i18n": 4
+    },
+    "source_receipt_browser": {
+      "passed": true,
+      "synthetic": true,
+      "real_provider_calls": false,
+      "actions": [
+        "submitted task in browser",
+        "received two actual new copies",
+        "four source quotation cards",
+        "switched en/zh without changing source text",
+        "reloaded and replayed persisted task",
+        "human-readable page/paragraph/cell locations"
+      ],
+      "screenshot": "source-receipt-en.png",
+      "task_id_prefix": "4765405fffd3"
+    },
+    "final_release_helper_inclusion": {
+      "passed": 9,
+      "total": 9,
+      "shared_legacy_and_unified_allowlists": true
+    },
+    "live_provider_attempt": {
+      "passed": false,
+      "provider_host": "api.deepseek.com",
+      "configured_model": "deepseek-flash",
+      "http_status": 401,
+      "attempts": 1,
+      "model_responses": 0,
+      "artifacts": 0,
+      "original_hashes_unchanged": true,
+      "billing_verified": false,
+      "usage_measurement": "estimated input only; no provider usage receipt",
+      "reason": "authentication failed; update user-managed API credentials before repeating live acceptance"
+    },
+    "integrated_default_gate": {
+      "passed": 186,
+      "total": 187,
+      "failed_group": "agent-ui",
+      "cause": "Full run reached new source-card reset regression while that test was still being corrected",
+      "final_affected_group_retested": true,
+      "final_agent_ui_passed": 42,
+      "entire_default_gate_repeated_again": false
+    },
+    "final_integrated_targeted_gate": {
+      "passed": 6,
+      "total": 6,
+      "checks": [
+        "agent-ui",
+        "product-i18n",
+        "unified-acceptance-oracle",
+        "unified-launcher",
+        "workbench-preflight",
+        "human-approval"
+      ]
+    }
   },
   "remaining_acceptance": [
     "real project revision and issue workflow",

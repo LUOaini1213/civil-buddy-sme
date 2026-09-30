@@ -5,7 +5,7 @@ const RISK_PHRASE = "我明白，将由持证人员签认";
 const confirmedMessage = (text) => String(text || "").trim() === RISK_PHRASE;
 const TERMINAL = new Set(["completed", "succeeded", "failed", "cancelled", "interrupted"]);
 const STATUS = { queued: "等待执行", running: "执行中", waiting_approval: "等待确认", cancelling: "正在停止", completed: "已完成", succeeded: "已完成", failed: "未完成", cancelled: "已停止", interrupted: "服务重启时中断" };
-const EVENT_NAMES = { status: "执行阶段", context: "上下文预算", model: "模型调用", tool_started: "工具开始", tool_finished: "工具结束", subtask_started: "子任务开始", subtask_finished: "子任务结束", artifact: "产物已保存", decision: "工程判断", error: "执行错误", done: "本轮结束" };
+const EVENT_NAMES = { status: "执行阶段", context: "上下文预算", model: "模型调用", tool_started: "工具开始", tool_finished: "工具结束", subtask_started: "子任务开始", subtask_finished: "子任务结束", artifact: "产物已保存", source_evidence: "来源引文核验", decision: "工程判断", error: "执行错误", done: "本轮结束" };
 const TURN_EVENTS = { "turn.started": "running", "turn.cancelling": "cancelling", "turn.completed": "completed", "turn.failed": "failed", "turn.cancelled": "cancelled", "turn.interrupted": "interrupted" };
 const idOf = (turn) => String(turn && (turn.turn_id || turn.id) || "");
 const object = (value) => value && typeof value === "object" && !Array.isArray(value);
@@ -48,15 +48,22 @@ export function createAgentWorkbench(deps) {
   const node = (tag, text, cls) => { const n = doc.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
   const state = { capabilities: null, workspace: null, session: "", files: [], selected: new Set(), turn: null,
     seq: 0, artifacts: new Map(), artifactChecks: new Map(), engineeringResults: new Map(), epoch: 0, workspaceEpoch: 0, fileEpoch: 0, listEpoch: 0,
-    contextData: null, taskRows: [], eventRows: [], modelConfig: null, writeGateReason: null,
-    engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, experts: [],
+    contextData: null, taskRows: [], eventRows: [], modelConfig: null, writeGateReason: null, sourceEvidence: null,
+    engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, engineeringStatus: null, terminalNotice: false, experts: [],
     opening: false, submitting: false, cancelling: false, modelBusy: false, modelConfigured: false, disposed: false };
   let saved = { lastRoot: "", workspaces: {} }, timer = null, controller = null, started = false;
   try { const value = JSON.parse(storage.getItem(STORE_KEY) || "null"); if (object(value) && object(value.workspaces)) saved = value; } catch (_) { /* Storage is optional. */ }
   function persist() { try { storage.setItem(STORE_KEY, JSON.stringify(saved)); } catch (_) { /* Storage may be disabled. */ } }
   function record() { return state.workspace && saved.workspaces[state.workspace.id]; }
   function sessionRecord() { return record() && record().sessions.find((item) => item.id === state.session); }
-  function notice(text, error = false) { $("agentNotice").textContent = text; $("agentNotice").className = "notice" + (error ? " error" : ""); }
+  function notice(text, error = false, terminal = false) { state.terminalNotice = terminal; $("agentNotice").textContent = text; $("agentNotice").className = "notice" + (error ? " error" : ""); }
+  function terminalNotice() {
+    notice(t(STATUS[state.turn.status]) + (state.turn.result?.partial ? t("，部分工作尚未完成。") : (win.CBI18n?.locale === "en" ? "." : "。")), state.turn.status === "failed", true);
+  }
+  function engineeringStatus(key, values = {}, detail = "") {
+    state.engineeringStatus = { key, values, detail };
+    $("agentEngineeringStatus").textContent = t(key, values) + detail;
+  }
   const scoped = () => new URLSearchParams({ workspace: state.workspace.id, session_id: state.session }).toString();
   const active = () => state.turn && !TERMINAL.has(state.turn.status);
   function current(epoch) { return !state.disposed && epoch === state.epoch; }
@@ -74,6 +81,7 @@ export function createAgentWorkbench(deps) {
     stopPolling(); state.epoch += 1; state.listEpoch += 1; state.turn = null; state.seq = 0; state.eventRows = []; state.contextData = null; state.artifacts.clear(); state.artifactChecks.clear(); state.engineeringResults.clear();
     state.submitting = false; state.cancelling = false;
     state.writeGateReason = null; paintWriteGate();
+    state.sourceEvidence = null; paintSourceEvidence(null);
     $("agentEvents").replaceChildren(); $("agentArtifacts").replaceChildren(); $("agentReply").textContent = t("结果将显示在这里。");
     if ($("agentEngineeringResults")) { $("agentEngineeringResults").replaceChildren(); $("agentEngineeringResults").hidden = true; }
     $("agentTurnStatus").textContent = t("尚未开始"); $("agentPartial").hidden = true; $("agentUsage").hidden = true;
@@ -158,7 +166,7 @@ export function createAgentWorkbench(deps) {
   function clearEngineering() {
     state.engineeringEpoch += 1; state.engineeringLoading = false;
     for (const row of state.engineeringRows) { row.selected = false; row.confirmed = false; row.loading = false; row.detail = null; row.snapshot = null; }
-    $("agentEngineeringStatus").textContent = t("工程选择已清空；请重新读取需要使用的项目快照。");
+    engineeringStatus("工程选择已清空；请重新读取需要使用的项目快照。");
     paintEngineering();
   }
   function paintEngineering() {
@@ -183,8 +191,8 @@ export function createAgentWorkbench(deps) {
         const label = node("label", undefined, "engineering-check"), check = node("input"); check.type = "checkbox"; check.checked = row.selected;
         check.disabled = busy || row.loading || missing.length > 0 || !["ready", "confirmation_required"].includes(detail.status) || (needsConfirm && !row.confirmed);
         check.addEventListener("change", () => {
-          if (check.checked && state.engineeringRows.filter((item) => item.selected).length >= 4) { check.checked = false; $("agentEngineeringStatus").textContent = t("最多选择 4 个工程项目。"); return; }
-          row.selected = check.checked; $("agentEngineeringStatus").textContent = t("已选 {count} / 4 个项目。", { count: state.engineeringRows.filter((item) => item.selected).length }); controls();
+          if (check.checked && state.engineeringRows.filter((item) => item.selected).length >= 4) { check.checked = false; engineeringStatus("最多选择 4 个工程项目。"); return; }
+          row.selected = check.checked; engineeringStatus("已选 {count} / 4 个项目。", { count: state.engineeringRows.filter((item) => item.selected).length }); controls();
         });
         label.append(check, node("span", t("加入本次任务"))); card.appendChild(label);
       }
@@ -194,14 +202,14 @@ export function createAgentWorkbench(deps) {
   async function loadEngineering() {
     if (!state.workspace) return;
     clearEngineering(); const version = state.engineeringEpoch; state.engineeringLoading = true; state.engineeringRows = []; controls();
-    $("agentEngineeringStatus").textContent = t("正在读取已保存工程…");
+    engineeringStatus("正在读取已保存工程…");
     try {
       const data = await request(`/api/agent/engineering/projects?${scoped()}`);
       if (version !== state.engineeringEpoch || state.disposed) return;
       if (!Array.isArray(data.projects)) throw new Error(t("工程项目列表不完整"));
       state.engineeringRows = data.projects.filter((row) => row && ["cad_section", "saved_frame"].includes(row.kind) && /^[A-Za-z0-9_-]+$/.test(row.project_id || "")).map((row) => ({ ...row, name: String(row.name || row.project_id), selected: false, confirmed: false, loading: false, detail: null, snapshot: null }));
-      $("agentEngineeringStatus").textContent = state.engineeringRows.length ? t("请先读取需要使用的项目快照；刷新会清除上次确认。") : t("暂无可用的已保存截面或框架。");
-    } catch (error) { if (version === state.engineeringEpoch) $("agentEngineeringStatus").textContent = t("工程选集暂不可用：") + error.message; }
+      engineeringStatus(state.engineeringRows.length ? "请先读取需要使用的项目快照；刷新会清除上次确认。" : "暂无可用的已保存截面或框架。");
+    } catch (error) { if (version === state.engineeringEpoch) engineeringStatus("工程选集暂不可用：", {}, error.message); }
     finally { if (version === state.engineeringEpoch) { state.engineeringLoading = false; controls(); } }
   }
   async function fetchEngineering(row) {
@@ -211,7 +219,7 @@ export function createAgentWorkbench(deps) {
   async function inspectEngineering(row) {
     const version = state.engineeringEpoch;
     row.selected = false; row.confirmed = false; row.detail = null; row.snapshot = null; row.error = ""; row.loading = true; controls();
-    $("agentEngineeringStatus").textContent = t("已清除此项目的旧选择，请核对当前快照。");
+    engineeringStatus("已清除此项目的旧选择，请核对当前快照。");
     try { const value = await fetchEngineering(row); if (version === state.engineeringEpoch && state.engineeringRows.includes(row) && !state.disposed) Object.assign(row, value); }
     catch (error) { if (version === state.engineeringEpoch) row.error = t("快照读取失败：") + error.message; }
     finally { if (version === state.engineeringEpoch) { row.loading = false; controls(); } }
@@ -229,7 +237,7 @@ export function createAgentWorkbench(deps) {
         Object.assign(row, value); row.selected = false; row.confirmed = false; row.error = t("工程修订或输入已变化，请重新核对后选择。"); valid = false;
       }
     });
-    if (!valid) { $("agentEngineeringStatus").textContent = t("部分工程选择已失效，请重新核对。"); notice(t("工程快照已变化或无法核对；任务尚未提交，请重新检查工程选集。"), true); controls(); }
+    if (!valid) { engineeringStatus("部分工程选择已失效，请重新核对。"); notice(t("工程快照已变化或无法核对；任务尚未提交，请重新检查工程选集。"), true); controls(); }
     return valid;
   }
   function expertNote() {
@@ -513,9 +521,57 @@ export function createAgentWorkbench(deps) {
       host.appendChild(card);
     }
   }
+  function sourceLocation(locator) {
+    const positive = (value) => Number.isSafeInteger(value) && value > 0;
+    if (locator.kind === "pdf_page" && positive(locator.page)) return t("PDF 第 {page} 页", { page: locator.page });
+    if (locator.kind === "docx_paragraph" && typeof locator.paragraph_id === "string" && locator.paragraph_id) return t("Word 段落 {id}", { id: locator.paragraph_id });
+    if (typeof locator.sheet === "string" && locator.sheet) {
+      if (locator.kind === "xlsx_cell" && /^[A-Z]{1,3}[1-9][0-9]*$/.test(locator.cell || "")) return `Excel ${locator.sheet}!${locator.cell}`;
+      if (locator.kind === "xlsx_row" && positive(locator.row)) return t("Excel {sheet} 第 {row} 行", { sheet: locator.sheet, row: locator.row });
+    }
+    if (locator.kind === "text" && positive(locator.line_start) && positive(locator.line_end) && locator.line_end >= locator.line_start) return locator.line_start === locator.line_end
+      ? t("文本第 {line} 行", { line: locator.line_start }) : t("文本第 {start}–{end} 行", { start: locator.line_start, end: locator.line_end });
+    return JSON.stringify(locator);
+  }
+  function paintSourceEvidence(receipt) {
+    const host = $("agentSourceEvidence"); host.replaceChildren(); host.hidden = !receipt;
+    state.sourceEvidence = receipt;
+    if (!receipt) return;
+    const valid = object(receipt) && receipt.schema_version === 1 && receipt.origin === "host"
+      && receipt.scope === "this_turn_source_quotes" && receipt.model_claims_verified === false
+      && receipt.engineering_truth === "not_verified" && Array.isArray(receipt.references) && receipt.references.length <= 12;
+    if (!valid) { host.appendChild(node("p", t("来源回执格式无法核对，不能作为已验证证据。"), "notice warning")); return; }
+    if (!receipt.attempted && !receipt.references.length) { host.hidden = true; return; }
+    host.appendChild(node("h3", t("本轮来源引文")));
+    host.appendChild(node("p", t("仅核对引文、定位和当时文件哈希；不代表模型所有结论已验证，也不代表工程签认。"), "notice"));
+    if (receipt.checked_at) host.appendChild(node("p", t("核对时间：{time}", { time: receipt.checked_at }), "muted small"));
+    if (receipt.truncated) host.appendChild(node("p", t("来源过多或内容超过回执限制；这里只列出部分引文，完整记录见执行过程。"), "notice warning"));
+    if (receipt.collection_failed) host.appendChild(node("p", t("本轮部分检索或引用请求失败，请查看执行过程。"), "notice warning"));
+    if (!receipt.references.length) host.appendChild(node("p", t("本轮没有可展示的来源引文，回答未获得引文一致性证明。"), "notice warning"));
+    const labels = { valid: "引文与核对时的文件一致", changed: "来源已变化，请按新版重新核对", invalid: "引文未通过核验", unavailable: "来源暂时无法核对", unverified: "引文尚未完成核验" };
+    const reasons = { source_not_allowed: "该来源未被本轮选择", version_mismatch: "文件内容与检索时的哈希不同", source_changed_during_verification: "来源在核对过程中发生变化", quote_mismatch: "引文与原文不一致", locator_mismatch: "原文位置不一致", chunk_mismatch: "引文块标识不一致", invalid_reference: "引用格式无效", invalid_locator_or_quote: "引用位置或引文无效", invalid_verification_response: "校验服务未返回可核对的结果", verification_timeout: "来源核对超时，请重新检查", verification_unavailable: "来源或校验服务不可用", cancelled: "来源核对已取消" };
+    for (const reference of receipt.references) {
+      const card = node("article", undefined, "artifact");
+      const wellFormed = object(reference) && typeof reference.source === "string" && reference.source.length <= 1024
+        && typeof reference.quote === "string" && [...reference.quote].length <= 1200 && object(reference.locator)
+        && JSON.stringify(reference.locator).length <= 2048 && /^[a-f0-9]{64}$/i.test(reference.source_sha256 || "") && labels[reference.status]
+        && (reference.status !== "valid" || reference.reason === "exact_quote_verified");
+      if (!wellFormed) { card.appendChild(node("p", t("来源回执格式无法核对，不能作为已验证证据。"), "notice warning")); host.appendChild(card); continue; }
+      card.appendChild(node("strong", reference.source));
+      card.appendChild(node("p", t(labels[reference.status]), reference.status === "valid" ? "muted" : "notice warning"));
+      if (reasons[reference.reason]) card.appendChild(node("p", t(reasons[reference.reason]), "small"));
+      card.appendChild(node("p", t("原始位置：{location}", { location: sourceLocation(reference.locator) }), "small wrap"));
+      card.appendChild(node("p", t(reference.status === "valid" ? "已核对引文" : "待核对引文"), "small"));
+      card.appendChild(node("blockquote", reference.quote, "wrap"));
+      card.appendChild(node("p", t("检索时 SHA-256：{hash}", { hash: reference.source_sha256 }), "small wrap"));
+      if (/^[a-f0-9]{64}$/i.test(reference.current_source_sha256 || "")) card.appendChild(node("p", t("核对时 SHA-256：{hash}", { hash: reference.current_source_sha256 }), "small wrap"));
+      host.appendChild(card);
+    }
+  }
   function paintResult(result) {
     if (!object(result)) return;
     if (typeof result.reply === "string") $("agentReply").textContent = result.reply;
+    if (Object.prototype.hasOwnProperty.call(result, "source_evidence")) paintSourceEvidence(result.source_evidence);
     $("agentPartial").hidden = result.partial !== true;
     for (const item of Array.isArray(result.artifacts) ? result.artifacts : []) paintArtifact(item);
     for (const item of Array.isArray(result.findings) ? result.findings : []) paintEngineeringResult(item);
@@ -537,6 +593,7 @@ export function createAgentWorkbench(deps) {
       state.writeGateReason = data.reason; paintWriteGate();
     }
     if (kind === "context") paintContext(data);
+    if (kind === "source_evidence") paintSourceEvidence(data);
     if (kind === "artifact") paintArtifact(data);
     if (kind === "tool_finished" && (data.name === "engineering_analyze" || data.tool === "engineering_analyze")) paintEngineeringResult(data.result);
     if (kind === "done") paintResult(data.result || data);
@@ -557,7 +614,7 @@ export function createAgentWorkbench(deps) {
       if (!current(epoch) || id !== idOf(state.turn)) return;
       for (const event of (Array.isArray(data.events) ? data.events : []).slice().sort((a, b) => a.seq - b.seq)) eventFrame(event);
       paintTurn(data.turn);
-      if (TERMINAL.has(state.turn.status)) { notice(t(STATUS[state.turn.status]) + (state.turn.result?.partial ? t("，部分工作尚未完成。") : (win.CBI18n?.locale === "en" ? "." : "。")), state.turn.status === "failed"); await loadTurns(); }
+      if (TERMINAL.has(state.turn.status)) { terminalNotice(); await loadTurns(); }
     } catch (error) {
       if (!current(epoch) || error.name === "AbortError") return;
       retry = true; delay = 2500; notice(t("连接暂时中断，将从已收到的事件继续恢复：") + error.message, true);
@@ -624,7 +681,10 @@ export function createAgentWorkbench(deps) {
     // UI state is repainted; user text, raw events, file names and saved outputs stay unchanged.
     if (state.capabilities) paintCapabilities(state.capabilities);
     paintSessions(); paintFiles(); paintExperts(); expertNote(); paintEngineering(); paintWriteGate();
+    if (state.engineeringStatus) { const { key, values, detail } = state.engineeringStatus; engineeringStatus(key, values, detail); }
+    if (state.terminalNotice && state.turn && TERMINAL.has(state.turn.status)) terminalNotice();
     if (state.contextData) paintContext(state.contextData);
+    if (state.sourceEvidence) paintSourceEvidence(state.sourceEvidence);
     if (state.turn) paintTurn(state.turn);
     else {
       $("agentReply").textContent = t("结果将显示在这里。");

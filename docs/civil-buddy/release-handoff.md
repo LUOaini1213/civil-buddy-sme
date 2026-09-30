@@ -102,6 +102,8 @@ Rust 主机与固定 Python 服务的真实 HTTP 验收覆盖登录 Cookie、目
 ## 可复跑检查
 
 ```powershell
+# 不启动服务、不联网调用模型；先发现解释器、依赖、端口及目录问题
+& .venv/Scripts/python.exe scripts/start_unified_workbench.py --python .venv/Scripts/python.exe --binary bin/civil-workbench.exe --check
 npm run check
 npm run check:full
 # 指定当前编译产物，启动临时实例做真实 HTTP / 重启 / 隔离回归
@@ -109,5 +111,15 @@ npm run check:full
 ```
 
 普通测试使用离线脚本模型，不访问真实收费模型。提示注入集是合成开发集；通过不能宣称能抵御所有恶意文档或所有模型行为。执行结果以本次测试日志为准。
+
+普通问答会展示本轮实际检索或提交核验的原文引文。宿主在任务收尾重新读取所选原件，记录定位、哈希和核对时间；来源变化、不可读或核验失败会保留状态。中英切换不翻译原文。这只能证明引文与核对时的文件是否一致，不能代替对回答全部结论的审核。
+
+需检查已配置的真实模型时，可在独立的空工程目录运行以下命令。它会发送合成 PDF/Word/Excel 资料并产生模型费用；不是普通离线测试的一部分。具名实例的 `--workspace` 必须事先指向同一验收目录，登录口令放在目录外。
+
+```powershell
+& .venv/Scripts/python.exe scripts/unified_acceptance.py --base http://127.0.0.1:8765 --work-dir C:/CivilBuddy/acceptance-job --report-dir C:/CivilBuddy/acceptance-report --live --expected-model deepseek-flash --expected-provider-host api.deepseek.com --token-file C:/CivilBuddy/login-token.txt
+```
+
+示例主机名和模型名须与使用者实际选定的服务一致。脚本不会读取或修改提供商密钥；缺少可核对的主机元数据时拒绝开始。超时会请求取消并等待终态，失败或取消后仍核对原件哈希；如果没有观察到停机，会明确保留“仍运行或未知”。报告区分提供商返回的用量和估算值，不宣称能限定货币费用，也不将产品回执当作提供商独立证明。
 
 第二台电脑与真实资料验收可填写[验收记录模板](acceptance/sme-preview-checklist.md)。空项不算通过，填写后的私人业务记录不要回传公共仓库。

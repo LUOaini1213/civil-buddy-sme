@@ -53,7 +53,7 @@ EXPLICIT = (
     "contract/intents.v1.json", "contract/projects.v1.json", "contract/kb_boosts.v1.json",
     "workbench/seed.json", "workbench/yibiao-map.json",
     "scripts/start_workbench.py",
-    "scripts/start_unified_workbench.py", "requirements-documents.txt", "docs/civil-buddy/unified-workbench.md",
+    "scripts/start_unified_workbench.py", "scripts/workbench_preflight.py", "requirements-documents.txt", "docs/civil-buddy/unified-workbench.md",
     "skills/document/manifest.json", "skills/document/doc-word/SKILL.md", "skills/document/doc-spreadsheet/SKILL.md",
     "skills/document/doc-pdf/SKILL.md", "skills/document/doc-review/SKILL.md",
     # 语音输入：页面加载 voice.js；本机识别需要术语表，装依赖的说明在 requirements-asr.txt 里

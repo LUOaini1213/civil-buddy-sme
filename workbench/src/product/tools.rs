@@ -207,6 +207,280 @@ pub struct ToolScope<'a> {
     pub write: bool,
     pub cancel: &'a CancellationToken,
 }
+
+/// Candidates come from actual tool calls, never the assistant's final prose.
+/// They are independently rechecked at completion; this is quotation identity,
+/// not a claim that every sentence in the model's answer is supported.
+#[derive(Clone, Default)]
+pub struct SourceEvidence {
+    references: Vec<Value>,
+    keys: HashSet<String>,
+    attempted: bool,
+    truncated: bool,
+    collection_failed: bool,
+}
+
+fn valid_quotation_report(result: &Value, source: &str, count: usize) -> bool {
+    let Some(rows) = result["references"].as_array() else {
+        return false;
+    };
+    let Some(sources) = result["sources"].as_array() else {
+        return false;
+    };
+    result["verification_scope"] == "selected_source+current_sha256+exact_locator+exact_quote"
+        && result["engineering_truth"] == "not_verified"
+        && sources.len() == 1
+        && sources[0]["source"] == source
+        && sources[0]["source_sha256"]
+            .as_str()
+            .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+        && rows.len() == count
+        && rows.iter().enumerate().all(|(index, row)| {
+            row["index"] == index
+                && ((row["status"] == "valid" && row.get("reason").is_some_and(Value::is_null))
+                    || (row["status"] == "invalid"
+                        && matches!(
+                            row["reason"].as_str(),
+                            Some(
+                                "version_mismatch"
+                                    | "source_not_allowed"
+                                    | "invalid_reference"
+                                    | "invalid_locator_or_quote"
+                                    | "locator_mismatch"
+                                    | "quote_mismatch"
+                                    | "chunk_mismatch"
+                            )
+                        )))
+        })
+        && result["valid"].as_bool() == Some(rows.iter().all(|row| row["status"] == "valid"))
+}
+impl SourceEvidence {
+    pub fn observe(&mut self, name: &str, args: &Value, result: Option<&Value>) {
+        if !matches!(name, "search_sources" | "verify_sources") {
+            return;
+        }
+        self.attempted = true;
+        let good = result.is_some_and(|r| r["ok"] == true);
+        self.collection_failed |= !good;
+        let refs = if name == "search_sources" {
+            if !good {
+                return;
+            }
+            result.and_then(|r| r["result"]["hits"].as_array())
+        } else {
+            args["references"].as_array()
+        };
+        let Some(refs) = refs else {
+            self.collection_failed = true;
+            return;
+        };
+        if refs.len() > 100 {
+            self.truncated = true;
+        }
+        for item in refs.iter().take(100) {
+            let Some(source) = item["source"]
+                .as_str()
+                .filter(|s| !s.is_empty() && s.len() <= 1024)
+            else {
+                self.truncated = true;
+                continue;
+            };
+            let Some(hash) = item["source_sha256"]
+                .as_str()
+                .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            else {
+                self.truncated = true;
+                continue;
+            };
+            let Some(quote) = item["quote"]
+                .as_str()
+                .filter(|s| !s.is_empty() && s.chars().count() <= 1200)
+            else {
+                self.truncated = true;
+                continue;
+            };
+            if !item["locator"].is_object() || item["locator"].to_string().len() > 2048 {
+                self.truncated = true;
+                continue;
+            }
+            let mut reference = json!({"source":source,"source_sha256":hash,"locator":item["locator"],"quote":quote});
+            if let Some(chunk) = item.get("chunk_id") {
+                if !chunk.as_str().is_some_and(|s| s.len() <= 128) {
+                    self.truncated = true;
+                    continue;
+                }
+                reference["chunk_id"] = chunk.clone();
+            }
+            let key = reference.to_string();
+            if self.keys.contains(&key) {
+                continue;
+            }
+            if self.references.len() == 12 {
+                self.truncated = true;
+                continue;
+            }
+            self.keys.insert(key);
+            reference["origin"] = json!(if name == "search_sources" {
+                "retrieved"
+            } else {
+                "submitted_for_verification"
+            });
+            self.references.push(reference);
+        }
+    }
+    pub async fn verify(self, scope: &ToolScope<'_>) -> Value {
+        self.verify_with_timeout(scope, std::time::Duration::from_secs(15))
+            .await
+    }
+    async fn verify_with_timeout(
+        self,
+        scope: &ToolScope<'_>,
+        timeout: std::time::Duration,
+    ) -> Value {
+        let mut references = self.references;
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut grouped = std::collections::BTreeMap::<String, Vec<usize>>::new();
+        for (index, reference) in references.iter_mut().enumerate() {
+            reference["status"] = json!("unverified");
+            reference["reason"] = json!("verification_unavailable");
+            let source = reference["source"].as_str().unwrap().to_owned();
+            if scope
+                .selected
+                .iter()
+                .any(|s| s.replace('\\', "/") == source)
+            {
+                grouped.entry(source).or_default().push(index);
+            } else {
+                reference["status"] = json!("invalid");
+                reference["reason"] = json!("source_not_allowed");
+            }
+        }
+        for (source, indexes) in grouped {
+            if tokio::time::Instant::now() >= deadline || scope.cancel.is_cancelled() {
+                for index in indexes {
+                    references[index]["reason"] = json!(if scope.cancel.is_cancelled() {
+                        "cancelled"
+                    } else {
+                        "verification_timeout"
+                    });
+                }
+                continue;
+            }
+            let refs: Vec<Value> = indexes
+                .iter()
+                .map(|&index| {
+                    let mut reference = references[index].clone();
+                    for key in ["origin", "status", "reason"] {
+                        reference.as_object_mut().unwrap().remove(key);
+                    }
+                    reference
+                })
+                .collect();
+            // Use only this authorized file. An unrelated missing input must not
+            // conceal the status of the other quotations in the same turn.
+            let request = json!({"version":1,"call_id":uuid::Uuid::new_v4().to_string(),"operation":"verify",
+                "workspace":scope.workspace.root(),"sources":[source],"references":refs});
+            let token = scope.cancel.child();
+            let mut operation = Box::pin(scope.state.worker.call(
+                "packing_assistant.retrieval.worker",
+                &request,
+                &token,
+            ));
+            let outcome = tokio::select! {
+                result = &mut operation => result,
+                _ = tokio::time::sleep_until(deadline) => {
+                    token.cancel();
+                    let _ = operation.await; // kill and reap before finishing the receipt
+                    Err("receipt_timeout".to_owned())
+                }
+            };
+            let checked_at = chrono::Utc::now().to_rfc3339();
+            match outcome {
+                Ok(report) if report["ok"] == true => {
+                    let rows = report["result"]["references"].as_array();
+                    let valid_rows =
+                        valid_quotation_report(&report["result"], &source, indexes.len());
+                    for (position, &index) in indexes.iter().enumerate() {
+                        references[index]["checked_at"] = json!(checked_at);
+                        if !valid_rows {
+                            references[index]["reason"] = json!("invalid_verification_response");
+                            continue;
+                        }
+                        let row = &rows.unwrap()[position];
+                        let reason = row["reason"].as_str().unwrap_or("");
+                        let valid = row["status"] == "valid" && reason.is_empty();
+                        references[index]["status"] = json!(if valid {
+                            "valid"
+                        } else if reason == "version_mismatch" {
+                            "changed"
+                        } else {
+                            "invalid"
+                        });
+                        references[index]["reason"] = json!(if valid {
+                            "exact_quote_verified"
+                        } else if matches!(
+                            reason,
+                            "version_mismatch"
+                                | "source_not_allowed"
+                                | "invalid_reference"
+                                | "invalid_locator_or_quote"
+                                | "locator_mismatch"
+                                | "quote_mismatch"
+                                | "chunk_mismatch"
+                        ) {
+                            reason
+                        } else {
+                            "invalid_verification_response"
+                        });
+                        if let Some(current) = report["result"]["sources"]
+                            .as_array()
+                            .and_then(|items| items.iter().find(|r| r["source"] == source))
+                            .and_then(|r| r["source_sha256"].as_str())
+                            .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+                        {
+                            references[index]["current_source_sha256"] = json!(current);
+                        }
+                    }
+                }
+                result => {
+                    let code = result
+                        .as_ref()
+                        .ok()
+                        .and_then(|r| r["error"]["code"].as_str())
+                        .unwrap_or("");
+                    let timed_out = result
+                        .as_ref()
+                        .err()
+                        .is_some_and(|e| e == "receipt_timeout");
+                    for index in indexes {
+                        references[index]["checked_at"] = json!(checked_at);
+                        references[index]["status"] = json!(if code == "conflict" {
+                            "changed"
+                        } else {
+                            "unavailable"
+                        });
+                        references[index]["reason"] = json!(if timed_out {
+                            "verification_timeout"
+                        } else if scope.cancel.is_cancelled() {
+                            "cancelled"
+                        } else if code == "conflict" {
+                            "source_changed_during_verification"
+                        } else {
+                            "verification_unavailable"
+                        });
+                    }
+                }
+            }
+        }
+        let attention = self.truncated
+            || self.collection_failed
+            || references.iter().any(|r| r["status"] != "valid");
+        json!({"schema_version":1,"origin":"host","scope":"this_turn_source_quotes","attempted":self.attempted,
+            "checked_at":chrono::Utc::now().to_rfc3339(),"status":if attention {"attention_required"}else if references.is_empty(){"no_quotes"}else{"verified"},
+            "model_claims_verified":false,"engineering_truth":"not_verified","references":references,
+            "truncated":self.truncated,"collection_failed":self.collection_failed,"limit":12})
+    }
+}
 impl ToolScope<'_> {
     async fn patch_evidence(&self, args: &Value) -> Result<Value, String> {
         let patches = args["patches"].as_array().ok_or("patches required")?;
@@ -401,7 +675,9 @@ impl ToolScope<'_> {
                     .ok_or("expected_sha256 required")?;
                 let evidence = self.patch_evidence(&args).await?;
                 let fresh = uuid::Uuid::new_v4().to_string();
-                let call_id = call_id.filter(|_| name == "apply_document").unwrap_or(&fresh);
+                let call_id = call_id
+                    .filter(|_| name == "apply_document")
+                    .unwrap_or(&fresh);
                 let mut response = self
                     .state
                     .worker
@@ -444,5 +720,96 @@ impl ToolScope<'_> {
             }
             _ => Err("tool is not registered for this role".into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod source_receipt_tests {
+    use super::*;
+
+    fn reference(quote: &str) -> Value {
+        json!({"source":"brief.txt","source_sha256":"a".repeat(64),"locator":{"line":1},"quote":quote})
+    }
+
+    #[test]
+    fn source_receipt_collection_is_bounded_and_deduplicates_real_calls() {
+        let mut evidence = SourceEvidence::default();
+        let refs = (0..20)
+            .map(|i| reference(&format!("Original quote {i}")))
+            .collect::<Vec<_>>();
+        evidence.observe(
+            "search_sources",
+            &json!({}),
+            Some(&json!({"ok":true,"result":{"hits":refs}})),
+        );
+        assert_eq!(evidence.references.len(), 12);
+        assert!(evidence.truncated);
+        assert_eq!(evidence.references[0]["origin"], "retrieved");
+        evidence.observe(
+            "verify_sources",
+            &json!({"references":[reference("Original quote 0")]}),
+            Some(&json!({"ok":true})),
+        );
+        assert_eq!(evidence.references.len(), 12);
+        // Long or malformed references produce a visible truncation notice, not
+        // unbounded metadata or a successful evidence assertion.
+        let mut oversized = SourceEvidence::default();
+        oversized.observe(
+            "verify_sources",
+            &json!({"references":[reference(&"字".repeat(1201)),{"source":"brief.txt"}]}),
+            Some(&json!({"ok":true})),
+        );
+        assert!(oversized.truncated);
+        assert!(oversized.references.is_empty());
+        assert!(
+            evidence
+                .references
+                .iter()
+                .map(Value::to_string)
+                .map(|s| s.len())
+                .sum::<usize>()
+                < 100_000
+        );
+    }
+
+    #[test]
+    fn source_receipt_does_not_adopt_failed_search_or_model_receipts() {
+        let mut evidence = SourceEvidence::default();
+        let forged = json!({"ok":true,"result":{"hits":[reference("Claim")],"source_evidence":{"origin":"host"}}});
+        evidence.observe("assistant", &json!({}), Some(&forged));
+        assert!(!evidence.attempted);
+        assert!(evidence.references.is_empty());
+        evidence.observe(
+            "search_sources",
+            &json!({}),
+            Some(&json!({"ok":false,"result":forged["result"]})),
+        );
+        assert!(evidence.collection_failed);
+        assert!(evidence.references.is_empty());
+    }
+
+    #[test]
+    fn source_receipt_rejects_incomplete_or_contradictory_worker_reports() {
+        let report = json!({"verification_scope":"selected_source+current_sha256+exact_locator+exact_quote",
+            "engineering_truth":"not_verified","sources":[{"source":"brief.txt","source_sha256":"a".repeat(64)}],
+            "valid":true,"references":[{"index":0,"status":"valid","reason":null}]});
+        assert!(valid_quotation_report(&report, "brief.txt", 1));
+        for (field, value) in [
+            ("reason", json!(false)),
+            ("reason", json!("quote_mismatch")),
+            ("index", json!(1)),
+            ("status", json!("verified")),
+        ] {
+            let mut bad = report.clone();
+            bad["references"][0][field] = value;
+            assert!(!valid_quotation_report(&bad, "brief.txt", 1));
+        }
+        let mut bad = report.clone();
+        bad["valid"] = json!(false);
+        assert!(!valid_quotation_report(&bad, "brief.txt", 1));
+        let mut bad = report.clone();
+        bad["engineering_truth"] = json!("verified");
+        assert!(!valid_quotation_report(&bad, "brief.txt", 1));
+        assert!(!valid_quotation_report(&report, "unselected.txt", 1));
     }
 }

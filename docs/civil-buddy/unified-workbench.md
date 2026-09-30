@@ -11,6 +11,12 @@ cargo build --release --manifest-path workbench/Cargo.toml
 python scripts/start_unified_workbench.py --python .venv/Scripts/python.exe --env-file demo/.env --open
 ```
 
+Add `--check` before first launch to inspect the selected Python version, required package metadata,
+Rust executable, port and directory configuration. It does not start the product, load provider configuration
+or create project/state files. Optional package discovery reports unavailable capabilities without blocking
+base startup; it does not prove native libraries or speech models can run. Both services and document workers
+use the same resolved interpreter, including when `--python python` is found through PATH.
+
 The launcher binds both services to loopback, starts `/static/agent.html`, and stops both on Ctrl+C. `--state-root` isolates task history/domain records. `--binary` selects an already built executable. It refuses a second launcher using the same state directory. Source workspaces are opened explicitly in the page; only selected files enter a model task. New copies are saved beneath that workspace's `.civil-buddy/out`.
 
 The default view offers a model-free structural check and a model task. Configure the model in the page or through environment variables. A model task with `read-only` cannot apply a document patch. `workspace-write` permits new draft copies; original files cannot be replaced.
@@ -52,10 +58,21 @@ provenance verification. The legacy Python reply guard is a separate implementat
 - Fixed Python workers establish the requested OS sandbox before reading their request. The default `CIVIL_WORKER_SANDBOX=os` fails closed. Explicit `app` is a diagnostic/application-policy mode and must never be reported as OS isolation.
 - On Windows, the existing Low Integrity/Job backend restricts writes/spawn. It does not claim kernel read or network confinement; the UI records the actual process probe.
 - RAG uses selected-source SQLite FTS5/BM25 with original hashes and exact locators. Verification re-extracts the current original, not the derived index. This proves quotation identity, not engineering truth.
+- Ordinary model tasks collect source quotes from this turn's actual main/child tool calls. Before completion,
+  the host rechecks up to 12 quotes against the selected originals and displays their locator, original/current
+  hash and check time. Changed, unavailable, invalid and timed-out sources remain visible. These are source
+  identity receipts at the stated time, not proof that every model sentence is supported; model-written prose
+  cannot create a verified card. Original quotations are preserved when switching the interface language.
 - Document patches require matching original hashes, expected old values and a successful identical preview. The returned preview_id can apply the cached patch without asking the model to reproduce it. Added numbers need preserved original values, explicit user input or verified source quotations. Saved files remain model proposals.
 - PDF body rewriting/OCR, Office visual rendering and spreadsheet formula recalculation are not provided by this worker. Results report these limitations explicitly.
 
-The product's ordinary tests use scripted local models. `scripts/unified_acceptance.py --live` is separate opt-in acceptance against an already configured local server; it never reads or writes API keys.
+The product's ordinary tests use scripted local models. `scripts/unified_acceptance.py --live` is separate
+opt-in acceptance against an already configured local server. It requires `--expected-model` and
+`--expected-provider-host`, matching safe host-only capabilities and refusing scripted model names.
+`--token-file` reads a local workbench login token kept outside the fixture/report directories; it does not
+read provider keys. It refuses HTTP redirects, verifies originals even after failure, and waits a bounded
+grace period after cancellation. If shutdown cannot be observed, it reports that uncertainty. Usage and
+response-model receipts are product reports, not independent provider attestation or a monetary spending cap.
 
 ## Engineering, speech and distribution
 

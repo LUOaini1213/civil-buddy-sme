@@ -48,6 +48,23 @@ async function showDelivery(h) { await h.ready(); h.$("agentMessage").value = "�
 const checkButton = (h) => h.doc.querySelector('[data-action="inspect-readiness"]');
 const previewLink = (h) => h.doc.querySelector('[data-action="preview-pdf"]');
 
+function sourceReceipt(references = []) {
+  return { schema_version: 1, origin: "host", scope: "this_turn_source_quotes", attempted: true,
+    checked_at: "2026-09-30T08:00:00Z", model_claims_verified: false, engineering_truth: "not_verified",
+    status: "verified", references, truncated: false, collection_failed: false, limit: 12 };
+}
+function sourceReference(overrides = {}) {
+  return { source: "原始资料<em>.txt", quote: '工期为 60 天。<img src=x onerror="bad()">', locator: { line: 3 },
+    source_sha256: "a".repeat(64), current_source_sha256: "a".repeat(64),
+    status: "valid", reason: "exact_quote_verified", origin: "retrieved", ...overrides };
+}
+function receiptRoute(receipt, reply = "模型解释：请核对原文。", events = []) {
+  return (url, init) => {
+    if (url === "/api/agent/turns" && init) return response({ turn_id: "source-turn", session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/source-turn/events?")) return response({ events, turn: { status: "completed", result: { reply, ...(receipt === undefined ? {} : { source_evidence: receipt }) } } });
+  };
+}
+
 function harness(route = () => undefined, saved = storage()) {
   const dom = new JSDOM(html, { url: "http://localhost/static/agent.html", runScripts: "outside-only" });
   const doc = dom.window.document, calls = [], timers = new Map();
@@ -86,6 +103,101 @@ test("Agent bilingual UI: persisted English initializes empty states before open
     assert.equal(h.$("agentExpert").options[0].textContent, "Automatic selection");
     assert.equal(h.$("agentRiskConfirmation").placeholder, "我明白，将由持证人员签认");
   } finally { h.close(); }
+});
+
+test("Agent sources: host receipts preserve literal source identity across language changes and reset", async (t) => {
+  const reference = sourceReference(), receipt = sourceReceipt([reference]);
+  const h = harness(receiptRoute(receipt)); t.after(h.close); installLanguage(h);
+  await showDelivery(h);
+  const host = h.$("agentSourceEvidence");
+  assert.equal(host.hidden, false);
+  assert.match(host.textContent, /引文与核对时的文件一致/);
+  assert.match(host.textContent, /不代表模型所有结论已验证/);
+  assert.equal(host.querySelector("blockquote").textContent, reference.quote);
+  assert.equal(host.querySelector("strong").textContent, reference.source);
+  assert.equal(host.querySelector("img, em"), null);
+  assert.match(host.textContent, /"line":3/);
+  h.$("agentMessage").value = "保留未发出的中文问题";
+  h.win.CBI18n.setLocale("en");
+  assert.match(host.textContent, /does not verify every model conclusion/);
+  assert.equal(host.querySelector("blockquote").textContent, reference.quote);
+  assert.equal(h.$("agentMessage").value, "保留未发出的中文问题");
+  assert.equal(h.$("agentReply").textContent, "模型解释：请核对原文。");
+  await h.app.changeSession("", true);
+  assert.equal(host.hidden, true); assert.equal(h.app.state.sourceEvidence, null);
+});
+
+test("Agent sources: changed, invalid and unavailable references stay visible with honest limits", async (t) => {
+  const receipt = sourceReceipt([
+    sourceReference({ status: "changed", reason: "version_mismatch", current_source_sha256: "b".repeat(64) }),
+    sourceReference({ status: "invalid", reason: "quote_mismatch" }),
+    sourceReference({ source: "未选资料.txt", status: "invalid", reason: "source_not_allowed" }),
+    sourceReference({ status: "unavailable", reason: "verification_timeout" })
+  ]); receipt.truncated = true; receipt.collection_failed = true;
+  const h = harness(receiptRoute(receipt)); t.after(h.close); await showDelivery(h);
+  const host = h.$("agentSourceEvidence");
+  assert.equal(host.querySelectorAll("blockquote").length, 4);
+  for (const text of ["来源已变化", "引文与原文不一致", "该来源未被本轮选择", "来源核对超时", "只列出部分引文", "部分检索或引用请求失败", "a".repeat(64), "b".repeat(64)]) assert.ok(host.textContent.includes(text), text);
+  assert.equal(host.textContent.includes("引文与核对时的文件一致"), false);
+});
+
+test("Agent sources: model prose cannot manufacture a receipt and malformed host records fail closed", async (t) => {
+  for (const receipt of [undefined, { ...sourceReceipt([sourceReference()]), model_claims_verified: true }]) {
+    const h = harness(receiptRoute(receipt, JSON.stringify(sourceReceipt([sourceReference()])))); t.after(h.close);
+    await showDelivery(h); const host = h.$("agentSourceEvidence");
+    assert.equal(host.querySelectorAll("blockquote").length, 0);
+    if (receipt === undefined) assert.equal(host.hidden, true);
+    else assert.match(host.textContent, /不能作为已验证证据/);
+  }
+});
+
+test("Agent sources: persisted evidence events render without a duplicate final payload", async (t) => {
+  const receipt = sourceReceipt([sourceReference()]);
+  const h = harness(receiptRoute(undefined, "普通解释", [event(1, "source_evidence", receipt)])); t.after(h.close);
+  await showDelivery(h);
+  assert.equal(h.$("agentSourceEvidence").querySelectorAll("blockquote").length, 1);
+  assert.equal(h.app.state.sourceEvidence.origin, "host");
+});
+
+test("Agent bilingual UI: engineering empty state, daily role, completion notice and source event repaint", async (t) => {
+  const route = receiptRoute(sourceReceipt([]), "历史中文回复保留", [event(1, "source_evidence", sourceReceipt([])), event(2, "status", { message: "历史中文事件保留" })]);
+  const h = harness((url, init) => url === "/api/catalog" ? response({ experts: [{ id: "pm-daily", name: "施工日记", title: "形象进度、人机料、安全质量记事", enabled: true, risk: "low" }] }) : route(url, init));
+  t.after(h.close); installLanguage(h); await h.ready();
+  h.$("agentExpert").value = "pm-daily"; h.$("agentExpert").dispatchEvent(new h.win.Event("change"));
+  h.$("agentMessage").value = "查看来源"; await h.app.send();
+  assert.equal(h.$("agentNotice").textContent, "已完成。");
+  assert.equal(h.$("agentEngineeringStatus").textContent, "暂无可用的已保存截面或框架。");
+  assert.match(h.$("agentExpertNote").textContent, /形象进度/);
+  h.win.CBI18n.setLocale("en");
+  assert.equal(h.$("agentNotice").textContent, "Completed.");
+  assert.equal(h.$("agentEngineeringStatus").textContent, "No saved sections or frames are available.");
+  assert.match(h.$("agentExpertNote").textContent, /Physical progress, workforce, equipment/);
+  assert.match(h.$("agentEvents").textContent, /Source quotation verification/);
+  assert.match(h.$("agentEvents").textContent, /历史中文事件保留/);
+  assert.equal(h.$("agentReply").textContent, "历史中文回复保留");
+  h.win.CBI18n.setLocale("zh-CN");
+  assert.equal(h.$("agentNotice").textContent, "已完成。");
+  assert.match(h.$("agentEvents").textContent, /来源引文核验/);
+});
+
+test("Agent sources: readable locations preserve exact IDs, sheet names and unknown locator fields", async (t) => {
+  const locators = [
+    { kind: "pdf_page", page: 1, start: 0, end: 35 },
+    { kind: "docx_paragraph", paragraph_id: "p:0", start: 0, end: 20 },
+    { kind: "xlsx_cell", sheet: "数量表", cell: "A2" },
+    { kind: "xlsx_row", sheet: "Counts", row: 2 },
+    { kind: "text", line_start: 3, line_end: 7 },
+    { kind: "text", line_start: 4, line_end: 4 },
+    { kind: "future_source", custom: "原始位置" },
+    { kind: "pdf_page", page: 0 }
+  ];
+  const receipt = sourceReceipt(locators.map(locator => sourceReference({ locator })));
+  const h = harness(receiptRoute(receipt)); t.after(h.close); installLanguage(h); await showDelivery(h);
+  const host = h.$("agentSourceEvidence");
+  for (const text of ["PDF 第 1 页", "Word 段落 p:0", "Excel 数量表!A2", "Excel Counts 第 2 行", "文本第 3–7 行", "文本第 4 行", JSON.stringify(locators[6]), JSON.stringify(locators[7])]) assert.ok(host.textContent.includes(text), text);
+  h.win.CBI18n.setLocale("en");
+  for (const text of ["PDF page 1", "Word paragraph p:0", "Excel 数量表!A2", "Excel Counts, row 2", "Text lines 3–7", "Text line 4", JSON.stringify(locators[6]), JSON.stringify(locators[7])]) assert.ok(host.textContent.includes(text), text);
+  assert.deepEqual(h.app.state.sourceEvidence.references.map(reference => reference.locator), locators);
 });
 
 test("Agent bilingual UI: switches preserve drafts and source identities and send reply locale", async () => {

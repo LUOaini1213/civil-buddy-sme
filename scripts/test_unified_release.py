@@ -79,7 +79,7 @@ class UnifiedReleaseTests(unittest.TestCase):
                              "frontend/index.html", "frontend/manifest.webmanifest", "frontend/icons/cb-icon.svg",
                              "demo/static/project-control.html", "demo/static/project-control.js",
                              "demo/static/project-control.css", "demo/static/i18n-project.js",
-                             "gateway/idempotency.py",
+                             "gateway/idempotency.py", "scripts/workbench_preflight.py",
                              "gateway/pages/demo.html", "examples/facade-demo/facade_itt_doc.md",
                              "start-workbench.bat", "packing_assistant/civil.py", *release.EXTRA]:
                 self.assertIn(expected, names)
@@ -92,6 +92,7 @@ class UnifiedReleaseTests(unittest.TestCase):
             readme = package.read("README.md").decode("utf-8")
             self.assertIn("Python 3.11", readme)
             self.assertIn("--binary bin/civil-workbench.exe", readme)
+            self.assertIn("--check", readme)
             self.assertIn("不会安装全局依赖", readme)
             self.assertIn("不自动安装任何依赖", readme)
             self.assertIn("start-workbench.bat", readme)

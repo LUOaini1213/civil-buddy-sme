@@ -11,7 +11,10 @@ use crate::runtime_core::{
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -31,8 +34,14 @@ pub fn current_turn_confirmation(req: &TurnRequest) -> bool {
 /// Classification comes from a person's explicit post selection, never from a
 /// model's chosen SOP, source document text, or a previous turn.
 pub fn document_write_classification(req: &TurnRequest) -> Value {
-    match crate::catalog::seed().experts.iter().find(|expert| expert.id == req.expert_id) {
-        Some(expert) => json!({"source":"user_selected_post","expert_id":expert.id,"risk":expert.risk}),
+    match crate::catalog::seed()
+        .experts
+        .iter()
+        .find(|expert| expert.id == req.expert_id)
+    {
+        Some(expert) => {
+            json!({"source":"user_selected_post","expert_id":expert.id,"risk":expert.risk})
+        }
         None => json!({"source":"unclassified","expert_id":null,"risk":null}),
     }
 }
@@ -101,23 +110,35 @@ fn claims_document_publication(reply: &str) -> bool {
 /// "do not overwrite the original" does not prohibit saving a new copy.
 fn requests_document_publication(request: &str, selected: bool) -> bool {
     let request = request.replace("能不能", "能否");
-    let clauses: Vec<_> = request.split(['。', '！', '？', '，', ',', ';', '；', '\n']).collect();
+    let clauses: Vec<_> = request
+        .split(['。', '！', '？', '，', ',', ';', '；', '\n'])
+        .collect();
     let no_write = regex::Regex::new(r"(?i)(?:不要|不用|不需要|不必|先别|暂不|不得|不能|禁止|不)[^，。;；\n]{0,8}(?:保存|写盘|写入|导出)|\b(?:do\s+not|don't|without|never)\s+(?:save|saving|write|writing|export|exporting|publish|publishing)\b|仅预览|只预览|先展示差异|\bpreview\s+only\b").unwrap();
     let original_only = regex::Regex::new(r"(?i)原件|原文件|\b(?:source|original)\b").unwrap();
-    if clauses.iter().any(|clause| no_write.is_match(clause) && !original_only.is_match(clause)) {
+    if clauses
+        .iter()
+        .any(|clause| no_write.is_match(clause) && !original_only.is_match(clause))
+    {
         return false;
     }
-    let publication = regex::Regex::new(r"(?i)保存|另存|导出|写入|写盘|\b(?:save|export|apply|publish)\b").unwrap();
+    let publication =
+        regex::Regex::new(r"(?i)保存|另存|导出|写入|写盘|\b(?:save|export|apply|publish)\b")
+            .unwrap();
     let edit = regex::Regex::new(r"(?i)修改|更改|改成|改为|改好|改一下|修复|修正|换成|设为|设置为|替换|调整|删除|插入|新增|添加|更新|重排|填写|填入|批注|\b(?:edit|modify|change|replace|update|revise|rewrite|reorder|fill|annotate|add|remove|delete|insert)\b").unwrap();
     // "correct" can describe a value, and "fix" can name a proposed solution.
     // These new verbs require an imperative or an explicit request prefix.
     let repair_command = regex::Regex::new(r"(?i)(?:^\s*(?:please\s+)?|\b(?:please|can\s+you|could\s+you|would\s+you|will\s+you|help\s+(?:me|us)(?:\s+to)?)\s+)(?:fix|correct)\b|\b(?:and|then)\s+(?:fix|correct)\s+(?:the|this|that|these|those|a|an|my|our|your|its|all)\b").unwrap();
-    let create = regex::Regex::new(r"(?i)生成|创建|制作|新建|编写|写一|写份|\b(?:create|generate|produce|make|write|draft)\b").unwrap();
+    let create = regex::Regex::new(
+        r"(?i)生成|创建|制作|新建|编写|写一|写份|\b(?:create|generate|produce|make|write|draft)\b",
+    )
+    .unwrap();
     let document = regex::Regex::new(r"(?i)报告|文档|文件|附件|表格|台账|模型|\.docx\b|\.xlsx\b|\.pdf\b|\.glb\b|\b(?:report|document|file|attachment|spreadsheet|workbook|model|pdf|docx|xlsx)s?\b").unwrap();
     let explanation = regex::Regex::new(r"(?i)如何|怎么|为什么|为何|解释|讲解|是什么|什么意思|哪些|是否|是不是|区别|原理|示例|总结|汇总|不要|不用|不需要|不必|先别|暂不|禁止|不能|不(?:修改|更改|改动|改好|改一下|修复|修正|替换|更新|调整|删除|插入|写入|保存|生成)|\b(?:how|why|explain|describe|example|summarize|without|not|don't|never)\b").unwrap();
     clauses.iter().any(|clause| {
         !explanation.is_match(clause)
-            && (publication.is_match(clause) || ((selected || document.is_match(clause)) && (edit.is_match(clause) || repair_command.is_match(clause)))
+            && (publication.is_match(clause)
+                || ((selected || document.is_match(clause))
+                    && (edit.is_match(clause) || repair_command.is_match(clause)))
                 || (create.is_match(clause) && document.is_match(clause)))
     })
 }
@@ -126,31 +147,52 @@ fn requests_document_publication(request: &str, selected: bool) -> bool {
 /// evidence that a file exists or that every action in a free-form request was
 /// completed. Report only the exact saved copies and source hashes; the full
 /// old/new values remain in their deterministic tool events.
-fn publication_report(artifacts: &[Value], pending_previews: usize, tool_errors: usize, locale: &str) -> String {
+fn publication_report(
+    artifacts: &[Value],
+    pending_previews: usize,
+    tool_errors: usize,
+    locale: &str,
+) -> String {
     if locale == "en" {
         let mut lines = if artifacts.is_empty() {
             vec!["No new document was saved and registered in this turn. No file change or export is confirmed complete.".to_owned()]
         } else {
-            let mut lines = vec![format!("Saved and registered {} new copies in this turn:", artifacts.len())];
+            let mut lines = vec![format!(
+                "Saved and registered {} new copies in this turn:",
+                artifacts.len()
+            )];
             for artifact in artifacts {
-                lines.push(format!("- {}; source: {}; original SHA-256: {}; copy SHA-256: {}.",
+                lines.push(format!(
+                    "- {}; source: {}; original SHA-256: {}; copy SHA-256: {}.",
                     artifact["name"].as_str().unwrap_or("Unnamed copy"),
                     artifact["source"].as_str().unwrap_or("Not provided"),
                     artifact["source_sha256"].as_str().unwrap_or("Not provided"),
-                    artifact["output_sha256"].as_str().unwrap_or("Not provided")));
+                    artifact["output_sha256"].as_str().unwrap_or("Not provided")
+                ));
             }
             lines.push("See the tool records for before/after values and source evidence. Originals are preserved. Excel recalculation and visual rendering were not performed. These drafts do not replace professional sign-off.".into());
             lines
         };
-        if pending_previews > 0 { lines.push(format!("{pending_previews} previewed changes have not been saved.")); }
-        if tool_errors > 0 { lines.push(format!("{tool_errors} tool calls failed. See their records for details.")); }
+        if pending_previews > 0 {
+            lines.push(format!(
+                "{pending_previews} previewed changes have not been saved."
+            ));
+        }
+        if tool_errors > 0 {
+            lines.push(format!(
+                "{tool_errors} tool calls failed. See their records for details."
+            ));
+        }
         lines.push("This confirms only the results recorded by tools in this turn; it does not establish that every requested action is complete.".into());
         return lines.join("\n");
     }
     let mut lines = if artifacts.is_empty() {
         vec!["本轮没有成功保存并登记的新文档；未确认任何文件修改或导出完成。".to_owned()]
     } else {
-        let mut lines = vec![format!("本轮实际保存并登记了 {} 份新副本：", artifacts.len())];
+        let mut lines = vec![format!(
+            "本轮实际保存并登记了 {} 份新副本：",
+            artifacts.len()
+        )];
         for artifact in artifacts {
             lines.push(format!(
                 "- {}；来源：{}；原件 SHA-256：{}；副本 SHA-256：{}。",
@@ -164,7 +206,9 @@ fn publication_report(artifacts: &[Value], pending_previews: usize, tool_errors:
         lines
     };
     if pending_previews > 0 {
-        lines.push(format!("仍有 {pending_previews} 项已预览的修改未成功保存。"));
+        lines.push(format!(
+            "仍有 {pending_previews} 项已预览的修改未成功保存。"
+        ));
     }
     if tool_errors > 0 {
         lines.push(format!("本轮有 {tool_errors} 次工具失败，原因见工具记录。"));
@@ -182,7 +226,9 @@ fn language_instruction(locale: &str) -> &'static str {
 }
 
 fn runtime_text<'a>(locale: &str, text: &'a str) -> &'a str {
-    if locale != "en" { return text; }
+    if locale != "en" {
+        return text;
+    }
     match text {
         "任务已登记" => "Task registered",
         "模型正在处理资料与工具结果" => "The model is reviewing source material and tool results",
@@ -338,9 +384,7 @@ async fn execute(
             findings.push(result);
         }
         let partial = findings.iter().any(|v| v["ok"] == false);
-        return Ok(
-            json!({"reply":inspection_reply(req),"findings":findings,"partial":partial}),
-        );
+        return Ok(json!({"reply":inspection_reply(req),"findings":findings,"partial":partial}));
     }
     let session = SessionId::parse(&req.session_id).map_err(|e| e.to_string())?;
     let recent = state
@@ -397,9 +441,12 @@ async fn execute(
     let mut inspected = HashSet::new();
     let mut tool_errors = 0;
     let mut child_count = 0;
-    let high_risk = AtomicBool::new(selected_skill
-        .as_ref()
-        .is_some_and(|skill| skill["risk"] == "high"));
+    let source_evidence = Mutex::new(tools::SourceEvidence::default());
+    let high_risk = AtomicBool::new(
+        selected_skill
+            .as_ref()
+            .is_some_and(|skill| skill["risk"] == "high"),
+    );
     let jev = providers::JevConfig::from_env();
     let mut decision_attempted = false;
     let cfg = crate::config::llm_config();
@@ -481,15 +528,29 @@ async fn execute(
                 result["notice"].as_str().unwrap_or("")
             );
             let publication_claim = claims_document_publication(&guarded);
-            let publication_response = requested_publication || publication_attempted || !artifacts.is_empty() || publication_claim;
-            let pending_previews = latest_previews.values().filter(|key| !published_previews.contains(*key)).count();
+            let publication_response = requested_publication
+                || publication_attempted
+                || !artifacts.is_empty()
+                || publication_claim;
+            let pending_previews = latest_previews
+                .values()
+                .filter(|key| !published_previews.contains(*key))
+                .count();
             let reply = if publication_response {
                 publication_report(artifacts, pending_previews, tool_errors, &req.locale)
             } else {
                 guarded
             };
-            let incomplete_publication = publication_response && (artifacts.is_empty() || pending_previews>0);
+            let incomplete_publication =
+                publication_response && (artifacts.is_empty() || pending_previews > 0);
+            let gathered = source_evidence
+                .lock()
+                .map_err(|_| "source evidence lock failed")?
+                .clone();
+            let evidence = gathered.verify(&scope).await;
+            emit(lease, "source_evidence", evidence.clone())?;
             return Ok(json!({"reply":reply,
+                "source_evidence":evidence,
                 "partial":tool_errors>0 || incomplete_publication,
                 "tool_errors":tool_errors,"verdict_guard":result["found"],
                 "execution_evidence":{"scope":"this_turn_tool_receipts","successful_tools":successful_tools,
@@ -508,12 +569,20 @@ async fn execute(
         if calls.iter().any(|call| {
             let Ok(args) = serde_json::from_str::<Value>(
                 call["function"]["arguments"].as_str().unwrap_or("{}"),
-            ) else { return false; };
+            ) else {
+                return false;
+            };
             match call["function"]["name"].as_str() {
-                Some("load_skill") => crate::catalog::seed().experts.iter().any(|expert|
-                    args["skill_id"] == expert.id && expert.risk == "high"),
-                Some("engineering_analyze") => args.as_object().is_some_and(|object| object.len() == 1)
-                    && args["selection_index"].as_u64().is_some_and(|index| index < req.engineering.len() as u64),
+                Some("load_skill") => crate::catalog::seed()
+                    .experts
+                    .iter()
+                    .any(|expert| args["skill_id"] == expert.id && expert.risk == "high"),
+                Some("engineering_analyze") => {
+                    args.as_object().is_some_and(|object| object.len() == 1)
+                        && args["selection_index"]
+                            .as_u64()
+                            .is_some_and(|index| index < req.engineering.len() as u64)
+                }
                 _ => false,
             }
         }) {
@@ -560,11 +629,29 @@ async fn execute(
                                 Err("最多累计4个子任务".into())
                             } else {
                                 child_count += tasks.len();
-                                let first = child(state, ws, req, lease, budget, &high_risk, tasks[0].clone());
+                                let first = child(
+                                    state,
+                                    ws,
+                                    req,
+                                    lease,
+                                    budget,
+                                    &high_risk,
+                                    &source_evidence,
+                                    tasks[0].clone(),
+                                );
                                 let results = if tasks.len() == 2 {
                                     let (a, b) = tokio::join!(
                                         first,
-                                        child(state, ws, req, lease, budget, &high_risk, tasks[1].clone())
+                                        child(
+                                            state,
+                                            ws,
+                                            req,
+                                            lease,
+                                            budget,
+                                            &high_risk,
+                                            &source_evidence,
+                                            tasks[1].clone()
+                                        )
                                     );
                                     vec![a, b]
                                 } else {
@@ -599,11 +686,18 @@ async fn execute(
                         let key = tools::sha256(args.to_string().as_bytes());
                         let source = args["source"].as_str().unwrap_or("");
                         let write_error = (name == "apply_document")
-                            .then(|| document_write_gate(req, high_risk.load(Ordering::Relaxed)).err()).flatten();
+                            .then(|| {
+                                document_write_gate(req, high_risk.load(Ordering::Relaxed)).err()
+                            })
+                            .flatten();
                         if let Some(message) = write_error {
-                            emit(lease, "authorization", json!({"document_write_classification":document_write_classification(req),
+                            emit(
+                                lease,
+                                "authorization",
+                                json!({"document_write_classification":document_write_classification(req),
                                 "risk_escalated":high_risk.load(Ordering::Relaxed),"risk_confirmation_present":signed,"professional_signoff":false,
-                                "document_write_allowed":false,"reason":if req.expert_id.is_empty(){"post_selection_required"}else{"current_turn_confirmation_required"}}))?;
+                                "document_write_allowed":false,"reason":if req.expert_id.is_empty(){"post_selection_required"}else{"current_turn_confirmation_required"}}),
+                            )?;
                             Err(message.into())
                         } else if name == "apply_document"
                             && (!previews.contains_key(&key) || !inspected.contains(source))
@@ -615,8 +709,13 @@ async fn execute(
                             let call_id = (name == "apply_document").then(|| {
                                 super::worker::document_call_id(lease.turn_id().as_str(), &key)
                             });
-                            let mut response =
-                                scope.execute_as(name, args.clone(), call_id.as_deref()).await;
+                            let mut response = scope
+                                .execute_as(name, args.clone(), call_id.as_deref())
+                                .await;
+                            source_evidence
+                                .lock()
+                                .map_err(|_| "source evidence lock failed")?
+                                .observe(name, &args, response.as_ref().ok());
                             if let Ok(value) = &mut response {
                                 if name == "load_skill" && value["risk"] == "high" {
                                     high_risk.store(true, Ordering::Relaxed);
@@ -700,7 +799,7 @@ async fn execute(
                             && child_count < 4
                         {
                             child_count += 1;
-                            value["review_task"]=child(state,ws,req,lease,budget,&high_risk,json!({"role":"review","goal":"核对已选原始资料中的要求、数量及范围是否存在冲突。逐项提供来源、hash、定位和引文，只读，不做工程合格结论。"})).await;
+                            value["review_task"]=child(state,ws,req,lease,budget,&high_risk,&source_evidence,json!({"role":"review","goal":"核对已选原始资料中的要求、数量及范围是否存在冲突。逐项提供来源、hash、定位和引文，只读，不做工程合格结论。"})).await;
                             decision["applied"] = json!(true);
                             decision["action"] = json!("read_only_review_subtask");
                         }
@@ -740,6 +839,7 @@ async fn child(
     lease: &TurnLease,
     budget: &BudgetTree,
     high_risk: &AtomicBool,
+    source_evidence: &Mutex<tools::SourceEvidence>,
     spec: Value,
 ) -> Value {
     let task = TaskId::new();
@@ -757,7 +857,20 @@ async fn child(
         json!({"task_id":task,"role":role,"goal":goal}),
     );
     let token = lease.cancellation().child();
-    let result = child_loop(state, ws, req, lease, budget, high_risk, &task, &token, role, goal).await;
+    let result = child_loop(
+        state,
+        ws,
+        req,
+        lease,
+        budget,
+        high_risk,
+        source_evidence,
+        &task,
+        &token,
+        role,
+        goal,
+    )
+    .await;
     let result = match result {
         Ok(findings) => {
             json!({"task_id":task,"role":role,"status":"completed","findings":findings,"trust":"assistant_claimed"})
@@ -777,6 +890,7 @@ async fn child_loop(
     lease: &TurnLease,
     budget: &BudgetTree,
     high_risk: &AtomicBool,
+    source_evidence: &Mutex<tools::SourceEvidence>,
     task: &TaskId,
     cancel: &CancellationToken,
     role: &str,
@@ -846,12 +960,16 @@ async fn child_loop(
             let allowed = definitions.iter().any(|t| t["function"]["name"] == name);
             let result = if allowed {
                 scope
-                    .execute(name, args)
+                    .execute(name, args.clone())
                     .await
                     .unwrap_or_else(|e| json!({"ok":false,"error":e}))
             } else {
                 json!({"ok":false,"error":"tool denied for child role"})
             };
+            source_evidence
+                .lock()
+                .map_err(|_| "source evidence lock failed")?
+                .observe(name, &args, Some(&result));
             if name == "load_skill" && result["risk"] == "high" {
                 // This is a host tool receipt, not a child's textual claim.
                 // A failed/aborted child must not erase an observed risk.
@@ -883,13 +1001,16 @@ mod publication_tests {
         assert!(!current_turn_confirmation(&req));
         assert!(language_instruction(&req.locale).contains("Respond in English"));
         assert!(language_instruction(&req.locale).contains("not permission to translate"));
-        let artifacts = vec![json!({"name":"检查表-副本.xlsx","source":"检查表.xlsx","source_sha256":"abc123","output_sha256":"def456"})];
+        let artifacts = vec![
+            json!({"name":"检查表-副本.xlsx","source":"检查表.xlsx","source_sha256":"abc123","output_sha256":"def456"}),
+        ];
         let receipt = publication_report(&artifacts, 1, 2, "en");
         assert!(receipt.contains("检查表-副本.xlsx"));
         assert!(receipt.contains("original SHA-256: abc123"));
         assert!(receipt.contains("1 previewed changes have not been saved"));
         assert!(receipt.contains("2 tool calls failed"));
-        assert!(publication_report(&[], 0, 0, "en").contains("No file change or export is confirmed complete"));
+        assert!(publication_report(&[], 0, 0, "en")
+            .contains("No file change or export is confirmed complete"));
         req.risk_confirmation = "我明白，将由持证人员签认".into();
         assert!(current_turn_confirmation(&req));
     }
@@ -904,7 +1025,12 @@ mod publication_tests {
         ] {
             assert!(requests_document_publication(request, true), "{request}");
         }
-        for request in ["帮我生成一份报告", "Create a report.docx", "能不能制作一份表格", "把 report.docx 的标题改成 X。"] {
+        for request in [
+            "帮我生成一份报告",
+            "Create a report.docx",
+            "能不能制作一份表格",
+            "把 report.docx 的标题改成 X。",
+        ] {
             assert!(requests_document_publication(request, false), "{request}");
         }
         for request in [
@@ -932,22 +1058,64 @@ mod publication_tests {
         ] {
             assert!(!claims_document_publication(reply), "{reply}");
         }
-        assert!(claims_document_publication("已将 report.docx 修改并保存为新副本。"));
+        assert!(claims_document_publication(
+            "已将 report.docx 修改并保存为新副本。"
+        ));
         assert!(claims_document_publication("I have saved the report."));
     }
 
     #[test]
     fn repair_wording_respects_execution_explanation_and_negation() {
-        for request in ["把错字改好", "改一下", "修复附件", "修正附件", "Fix the typo in report.docx", "Correct the spreadsheet", "Please fix the file", "Can you correct the spreadsheet?", "Could you fix the file?", "Help me correct the attachment", "Check the file and correct the typo"] {
+        for request in [
+            "把错字改好",
+            "改一下",
+            "修复附件",
+            "修正附件",
+            "Fix the typo in report.docx",
+            "Correct the spreadsheet",
+            "Please fix the file",
+            "Can you correct the spreadsheet?",
+            "Could you fix the file?",
+            "Help me correct the attachment",
+            "Check the file and correct the typo",
+        ] {
             assert!(requests_document_publication(request, true), "{request}");
         }
-        for request in ["不要修复附件，只解释原因", "不修正附件，只看差异", "解释如何修复附件", "解释如何修正附件", "Don't fix the file", "Explain how to correct the spreadsheet", "Explain the attachment", "Is this spreadsheet correct?", "Check whether the totals are correct.", "What is the fix for this file?", "Is this spreadsheet complete and correct?", "Check that the totals are complete and correct."] {
+        for request in [
+            "不要修复附件，只解释原因",
+            "不修正附件，只看差异",
+            "解释如何修复附件",
+            "解释如何修正附件",
+            "Don't fix the file",
+            "Explain how to correct the spreadsheet",
+            "Explain the attachment",
+            "Is this spreadsheet correct?",
+            "Check whether the totals are correct.",
+            "What is the fix for this file?",
+            "Is this spreadsheet complete and correct?",
+            "Check that the totals are complete and correct.",
+        ] {
             assert!(!requests_document_publication(request, true), "{request}");
         }
-        for reply in ["已修复报告。", "报告已修正。", "已把报告改好。", "I fixed the document.", "I corrected the document.", "已修复附件。", "I fixed the attachment."] {
+        for reply in [
+            "已修复报告。",
+            "报告已修正。",
+            "已把报告改好。",
+            "I fixed the document.",
+            "I corrected the document.",
+            "已修复附件。",
+            "I fixed the attachment.",
+        ] {
             assert!(claims_document_publication(reply), "{reply}");
         }
-        for reply in ["文件尚未修复成功。", "没有修正报告。", "解释如何修复附件", "I have not fixed the document.", "I haven't corrected the document.", "To fix the file, first make a copy."] {
+        for reply in [
+            "文件尚未修复成功。",
+            "没有修正报告。",
+            "解释如何修复附件",
+            "I have not fixed the document.",
+            "I haven't corrected the document.",
+            "To fix the file, first make a copy.",
+        ] {
             assert!(!claims_document_publication(reply), "{reply}");
         }
     }

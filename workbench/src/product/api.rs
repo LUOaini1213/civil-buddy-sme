@@ -157,15 +157,38 @@ pub fn router(state: Arc<ProductState>) -> Router {
         .merge(super::project_control::router(state))
 }
 
+/// Expose only the configured provider's host, never URL credentials or parameters.
+fn provider_host(base_url: &str) -> Option<String> {
+    let url = reqwest::Url::parse(base_url).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    url.host_str().map(str::to_owned)
+}
+
 async fn capabilities(State(st): State<Arc<ProductState>>) -> Json<Value> {
     let cfg = crate::config::llm_config();
     Json(
-        json!({"available":true,"models":{"configured":!cfg.api_key.is_empty(),"model":cfg.model},
+        json!({"available":true,"models":{"configured":!cfg.api_key.is_empty(),"model":cfg.model,"provider_host":provider_host(&cfg.base_url)},
         "modes":["steps","model"],"sandbox":["read-only","workspace-write"],
         "sandbox_controls":{"policy":true,"os_enforced":null,"network_confined":null,"reads_confined":null,"probe":"workspace_required"},
         "features":{"context":true,"subagents":true,"cancel":true,"documents":true,"retrieval":true,"voice":false},
         "identity":st.auth.capabilities(),"unavailability_reason":null}),
     )
+}
+
+#[cfg(test)]
+mod provider_metadata_tests {
+    use super::provider_host;
+
+    #[test]
+    fn provider_host_never_returns_url_secrets() {
+        assert_eq!(provider_host("https://user:secret@api.example.test:8443/v1?api_key=private#secret"), Some("api.example.test".into()));
+        assert_eq!(provider_host("http://127.0.0.1:18081/v1"), Some("127.0.0.1".into()));
+        for invalid in ["not a url", "file:///private/key", "javascript:secret", ""] {
+            assert_eq!(provider_host(invalid), None);
+        }
+    }
 }
 #[derive(Deserialize)]
 struct Register {

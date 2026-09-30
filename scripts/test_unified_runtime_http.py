@@ -13,6 +13,7 @@ import argparse
 from collections import Counter
 import errno
 from hashlib import sha256
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
 import os
@@ -318,6 +319,86 @@ class Instance:
         return cookie
 
 
+def running_crash_recovery(instance):
+    """Kill only this test's owned Windows process tree while a model request is active."""
+    if os.name != "nt":
+        return {"status": "not_exercised", "reason": "Windows process-tree crash acceptance"}
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    class PendingModel(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 4_000_000:
+                self.send_error(413)
+                return
+            self.rfile.read(length)
+            calls.append(self.path)
+            entered.set()
+            release.wait(60)
+            # The owned client has been killed; this request must never produce a tool call.
+            self.close_connection = True
+
+    pending = ThreadingHTTPServer(("127.0.0.1", 0), PendingModel)
+    worker = threading.Thread(target=pending.serve_forever, daemon=True)
+    worker.start()
+    old_model_port = instance.model_port
+    originals = {name: sha256((instance.workspace / name).read_bytes()).hexdigest()
+                 for name in document_acceptance.FILES}
+    outputs = {str(path.relative_to(instance.workspace)): sha256(path.read_bytes()).hexdigest()
+               for path in (instance.workspace / ".civil-buddy/out").rglob("*") if path.is_file()}
+    try:
+        instance.stop()
+        instance.model_port = pending.server_port
+        instance.start()
+        cookie = instance.login()
+        workspace = json_request(instance.base, "/api/agent/workspaces", {"path": str(instance.workspace)}, cookie=cookie)["workspace"]["id"]
+        session = "crash-" + uuid4().hex
+        started = json_request(instance.base, "/api/agent/turns", {
+            "workspace": workspace, "session_id": session, "message": "Synthetic crash acceptance. Read the selected source; do not write files.",
+            "mode": "model", "sandbox": "read-only", "files": ["requirements.pdf"], "locale": "en"
+        }, cookie=cookie, expected=202)
+        query = "?" + urllib.parse.urlencode({"workspace": workspace, "session_id": session})
+        endpoint = "/api/agent/turns/" + started["turn_id"]
+        require(entered.wait(20), "Synthetic model request was not in flight before crash")
+        before = json_request(instance.base, endpoint + query, cookie=cookie)["turn"]
+        require(before["status"] == "running", "Crash acceptance did not interrupt an active task")
+        killed = subprocess.run(["taskkill", "/PID", str(instance.process.pid), "/T", "/F"],
+                                capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=20)
+        require(killed.returncode == 0, "Could not terminate the owned test process tree")
+        instance.process.wait(timeout=10)
+        instance.log.close()
+        instance.process = None
+        release.set()
+        require(wait_listener_closed(instance.port), "Rust listener survived forced termination")
+        require(wait_listener_closed(instance.domain_port), "Domain listener survived forced termination")
+        instance.start()
+        require(request(instance.base, "/api/agent/capabilities", cookie=cookie)[0] == 401, "Crash restart retained a login cookie")
+        cookie = instance.login()
+        recovered = json_request(instance.base, endpoint + query, cookie=cookie)["turn"]
+        events = json_request(instance.base, endpoint + "/events" + query, cookie=cookie)["events"]
+        require(recovered["status"] == "interrupted" and recovered["result"]["reason"] == "runtime_restart",
+                "Active turn did not recover as interrupted")
+        require(sum(event.get("kind") == "turn.interrupted" for event in events) == 1, "Recovery event was missing or duplicated")
+        require(len(calls) == 1, "Restart silently replayed a model request")
+        after = {name: sha256((instance.workspace / name).read_bytes()).hexdigest() for name in originals}
+        after_outputs = {str(path.relative_to(instance.workspace)): sha256(path.read_bytes()).hexdigest()
+                         for path in (instance.workspace / ".civil-buddy/out").rglob("*") if path.is_file()}
+        require(after == originals and after_outputs == outputs, "Crash/restart changed originals or published copies")
+        return {"status": "passed", "synthetic": True, "turn_id": started["turn_id"], "before": "running", "after": "interrupted",
+                "model_calls": len(calls), "automatic_replay": False, "original_hashes_unchanged": True,
+                "published_copies_unchanged": True, "scope": "Windows forced termination during a pending read-only model request; not a power-loss or mid-write test"}
+    finally:
+        release.set()
+        instance.model_port = old_model_port
+        pending.shutdown()
+        pending.server_close()
+        worker.join(timeout=3)
+
+
 def run(binary, output):
     output.mkdir(parents=True, exist_ok=False)
     report = {"passed": False, "synthetic": True, "cross_computer": False, "real_provider_calls": False,
@@ -370,16 +451,8 @@ def run(binary, output):
         report["legacy_session_bundle"] = legacy_session_handoff(first, cookie, second, second_cookie, output / "legacy-bundle")
         report["checks"]["legacy_session_bundle_handoff"] = True
         second.stop()
-        original_http = document_acceptance.http
-        def authenticated_http(base, path, body=None, *, binary=False, timeout=30):
-            status, _, data = request(base, path, body, token=first.token, timeout=timeout)
-            require(200 <= status < 300, f"Document acceptance {path}: HTTP {status}: {data[:300]!r}")
-            return data if binary else json.loads(data)
-        document_acceptance.http = authenticated_http
-        try:
-            documents = document_acceptance.acceptance(first.base, first.workspace, output / "documents", timeout=240)
-        finally:
-            document_acceptance.http = original_http
+        documents = document_acceptance.acceptance(first.base, first.workspace, output / "documents",
+                                                  timeout=240, token_file=first.token_file)
         require(documents["passed"], f"Scripted document acceptance failed: {documents.get('error') or documents.get('validation')}")
         events = [json.loads(line) for line in (output / "documents/events.jsonl").read_text(encoding="utf-8").splitlines()]
         authorizations = [e["data"] for e in events if e.get("kind", e.get("event")) == "authorization"]
@@ -390,6 +463,7 @@ def run(binary, output):
         report["checks"]["document_agent_originals_copies_actor_usage"] = True
         report["document_report"] = str(output / "documents/report.json")
         report["usage"] = usage
+        report["running_crash_recovery"] = running_crash_recovery(first)
         first.stop()
         report["checks"]["both_processes_stopped"] = True
         report["passed"] = True

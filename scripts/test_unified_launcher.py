@@ -105,8 +105,10 @@ class LauncherTests(unittest.TestCase):
                      "PYTHONPATH": "untrusted-import-path", "CIVIL_DOMAIN_WORKSPACE": "old-ambient-folder"}
         config = {"DEEPSEEK_API_KEY": "fake-config-key", "JEV_API_KEY": "fake-config-jev"}
         output = io.StringIO()
+        selected_python = str(self.root / "environment with spaces" / "python.exe")
         with patch.dict(os.environ, inherited, clear=True), \
-             patch.dict(sys.modules, {"dotenv": SimpleNamespace(dotenv_values=lambda _: config)}), \
+             patch.object(launcher.preflight, "run", return_value=launcher.preflight.Report(python=selected_python, version="3.11.0")), \
+             patch.object(launcher.preflight, "load_environment_file", return_value=config) as load_config, \
              patch.object(launcher, "ROOT", self.root), \
              patch.object(sys, "argv", ["launcher", "--binary", str(binary), "--state-root", str(state), "--env-file", str(self.root / "selected.env")]), \
              patch.object(launcher.subprocess, "Popen", side_effect=popen), \
@@ -118,6 +120,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(len(spawned), 2)
         argv, options, domain = spawned[0]
         self.assertIn("demo.domain_service:app", argv)
+        self.assertEqual(argv[0], selected_python)
         env = options["env"]
         self.assertFalse(any(("KEY" in key.upper() or "TOKEN" in key.upper() or "SECRET" in key.upper()) and key != "CIVIL_DOMAIN_TOKEN" for key in env), sorted(env))
         self.assertGreaterEqual(len(env["CIVIL_DOMAIN_TOKEN"]), 32)
@@ -132,6 +135,8 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(Path(env["PACKING_LG_CHECKPOINT_PATH"]), state / "packing" / "checkpoints.db")
         self.assertEqual(env["PACKING_LLM_AGENT"], "0")
         host_env = spawned[1][1]["env"]
+        self.assertEqual(host_env["CIVIL_PYTHON"], selected_python)
+        self.assertEqual(load_config.call_args.args[0], selected_python)
         self.assertEqual(host_env["DEEPSEEK_API_KEY"], "fake-config-key")
         self.assertEqual(host_env["JEV_API_KEY"], "fake-config-jev")
         self.assertEqual(Path(host_env["CIVIL_STATE_ROOT"]), state)
@@ -160,6 +165,7 @@ class LauncherTests(unittest.TestCase):
             probes.append(request)
             return contextlib.nullcontext(SimpleNamespace(status=200))
         with patch.dict(os.environ, {}, clear=True), patch.object(launcher, "ROOT", self.root), \
+             patch.object(launcher.preflight, "run", return_value=launcher.preflight.Report(python=sys.executable, version="3.11.0")), \
              patch.object(sys, "argv", ["launcher", "--binary", str(binary), "--state-root", str(self.root / "state"),
                     "--user-id", "colleague-a", "--workspace", str(workspace), "--token-file", str(token_file)]), \
              patch.object(launcher.subprocess, "Popen", side_effect=popen), \

@@ -192,6 +192,15 @@ py -3.11 -m venv .venv
 
 ## 统一入口
 
+先检查解释器、必需依赖、可执行文件、端口和目录配置：
+
+```powershell
+& ".\\.venv\\Scripts\\python.exe" scripts/start_unified_workbench.py --binary bin/civil-workbench.exe --python .venv/Scripts/python.exe --state-root runtime/unified --check
+```
+
+`--check` 不启动产品、不访问模型、不创建工程或状态文件；它会运行限时的 Python 依赖探测。
+缺少 CAD、工程、语音等可选依赖只显示能力提示。普通启动也会执行相同的预检。
+
 ```powershell
 & ".\\.venv\\Scripts\\python.exe" scripts/start_unified_workbench.py --binary bin/civil-workbench.exe --python .venv/Scripts/python.exe --state-root runtime/unified --open
 ```
