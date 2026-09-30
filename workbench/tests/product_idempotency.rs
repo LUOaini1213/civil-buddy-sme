@@ -346,7 +346,7 @@ async fn model_applying_one_preview_twice_in_a_turn_publishes_one_draft() {
         .unwrap()
         .to_owned();
     let (status, started) = http(&app, "POST", "/api/agent/turns", None, json!({"workspace":wid,"session_id":"twice",
-        "message":"修改待核查草稿","mode":"model","sandbox":"workspace-write","files":job.selected})).await;
+        "message":"修改待核查草稿","mode":"model","sandbox":"workspace-write","files":job.selected,"expert_id":"pm-daily"})).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{started}");
     let url = format!(
         "/api/agent/turns/{}/events?workspace={wid}&session_id=twice",

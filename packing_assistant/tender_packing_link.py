@@ -1839,13 +1839,16 @@ _VIEW_TEXT = 320
 def link_record_view(record: Dict[str, Any], *, where: str = "") -> Dict[str, Any]:
     """The link record as a read-only tool result: every status, figure and clause text a reply may use, labelled so a
     small model cannot misread one figure for another (the heaviest container's gross mass is not the container's
-    rated payload). Nothing here is computed afresh: it is the record as it was written."""
+    rated payload). Nothing here is computed afresh: it is the record as it was written.
+    A rejected or missing plan supplies no usable count or loaded-container mass;
+    the original refusal and clause evidence remain available for human review."""
     statements = [s for s in record.get("statements") or [] if isinstance(s, dict)]
     plan = record.get("plan") or None
+    plan_available = bool(isinstance(plan, dict) and plan.get("can_fit") is True and not record.get("plan_refusal"))
     decision = record.get("container") or {}
     heaviest = next((dict(s.get("figures") or {}) for s in statements if s.get("kind") == "gross_mass"
-                     and (s.get("figures") or {}).get("max_gross_kg") is not None), None)
-    if heaviest is None and plan and plan.get("can_fit") is True and plan.get("per_container"):
+                     and (s.get("figures") or {}).get("max_gross_kg") is not None), None) if plan_available else None
+    if heaviest is None and plan_available and plan.get("per_container"):
         heaviest = heaviest_container(plan["per_container"], plan.get("container_type") or decision.get("type"))
     if heaviest is not None:
         heaviest = {k: heaviest.get(k) for k in ("heaviest_container_no", "max_cargo_kg", "container_tare_kg", "max_gross_kg",
@@ -1855,8 +1858,9 @@ def link_record_view(record: Dict[str, Any], *, where: str = "") -> Dict[str, An
         "ok": True, "schema": RECORD_VIEW, "record": where or LINK_FILE, "generated_at": record.get("generated_at"),
         "inputs": {role: (record.get("inputs") or {}).get(role, {}).get("name") for role in ("tender", "panel_list")},
         "container_type": decision.get("type"), "container_source": decision.get("source"),
+        "plan_available": plan_available,
         "plan": ({"container_type": plan.get("container_type"), "containers_used": plan.get("containers_used"),
-                  "can_fit": plan.get("can_fit")} if plan else None),
+                  "can_fit": plan.get("can_fit")} if plan_available else None),
         "plan_refusal": record.get("plan_refusal"),
         "heaviest_container": heaviest,
         "labels": {"max_cargo_kg": "panels and crates in the heaviest loaded container, no tare",
@@ -1870,7 +1874,8 @@ def link_record_view(record: Dict[str, Any], *, where: str = "") -> Dict[str, An
         "confirmed_by_person": record.get("confirmed_by_person") is True,
         "submit_blocked": True,
         "rule": ("Statuses, figures and the container type are the record's. Explain them; do not change them. A person "
-                 "confirms every statement before booking or submission."),
+                 "confirms every statement before booking or submission. When plan_available is false, no usable "
+                 "container count or loaded-container mass exists; explain the refusal and original requirements."),
     }
 
 

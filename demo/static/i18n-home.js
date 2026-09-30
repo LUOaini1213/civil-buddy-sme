@@ -1,5 +1,6 @@
 /* Workbench and voice UI vocabulary. Does not translate user sources or saved outputs. */
 window.CBI18n?.add({
+  "登记资料版本、负责人和处理结果，形成内部复核记录": "Track document revisions, owners and resolutions in an internal review record",
   "工作台导航": "Workbench navigation",
   "工作台": "Workbench",
   "装箱拼柜": "Packing",

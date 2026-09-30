@@ -2,7 +2,7 @@ import { createAuth } from "./modules/auth.js";
 
 const STORE_KEY = "cb_agent_workspaces_v1";
 const RISK_PHRASE = "我明白，将由持证人员签认";
-const confirmedMessage = (text) => String(text || "").split(/[\n。;；]/).some((part) => part.trim() === RISK_PHRASE);
+const confirmedMessage = (text) => String(text || "").trim() === RISK_PHRASE;
 const TERMINAL = new Set(["completed", "succeeded", "failed", "cancelled", "interrupted"]);
 const STATUS = { queued: "等待执行", running: "执行中", waiting_approval: "等待确认", cancelling: "正在停止", completed: "已完成", succeeded: "已完成", failed: "未完成", cancelled: "已停止", interrupted: "服务重启时中断" };
 const EVENT_NAMES = { status: "执行阶段", context: "上下文预算", model: "模型调用", tool_started: "工具开始", tool_finished: "工具结束", subtask_started: "子任务开始", subtask_finished: "子任务结束", artifact: "产物已保存", decision: "工程判断", error: "执行错误", done: "本轮结束" };
@@ -13,6 +13,13 @@ const printable = (value) => typeof value === "string" ? value : JSON.stringify(
 const displayPath = (value) => value.startsWith("\\\\?\\UNC\\") ? "\\\\" + value.slice(8) : value.startsWith("\\\\?\\") ? value.slice(4) : value;
 const engineeringKey = (value) => value.kind + ":" + value.project_id;
 const snapshotKey = (value) => JSON.stringify([value.kind, value.project_id, value.revision, value.source_sha256, value.inputs_sha256]);
+const artifactKey = (value) => String(value.id || value.url || value.name || "");
+const artifactVersion = (value) => JSON.stringify([value.id, value.url, value.output_sha256, value.source, value.source_sha256]);
+const HASH = /^[a-f0-9]{64}$/i;
+const READINESS_LABELS = { source_hash: "副本哈希", structure: "文件结构", active_content: "活动内容", external_links: "外部链接",
+  layout: "版式核对", document_fields: "修订与域", formula_cache: "公式缓存", spreadsheet_errors: "错误单元格",
+  recalculation: "公式重算", external_data: "外部数据", engineering_review: "专业核对" };
+const CHECK_STATUS = { pass: "已检查", review_required: "待核对", blocked: "需处理", not_applicable: "不适用" };
 function engineeringSnapshot(data, expected) {
   const value = data?.selection;
   if (!object(value) || engineeringKey(value) !== engineeringKey(expected) || !Number.isSafeInteger(value.revision) || value.revision < 1
@@ -40,8 +47,8 @@ export function createAgentWorkbench(deps) {
   const $ = (id) => doc.getElementById(id);
   const node = (tag, text, cls) => { const n = doc.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
   const state = { capabilities: null, workspace: null, session: "", files: [], selected: new Set(), turn: null,
-    seq: 0, artifacts: new Map(), engineeringResults: new Map(), epoch: 0, workspaceEpoch: 0, fileEpoch: 0, listEpoch: 0,
-    contextData: null, taskRows: [], eventRows: [], modelConfig: null,
+    seq: 0, artifacts: new Map(), artifactChecks: new Map(), engineeringResults: new Map(), epoch: 0, workspaceEpoch: 0, fileEpoch: 0, listEpoch: 0,
+    contextData: null, taskRows: [], eventRows: [], modelConfig: null, writeGateReason: null,
     engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, experts: [],
     opening: false, submitting: false, cancelling: false, modelBusy: false, modelConfigured: false, disposed: false };
   let saved = { lastRoot: "", workspaces: {} }, timer = null, controller = null, started = false;
@@ -64,8 +71,9 @@ export function createAgentWorkbench(deps) {
   const post = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   function stopPolling() { if (timer !== null) unschedule(timer); timer = null; if (controller) controller.abort(); controller = null; }
   function resetView() {
-    stopPolling(); state.epoch += 1; state.listEpoch += 1; state.turn = null; state.seq = 0; state.eventRows = []; state.contextData = null; state.artifacts.clear(); state.engineeringResults.clear();
+    stopPolling(); state.epoch += 1; state.listEpoch += 1; state.turn = null; state.seq = 0; state.eventRows = []; state.contextData = null; state.artifacts.clear(); state.artifactChecks.clear(); state.engineeringResults.clear();
     state.submitting = false; state.cancelling = false;
+    state.writeGateReason = null; paintWriteGate();
     $("agentEvents").replaceChildren(); $("agentArtifacts").replaceChildren(); $("agentReply").textContent = t("结果将显示在这里。");
     if ($("agentEngineeringResults")) { $("agentEngineeringResults").replaceChildren(); $("agentEngineeringResults").hidden = true; }
     $("agentTurnStatus").textContent = t("尚未开始"); $("agentPartial").hidden = true; $("agentUsage").hidden = true;
@@ -90,6 +98,7 @@ export function createAgentWorkbench(deps) {
     $("agentModelSave").disabled = state.modelBusy;
     $("agentRefreshEngineering").disabled = !state.workspace || state.opening || state.submitting || state.engineeringLoading;
     $("agentExpert").disabled = state.submitting;
+    expertNote();
     paintEngineering();
   }
   function paintCapabilities(caps) {
@@ -225,7 +234,15 @@ export function createAgentWorkbench(deps) {
   }
   function expertNote() {
     const expert = state.experts.find((item) => item.id === $("agentExpert").value);
-    $("agentExpertNote").textContent = expert ? (t(expert.title) || t(expert.name)) + (expert.risk === "high" ? t("；该岗位涉及高风险工程内容，服务端会执行签认门禁。") : "") : t("由任务内容选择岗位；服务端决定可用工具和签认要求。");
+    $("agentExpertNote").textContent = expert ? (t(expert.title) || t(expert.name)) + (expert.risk === "high" ? t("；该岗位涉及高风险工程内容，服务端会执行签认门禁。") : "")
+      : $("agentSandbox").value === "workspace-write" ? t("保存副本前请手动选择岗位；仍可读取和预览。") : t("由任务内容选择岗位；服务端决定可用工具和签认要求。");
+  }
+  function paintWriteGate() {
+    const panel = $("agentWriteGateNote"); panel.hidden = !state.writeGateReason;
+    panel.textContent = state.writeGateReason === "post_selection_required"
+      ? t("本次保存请求被拦截。请手动选择对应岗位后重新提交；旧轮确认不会沿用。")
+      : state.writeGateReason === "current_turn_confirmation_required"
+        ? t("本次保存请求被拦截。请手动选择对应高风险岗位，重新输入签认句后提交；旧轮确认不会沿用。") : "";
   }
   async function loadExperts() {
     try {
@@ -242,7 +259,7 @@ export function createAgentWorkbench(deps) {
       for (const expert of state.experts) { const option = node("option", `${t(expert.category_name) || t("岗位")} · ${t(expert.name) || expert.id}`); option.value = expert.id; select.appendChild(option); }
       select.value = selected;
   }
-  async function openWorkspace(path) {
+  async function openWorkspace(path, { expectedId = "", restoreSelection = true, restoreTurn = true } = {}) {
     if (!String(path || "").trim() || state.opening) return;
     cancelVoice();
     clearEngineering();
@@ -252,6 +269,7 @@ export function createAgentWorkbench(deps) {
       const data = await request("/api/agent/workspaces", post({ path: path.trim() }));
       if (!current(epoch) || requestId !== state.workspaceEpoch) return;
       if (!data.workspace || typeof data.workspace.id !== "string" || typeof data.workspace.root !== "string") throw new Error(t("工作区响应缺少标识或路径"));
+      if (expectedId && data.workspace.id !== expectedId) throw new Error(t("工程链接与服务器返回的工程不一致，请从项目页重新打开。"));
       state.workspace = data.workspace;
       $("agentMessage").value = "";
       $("agentRiskConfirmation").value = "";
@@ -262,11 +280,11 @@ export function createAgentWorkbench(deps) {
       saved.workspaces[state.workspace.id] = item;
       state.session = item.sessions.some((s) => s.id === item.current) ? item.current : item.sessions[0].id;
       item.current = state.session;
-      state.selected = new Set(Array.isArray(item.files) ? item.files : []); saved.lastRoot = state.workspace.root; persist();
+      state.selected = new Set(restoreSelection && Array.isArray(item.files) ? item.files : []); saved.lastRoot = state.workspace.root; persist();
       $("agentWorkspacePath").value = displayPath(state.workspace.root); $("agentWorkspaceStatus").textContent = displayPath(state.workspace.root);
       paintSessions(); notice(t("工程文件夹已打开。可勾选资料后开始任务。"));
       await Promise.all([loadFiles(), loadTurns(), loadEngineering()]);
-      if (current(epoch) && sessionRecord()?.turn) await showTurn(sessionRecord().turn);
+      if (restoreTurn && current(epoch) && sessionRecord()?.turn) await showTurn(sessionRecord().turn);
     } catch (error) { if (current(epoch)) notice(t("打开失败：") + error.message, true); }
     finally { if (requestId === state.workspaceEpoch) { state.opening = false; controls(); } }
   }
@@ -308,10 +326,118 @@ export function createAgentWorkbench(deps) {
   }
   function paintArtifact(data) {
     if (!object(data)) return;
-    const key = String(data.id || data.url || data.name || ""); if (!key) return;
-    state.artifacts.set(key, data); const host = $("agentArtifacts"); host.replaceChildren();
-    for (const item of state.artifacts.values()) {
-      const card = node("article", undefined, "artifact");
+    const key = artifactKey(data); if (!key) return;
+    const previous = state.artifacts.get(key);
+    if (previous && artifactVersion(previous) !== artifactVersion(data)) state.artifactChecks.delete(key);
+    state.artifacts.set(key, data); paintArtifacts();
+  }
+  function artifactEndpoint(item, operation) {
+    const url = artifactUrl(item.url, win.location.origin, state.workspace?.id);
+    if (!url || !/^[A-Za-z0-9_-]+$/.test(item.id || "")) return "";
+    const parsed = new URL(url);
+    if (parsed.pathname !== `/api/agent/artifacts/${item.id}`) return "";
+    return parsed.pathname + "/" + operation + "?" + new URLSearchParams({ workspace: state.workspace.id });
+  }
+  function readinessCurrent(scope, key, record) {
+    return current(scope.epoch) && scope.workspaceEpoch === state.workspaceEpoch && scope.workspace === state.workspace?.id
+      && scope.session === state.session && scope.turn === idOf(state.turn) && state.artifactChecks.get(key) === record
+      && state.artifacts.has(key) && artifactVersion(state.artifacts.get(key)) === scope.version;
+  }
+  function validReadiness(result, item) {
+    const report = result?.readiness;
+    return object(result) && HASH.test(item.output_sha256 || "") && result.source_sha256 === item.output_sha256 && result.artifact_id === item.id
+      && ["current", "changed", "unavailable", "not_recorded"].includes(result.original_source_status)
+      && ["docx", "xlsx", "pdf"].includes(result.format) && object(report) && report.schema_version === 1
+      && ["review_required", "blocked"].includes(report.status) && report.automatic_acceptance === false
+      && Array.isArray(report.checks) && report.checks.length <= 100
+      && report.checks.every((check) => object(check) && typeof check.id === "string" && Object.hasOwn(CHECK_STATUS, check.status))
+      && report.checks.some((check) => check.id === "source_hash" && check.status === "pass")
+      && report.checks.some((check) => check.id === "structure" && check.status === "pass")
+      && object(report.format_details) && object(report.preview);
+  }
+  async function inspectArtifact(key) {
+    const item = state.artifacts.get(key), old = state.artifactChecks.get(key);
+    if (!item || old?.loading || state.opening || state.disposed) return;
+    const url = artifactEndpoint(item, "readiness"); if (!url) return;
+    const record = { loading: true, result: null, error: null };
+    const scope = { epoch: state.epoch, workspaceEpoch: state.workspaceEpoch, workspace: state.workspace.id,
+      session: state.session, turn: idOf(state.turn), version: artifactVersion(item) };
+    state.artifactChecks.set(key, record); paintArtifacts();
+    try {
+      const result = await request(url, post({}));
+      if (!readinessCurrent(scope, key, record)) return;
+      if (!validReadiness(result, item)) record.error = { kind: "contract" };
+      else record.result = result;
+    } catch (error) {
+      if (readinessCurrent(scope, key, record)) record.error = { kind: "request", message: error.message };
+    } finally {
+      if (readinessCurrent(scope, key, record)) { record.loading = false; paintArtifacts(); }
+    }
+  }
+  function readinessHint(check) {
+    switch (check.id) {
+      case "active_content": return check.status === "blocked" ? t("发现宏、脚本、嵌入对象或活动内容，需另行核对。") : t("未发现活动内容标记；未执行宏或脚本。");
+      case "external_links": return check.status === "pass" ? t("未发现外部关系。") : t("存在外部链接，本次检查未打开这些链接。");
+      case "document_fields": return t("存在修订记录或域，请核对最终显示内容。");
+      case "external_data": return t("存在外部数据公式或连接，未打开或刷新其来源。");
+      case "formula_cache": return check.status === "blocked" ? t("公式缓存缺失或无效，请用电子表格应用重算并另存副本。")
+        : check.status === "not_applicable" ? t("未发现单元格公式。") : t("已保存的公式缓存可能过期，不能作为已重算的证明。");
+      case "spreadsheet_errors": return check.status === "blocked" ? t("存在错误单元格，请处理后再交付。") : t("未发现标记为错误类型的单元格。");
+      case "engineering_review": return t("请由负责人员核对来源、数字和结论；本次检查不代表人工验收。");
+      default: return "";
+    }
+  }
+  function paintReadiness(card, item, record) {
+    const button = node("button", record?.loading ? t("正在检查交付…") : record?.error ? t("重试交付检查") : record?.result ? t("重新检查交付") : t("交付检查"));
+    button.type = "button"; button.dataset.action = "inspect-readiness";
+    button.disabled = !!record?.loading || !artifactEndpoint(item, "readiness");
+    button.addEventListener("click", () => inspectArtifact(artifactKey(item))); card.appendChild(button);
+    const panel = node("div", undefined, "artifact-readiness small wrap");
+    panel.setAttribute("aria-live", "polite"); panel.setAttribute("aria-busy", String(!!record?.loading));
+    if (record?.loading) panel.appendChild(node("p", t("正在核对当前副本及其来源…"), "muted"));
+    if (record?.error) panel.appendChild(node("p", record.error.kind === "contract"
+      ? t("检查响应与当前副本不匹配，未采用该结果。请重新检查。")
+      : t("交付检查失败：") + record.error.message, "notice error"));
+    if (!record?.result) { card.appendChild(panel); return; }
+    const result = record.result, report = result.readiness, detail = report.format_details;
+    const sourceStatus = result.original_source_status;
+    panel.appendChild(node("p", sourceStatus === "changed" ? t("原始来源已变化，请从新版资料重新生成副本。")
+      : report.status === "blocked" ? t("发现需处理项，暂不交付。") : t("结构检查已完成，待人工核对。"), "notice" + (report.status === "blocked" || sourceStatus === "changed" ? " warning" : "")));
+    panel.appendChild(node("p", t("已检查副本 SHA-256：{hash}", { hash: result.source_sha256 }), "wrap"));
+    panel.appendChild(node("p", sourceStatus === "current" ? t("原始来源：当前文件与生成时一致。")
+      : sourceStatus === "changed" ? t("原始来源：生成后已变化，请从新版资料重新生成副本。")
+      : sourceStatus === "not_recorded" ? t("原始来源：未记录生成时的版本，无法核对。")
+      : t("原始来源：当前无法核对。"), sourceStatus === "current" ? "muted" : "notice warning"));
+    if (typeof item.source === "string") panel.appendChild(node("p", item.source, "muted wrap"));
+    if (typeof item.source_sha256 === "string") panel.appendChild(node("p", t("生成时来源 SHA-256：{hash}", { hash: item.source_sha256 }), "muted wrap"));
+    panel.appendChild(node("p", t("版式尚未逐页核对。请在对应应用中检查分页、表格和显示内容。"), "muted"));
+    if (report.preview.rendered !== true) panel.appendChild(node("p", t("尚未运行文档渲染器；预览入口不代表已完成版式检查。"), "muted"));
+    if (result.format === "xlsx") {
+      const count = (key) => Number.isSafeInteger(detail[key]) && detail[key] >= 0 ? detail[key] : t("未返回");
+      panel.appendChild(node("p", t("公式 {total}；有缓存 {cached}；缺失缓存 {missing}；无效缓存 {invalid}；错误单元格 {errors}。", {
+        total: count("formula_count"), cached: count("formula_cached_count"), missing: count("formula_missing_cache_count"),
+        invalid: count("formula_invalid_cache_count"), errors: count("error_cell_count") })));
+      panel.appendChild(node("p", detail.formula_count === 0 ? t("未发现单元格公式，无需公式重算。") : t("公式未实际重算；已有缓存仍未验证，自动计算标记也不是重算证明。"), "muted"));
+    }
+    const list = node("ul");
+    for (const check of report.checks) {
+      const entry = node("li"); entry.dataset.check = check.id;
+      entry.appendChild(node("strong", (Object.hasOwn(READINESS_LABELS, check.id) ? t(READINESS_LABELS[check.id]) : check.id) + " · " + t(CHECK_STATUS[check.status])));
+      const hint = readinessHint(check); if (hint) entry.appendChild(node("p", hint, "muted")); list.appendChild(entry);
+    }
+    panel.appendChild(list);
+    if (result.format === "pdf" && report.preview.kind === "native_pdf" && report.preview.eligible === true
+      && report.checks.some((check) => check.id === "active_content" && check.status === "pass")) {
+      const url = artifactEndpoint(item, "preview");
+      if (url) { const link = node("a", t("在新窗口核对 PDF")); link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.dataset.action = "preview-pdf"; panel.appendChild(link); }
+    }
+    const raw = node("details"); raw.append(node("summary", t("完整交付检查记录")), node("pre", printable(result))); panel.appendChild(raw);
+    card.appendChild(panel);
+  }
+  function paintArtifacts() {
+    const host = $("agentArtifacts"); host.replaceChildren();
+    for (const [key, item] of state.artifacts) {
+      const card = node("article", undefined, "artifact"); card.dataset.artifactId = item.id || key;
       const url = artifactUrl(item.url, win.location.origin, state.workspace.id);
       const title = node(url ? "a" : "strong", item.name || t("文档产物")); if (url) { title.href = url; title.download = ""; }
       card.appendChild(title);
@@ -319,7 +445,7 @@ export function createAgentWorkbench(deps) {
       if (!url) card.appendChild(node("p", t("当前没有可用的工作区下载链接。"), "muted"));
       const details = node("details"), summary = node("summary", t("来源与验证记录"));
       details.append(summary, node("pre", printable({ source: item.source, source_sha256: item.source_sha256, output_sha256: item.output_sha256, validation: item.validation })));
-      card.appendChild(details); host.appendChild(card);
+      card.appendChild(details); paintReadiness(card, item, state.artifactChecks.get(key)); host.appendChild(card);
     }
   }
   const engineeringNumber = (value) => typeof value === "number" && Number.isFinite(value)
@@ -406,6 +532,10 @@ export function createAgentWorkbench(deps) {
     if (!event || !Number.isSafeInteger(event.seq) || event.seq <= state.seq) return;
     state.seq = event.seq; state.eventRows.push(event);
     const data = object(event.data) ? event.data : {}, kind = String(event.kind || "status");
+    if (kind === "authorization" && data.document_write_allowed === false
+      && ["post_selection_required", "current_turn_confirmation_required"].includes(data.reason)) {
+      state.writeGateReason = data.reason; paintWriteGate();
+    }
     if (kind === "context") paintContext(data);
     if (kind === "artifact") paintArtifact(data);
     if (kind === "tool_finished" && (data.name === "engineering_analyze" || data.tool === "engineering_analyze")) paintEngineeringResult(data.result);
@@ -493,7 +623,7 @@ export function createAgentWorkbench(deps) {
     if (state.disposed) return;
     // UI state is repainted; user text, raw events, file names and saved outputs stay unchanged.
     if (state.capabilities) paintCapabilities(state.capabilities);
-    paintSessions(); paintFiles(); paintExperts(); expertNote(); paintEngineering();
+    paintSessions(); paintFiles(); paintExperts(); expertNote(); paintEngineering(); paintWriteGate();
     if (state.contextData) paintContext(state.contextData);
     if (state.turn) paintTurn(state.turn);
     else {
@@ -522,6 +652,7 @@ export function createAgentWorkbench(deps) {
   }
   async function start() {
     if (started) return; started = true;
+    const startupWorkspaceEpoch = state.workspaceEpoch;
     win.addEventListener("cb:languagechange", languageChanged);
     languageChanged();
     $("agentWorkspaceForm").addEventListener("submit", (event) => { event.preventDefault(); openWorkspace($("agentWorkspacePath").value); });
@@ -533,6 +664,29 @@ export function createAgentWorkbench(deps) {
     $("agentCancel").addEventListener("click", cancel); $("agentRefreshFiles").addEventListener("click", loadFiles); $("agentRefreshTurns").addEventListener("click", loadTurns);
     $("agentNewSession").addEventListener("click", () => changeSession("", true)); $("agentSession").addEventListener("change", () => changeSession($("agentSession").value));
     await Promise.all([loadCapabilities(), loadExperts(), loadModel().catch((error) => { $("agentModelLabel").textContent = t("暂不可用"); $("agentModelStatus").textContent = t("模型设置暂不可用：") + error.message; })]);
+    if (state.disposed || state.workspaceEpoch !== startupWorkspaceEpoch) return;
+    const linked = new URLSearchParams(win.location.search).getAll("workspace");
+    if (linked.length) {
+      // URL input is only an opaque registered ID. Resolve its path through the
+      // authorized server list; never accept a path, file selection or write
+      // permission from the URL, and never fall back to another saved workspace.
+      if (linked.length !== 1 || !/^[A-Za-z0-9_-]{1,128}$/.test(linked[0])) {
+        notice(t("工程链接无效，请从项目页重新打开。"), true); return;
+      }
+      if (state.capabilities?.available !== true) {
+        notice(t("当前服务不可用，无法打开链接指定的工程。"), true); return;
+      }
+      try {
+        const data = await request("/api/agent/workspaces");
+        if (state.disposed || state.workspaceEpoch !== startupWorkspaceEpoch) return;
+        const matches = Array.isArray(data.workspaces) ? data.workspaces.filter(w => w?.id === linked[0] && typeof w.root === "string" && w.root.trim()) : [];
+        if (matches.length !== 1) throw new Error(t("链接中的工程未登记或当前账号无权访问。请从项目页重新打开。"));
+        await openWorkspace(matches[0].root, { expectedId: linked[0], restoreSelection: false, restoreTurn: false });
+      } catch (error) {
+        if (!state.disposed && state.workspaceEpoch === startupWorkspaceEpoch) notice(t("无法打开工程链接：") + error.message, true);
+      }
+      return;
+    }
     if (saved.lastRoot && state.capabilities?.available === true) await openWorkspace(saved.lastRoot);
   }
   function dispose() { win.removeEventListener("cb:languagechange", languageChanged); cancelVoice(); state.disposed = true; state.epoch += 1; stopPolling(); }

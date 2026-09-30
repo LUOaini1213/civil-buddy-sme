@@ -21,6 +21,7 @@
     <nav class="cb-app-nav" aria-label="工作台导航">
       <a href="/static/index.html">工作台</a>
       <a href="/static/agent.html" aria-current="page">Agent</a>
+      <a href="/static/project-control.html">项目资料与问题</a>
       <a href="/packing">装箱拼柜</a>
       <a href="/cad">CAD</a>
       <a href="/engineering">工程计算</a>
@@ -80,6 +81,7 @@
           <button id="agentCancel" type="button" class="danger" hidden>停止当前任务</button>
         </div>
         <p id="agentExpertNote" class="muted small">正在读取可用岗位。</p>
+        <p id="agentWriteGateNote" data-i18n-skip class="notice warning small" role="status" hidden></p>
         <label id="agentRiskWrap" class="risk-confirmation" hidden>高风险岗位写入前，请完整输入：我明白，将由持证人员签认
           <input id="agentRiskConfirmation" data-i18n-skip autocomplete="off" placeholder="我明白，将由持证人员签认" />
         </label>

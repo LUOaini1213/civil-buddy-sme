@@ -288,7 +288,8 @@ def acceptance(base, workspace, report_dir, *, live=False, timeout=360):
         workspace_id = registered["workspace"]["id"]
         session_id = "acceptance_"+uuid4().hex
         start = http(base, "/api/agent/turns", {"workspace": workspace_id, "session_id": session_id,
-                    "message": TASK, "mode": "model", "sandbox": "workspace-write", "files": FILES})
+                    "message": TASK, "mode": "model", "sandbox": "workspace-write", "files": FILES,
+                    "expert_id": "pm-daily"})  # Explicit human selection for this synthetic reporting task.
         turn_id = start["turn_id"]
         report.update(workspace_id=workspace_id, session_id=session_id, turn_id=turn_id)
         after, deadline = 0, time.monotonic()+timeout

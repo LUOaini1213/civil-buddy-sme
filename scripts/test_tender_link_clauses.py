@@ -13,14 +13,17 @@
                  delivery hours (a person), "general purpose" / "dry" = GP, several allowed types stay a person's choice
   Word numbers   a DOCX whose clause numbers come from Word numbering with a start override reads 4.7-4.11, not 1.7-1.11;
                  an ordered list exported from Markdown (starting at 3) reads back as 3., 4.
-  demo           examples/facade-demo/facade_itt_doc.md still gives 5 logistics clauses (4.7-4.11) and 7 statements
+  demo           original facade files retain upright/A-frame/no-stack requirements and correctly return needs_human;
+                 separate, explicitly named geometry-only synthetic copies exercise clause/plan figure comparisons
   dev set        test/benchmarks/tender_link/dev.json (DEV, used while building): nothing silently lost, no false
                  container limit, no invalid cite, no false "covered"; the recall floors hold
 No model and no network.
+Geometry-only copies never demonstrate compliance with the original handling requirements.
 """
 from __future__ import annotations
 
 import io
+from hashlib import sha256
 import os
 import re
 import shutil
@@ -112,6 +115,30 @@ def clauses(text: str, source: str = "itt.md"):
     from packing_assistant.tender_packing_link import logistics_clauses
 
     return logistics_clauses(text, source=source)
+
+
+def synthetic_geometry_only_copy(source: Path, target: Path) -> None:
+    """A separate numeric test case; the source's transport requirements stay untouched.
+
+    Only this named derivative omits handling requirements so that the real
+    solver can exercise container/mass comparisons independently. The original
+    facade data has its own refusal test below and is never called compliant.
+    """
+    import openpyxl
+
+    if source.resolve() == target.resolve() or not target.name.startswith("geometry_only_"):
+        raise ValueError("Geometry-only fixtures need a separate, explicitly named path")
+    book = openpyxl.load_workbook(source)
+    try:
+        sheet = book["materials"]
+        note_column = next(cell.column for cell in sheet[1] if cell.value == "note")
+        label = "GEOMETRY-ONLY SYNTHETIC: numerical solver case; original transport requirements are tested separately."
+        for row in sheet.iter_rows(min_row=2):
+            row[note_column - 1].value = label
+        book["README"].cell(1, 1).value = label
+        book.save(target)
+    finally:
+        book.close()
 
 
 class Reading(unittest.TestCase):
@@ -477,7 +504,7 @@ class WordNumbers(unittest.TestCase):
 
 
 class Linked(unittest.TestCase):
-    """run_link on SYNTHETIC variants of the demo ITT with the demo panel list."""
+    """Real run_link/solver on geometry-only copies; unmodified originals remain refusal cases."""
 
     @classmethod
     def setUpClass(cls):
@@ -514,6 +541,8 @@ class Linked(unittest.TestCase):
             "itt_lbs.md": ITT.replace(MASS_CLAUSE, "4.9 Containers: the maximum permissible weight is 44,000 lbs gross per container."),
         }
         shutil.copyfile(FIXTURES / "facade_panels_rev_b.xlsx", cls.job / "facade_panels_rev_b.xlsx")
+        for name in ("facade_panels.xlsx", "facade_panels_rev_b.xlsx"):
+            synthetic_geometry_only_copy(cls.job / name, cls.job / ("geometry_only_" + name))
         for name, text in variants.items():
             assert text != ITT, name
             (cls.job / name).write_text(text, encoding="utf-8")
@@ -537,14 +566,37 @@ class Linked(unittest.TestCase):
         from packing_assistant.tender_packing_link import run_link
 
         if tender not in self.runs:
-            self.runs[tender] = run_link(str(self.job / tender), str(self.job / "facade_panels.xlsx"))
+            self.runs[tender] = run_link(str(self.job / tender), str(self.job / "geometry_only_facade_panels.xlsx"))
         return self.runs[tender]
 
     def statements(self, tender: str, kind: str):
         return [s for s in self.link(tender)["statements"] if s["kind"] == kind]
 
-    def test_demo_story_is_unchanged(self):
+    def test_original_demo_keeps_handling_requirements_and_needs_a_person(self):
+        from packing_assistant.tender_packing_link import run_link
+
+        original = (FIXTURES / "facade_panels.xlsx").read_bytes()
+        out = run_link(str(self.job / "itt.md"), str(self.job / "facade_panels.xlsx"))
+        self.assertIsNone(out["record"]["plan"])
+        self.assertIsNone(out["record"]["inputs"]["plan"]["sha256"])
+        refusal = out["record"]["plan_refusal"]
+        self.assertEqual((refusal["source"], refusal["error"]), ("needs_human", "unsupported_transport_requirements"))
+        self.assertTrue(refusal["needs_human"])
+        requirements = str([row["requirements"] for row in refusal["needs_human"]])
+        for original_instruction in ("A-frame", "upright", "do not stack"):
+            self.assertIn(original_instruction, requirements)
+        self.assertTrue(all(statement["status"] != "covered" for statement in out["statements"]))
+        self.assertTrue(out["submit_blocked"])
+        self.assertEqual([c["clause"] for c in out["record"]["clauses"]], ["4.7", "4.8", "4.9", "4.10", "4.11"])
+        self.assertEqual(out["record"]["inputs"]["panel_list"]["sha256"], sha256(original).hexdigest())
+        for name in ("facade_panels.xlsx", "facade_panels_rev_b.xlsx"):
+            self.assertEqual((self.job / name).read_bytes(), (FIXTURES / name).read_bytes(), name)
+
+    def test_geometry_only_case_keeps_clause_and_statement_figure_coverage(self):
         out = self.link("itt.md")
+        self.assertEqual(out["record"]["inputs"]["panel_list"]["name"], "geometry_only_facade_panels.xlsx")
+        self.assertEqual(out["plan"]["source"], "solver")
+        self.assertEqual(out["plan"]["can_fit"], True)
         self.assertEqual([(s["id"], s["kind"], s["clause"], s["status"]) for s in out["statements"]],
                          [("S1", "container_type", "4.8", "covered"), ("S2", "containers_used", "4.8", "partial"),
                           ("S3", "gross_mass", "4.9", "partial"), ("S4", "securing", "4.10", "human_required"),
@@ -638,7 +690,7 @@ class Linked(unittest.TestCase):
         keys = [s["key"] for s in first["statements"]]
         self.assertEqual(len(keys), len(set(keys)), keys)
         self.assertEqual([s["key"] for s in first["statements"] if s["kind"] == "gross_mass"], ["gross_mass@4.9", "gross_mass@4.9#2"])
-        again = run_link(str(self.job / "itt_continuation.md"), str(self.job / "facade_panels_rev_b.xlsx"),
+        again = run_link(str(self.job / "itt_continuation.md"), str(self.job / "geometry_only_facade_panels_rev_b.xlsx"),
                          previous=first["record"])
         changes = again["record"]["changes_since_previous"]
         moved = {c["id"]: c["figures"].get("max_gross_kg") for c in changes["changed"]}

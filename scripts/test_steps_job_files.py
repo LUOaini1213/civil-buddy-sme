@@ -149,12 +149,14 @@ class OwnExportTests(JobFolderCase):
         self.assertNotIn("钢筋工12人", draft)
         self.assertNotIn("pm-daily__log", draft)
 
-    def test_a_second_export_replaces_our_own_copy(self):
+    def test_a_second_export_preserves_the_earlier_copy(self):
         run_agent(self.DAILY, session_id="civil-cli")
-        before = (self.job / "pm-daily__log.xlsx").stat().st_mtime_ns
+        before = (self.job / "pm-daily__log.xlsx").read_bytes()
         run_agent(self.DAILY.replace("12人", "14人"), session_id="civil-cli")
-        self.assertGreaterEqual((self.job / "pm-daily__log.xlsx").stat().st_mtime_ns, before)
-        self.assertEqual(office_job.own_exports(), {"pm-daily__log.xlsx"})
+        self.assertEqual((self.job / "pm-daily__log.xlsx").read_bytes(), before)
+        self.assertTrue((self.job / "pm-daily__log-2.xlsx").is_file())
+        self.assertNotEqual((self.job / "pm-daily__log-2.xlsx").read_bytes(), before)
+        self.assertEqual(office_job.own_exports(), {"pm-daily__log.xlsx", "pm-daily__log-2.xlsx"})
 
     def test_a_workbook_the_user_made_is_never_overwritten(self):
         mine = self.job / "pm-daily__log.xlsx"

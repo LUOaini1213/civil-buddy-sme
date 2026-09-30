@@ -1,0 +1,68 @@
+{
+  "date": "2026-09-30",
+  "scope": "Windows local practical workbench preview",
+  "synthetic": true,
+  "real_provider_calls": false,
+  "cross_computer": false,
+  "production_acceptance": false,
+  "research_sources": [
+    "https://www1.bca.gov.sg/growth-and-transformation/productivity/idd-integrated-digital-delivery/",
+    "https://www.imo.org/en/ourwork/safety/pages/ctu-code.aspx"
+  ],
+  "checks": {
+    "initial_default_gate": {
+      "passed": 176,
+      "total": 185,
+      "subsequent_failed_checks_retested": true,
+      "entire_default_gate_repeated": false
+    },
+    "changed_workflows": {
+      "passed": 16,
+      "total": 16
+    },
+    "additional_full_and_model_checks": {
+      "passed": 7,
+      "total": 7
+    },
+    "transport_and_spreadsheet_checks": {
+      "passed": 5,
+      "total": 5
+    },
+    "release_archive_tests": {
+      "passed": 9,
+      "total": 9
+    },
+    "rust_full_suite_before_final_review_fixes": "passed; final affected API regressions recorded separately",
+    "compiled_host_http_restart_isolation": "passed",
+    "browser": "registered source and issue, persisted after host restart, switched en/zh, opened scoped Agent, completed read-only task, downloaded real ZIP",
+    "downloaded_project_zip": "CRC passed; source snapshot, manifest and audit present; unresolved issue remains draft",
+    "model_mode_dev_v2": {
+      "passed": 12,
+      "total": 12,
+      "comparable_to_20260926": false
+    },
+    "sealed_panel_lists": {
+      "exact": 5,
+      "total": 6,
+      "safe": 6,
+      "wrong_plan": 0,
+      "floor_passed": true,
+      "fixtures_or_floor_modified": false,
+      "remaining_case": "pl01 requires upright-only handling; preserved original success oracle does not match safe refusal. No usable plan is claimed."
+    },
+    "final_project_api_regressions": {
+      "passed": 12,
+      "total": 12
+    },
+    "final_project_ui_regressions": {
+      "passed": 14,
+      "total": 14
+    }
+  },
+  "remaining_acceptance": [
+    "real project revision and issue workflow",
+    "actual Word pagination and Excel recalculation",
+    "second Windows computer install and restore",
+    "live provider acceptance with user configuration"
+  ]
+}

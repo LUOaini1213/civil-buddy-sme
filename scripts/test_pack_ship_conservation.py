@@ -364,13 +364,17 @@ def test_every_tracked_fixture_conserves(show: bool = False, everything: bool = 
     另有 6 个夹具共 69 条「货的截面比箱外廓大」，现在只剩比柜还大的那 3 条。"""
     from packing_assistant.tools.packing import CUSTOM_SECTION_TAG
 
-    checked = split = custom = 0
+    checked = split = custom = handling_refused = 0
     for name, mats, opts in _fixture_sets():
         if name.startswith("sim/t80_") and not everything:
             continue  # 300–570 行，成箱各 4–16 s；修复前后都守恒，另有 test_anchor_t80_long_mix.py 盯着
         scheme = agent_box_scheme({"materials": mats, "container_type": "40HQ", "packing_options": dict(opts)})
         if scheme.get("materials_incomplete"):
             assert not scheme["boxes"], name  # 缺尺寸：整票拒收，不是丢货
+            if any(row.get("reason") == "unsupported_transport_requirements" for row in scheme.get("needs_human", [])):
+                handling_refused += 1
+                assert scheme["ship_ok"] is False, name
+                assert any(row.get("requirements") for row in scheme["needs_human"]), name
             continue
         found = check_conservation(mats, scheme["boxes"])
         oversize = pack_ship_solve.rows_oversize_for_container(mats, "40HQ")
@@ -389,7 +393,10 @@ def test_every_tracked_fixture_conserves(show: bool = False, everything: bool = 
                   f"{'  mass-split ' + str(len(found['mass_split_rows'])) + ' rows' if found['mass_split_rows'] else ''}"
                   f"{'  custom-section ' + str(n_custom) if n_custom else ''}"
                   f"{'  bigger-than-box ' + str(refused) + ' (oversize row, refused by the gate)' if refused else ''}")
-    assert checked >= (59 if everything else 50), checked
+    # Explicit fragile/upright/no-stack fixtures must be refused before automatic
+    # boxing. They remain covered fixtures; missing rows may not simply disappear.
+    assert checked + handling_refused >= (59 if everything else 50), (checked, handling_refused)
+    assert handling_refused >= 2, handling_refused
     assert split >= 5, split  # 夹具里确实有走质量拆分的，这个测试不是空转
     assert custom >= (6 if everything else 5), custom  # 同上：确实有夹具走按货定制
 

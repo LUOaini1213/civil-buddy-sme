@@ -58,6 +58,7 @@ jobs:
           python -m pip install -U pip
           pip install -r requirements-dev.txt
           pip install -r requirements-engineering.txt
+          pip install -r requirements-documents.txt
           # 语音输入的解码守卫（协议白名单、采样率、时长上限）要真解码才能测；不下载模型
           pip install -r requirements-asr.txt
           # ui-dom（真页面 + 真后端跑在 jsdom 里）和它的打包器都是 devDependencies
@@ -66,6 +67,18 @@ jobs:
         env:
           PYTHON_DOTENV_DISABLED: "1"
         run: python -m pytest demo/tests -q --basetemp=output/pytest-ci
+      - name: Project records, delivery checks and transport refusal
+        env:
+          PYTHON_DOTENV_DISABLED: "1"
+        run: |
+          node scripts/test_project_control_ui.cjs
+          node scripts/test_agent_ui.cjs
+          node scripts/test_logistics_language.cjs
+          python scripts/test_document_readiness.py
+          python scripts/test_transport_constraints.py
+          python scripts/test_model_refusal.py
+          python scripts/test_model_mode_link.py
+          python scripts/eval_model_mode.py --check
       - name: Voice input eval archive matches its README (no model needed)
         run: python eval/asr/run_eval.py --check
       - name: Import package

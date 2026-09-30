@@ -77,6 +77,8 @@ class UnifiedReleaseTests(unittest.TestCase):
                              "workbench/Cargo.toml", "workbench/Cargo.lock", "scripts/start_unified_workbench.py",
                              "workbench/scripts/run_tender_extract.py", "workbench/scripts/run_packing_sidecar.py",
                              "frontend/index.html", "frontend/manifest.webmanifest", "frontend/icons/cb-icon.svg",
+                             "demo/static/project-control.html", "demo/static/project-control.js",
+                             "demo/static/project-control.css", "demo/static/i18n-project.js",
                              "gateway/pages/demo.html", "examples/facade-demo/facade_itt_doc.md",
                              "start-workbench.bat", "packing_assistant/civil.py", *release.EXTRA]:
                 self.assertIn(expected, names)

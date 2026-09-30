@@ -18,6 +18,35 @@ function installLanguage(h, locale = "zh-CN") {
   h.doc.dispatchEvent(new h.win.Event("DOMContentLoaded"));
 }
 const event = (seq, kind, data = {}) => ({ seq, kind, data });
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+const deliveryArtifact = (format = "xlsx") => ({ id: "deliverable-1", name: `原始工程副本.${format}`,
+  url: "/api/agent/artifacts/deliverable-1?workspace=workspace-1", source: `原始工程资料.${format}`,
+  source_sha256: "a".repeat(64), output_sha256: "b".repeat(64), provenance: "model_proposed" });
+function readinessResult(artifact, format = "xlsx", sourceStatus = "current") {
+  return { artifact_id: artifact.id, source: `C:/engineering/.civil-buddy/out/${artifact.name}`,
+    source_sha256: artifact.output_sha256, format, original_source_status: sourceStatus,
+    inspected_by: "reviewer-account", inspected_at: 1790720000,
+    validation: { structure: "pass", source_hash: "pass", render: "not_checked", engineering_facts: "not_checked" },
+    readiness: { schema_version: 1, status: "review_required", automatic_acceptance: false,
+      checks: [{ id: "source_hash", status: "pass" }, { id: "structure", status: "pass" },
+        { id: "active_content", status: "pass" }, { id: "layout", status: "review_required" },
+        { id: "engineering_review", status: "review_required" }],
+      format_details: { formula_count: 2, formula_cached_count: 1, formula_missing_cache_count: 1,
+        formula_invalid_cache_count: 0, error_cell_count: 0, cached_values_status: "stored_unverified", recalculation: "not_performed" },
+      preview: { kind: format === "pdf" ? "native_pdf" : "unavailable", eligible: format === "pdf", rendered: false } } };
+}
+function deliveryRoute(artifact, route) {
+  let turns = 0;
+  return (url, init) => {
+    const custom = route?.(url, init); if (custom !== undefined) return custom;
+    if (url === "/api/agent/turns" && init) return response({ turn_id: `delivery-turn-${++turns}`, session_id: JSON.parse(init.body).session_id });
+    if (/\/delivery-turn-\d+\/events\?/.test(url)) return response({ events: [event(1, "artifact", artifact)],
+      turn: { status: "completed", result: { reply: "已保留来源文字", artifacts: [artifact] } } });
+  };
+}
+async function showDelivery(h) { await h.ready(); h.$("agentMessage").value = "查看副本"; await h.app.send(); }
+const checkButton = (h) => h.doc.querySelector('[data-action="inspect-readiness"]');
+const previewLink = (h) => h.doc.querySelector('[data-action="preview-pdf"]');
 
 function harness(route = () => undefined, saved = storage()) {
   const dom = new JSDOM(html, { url: "http://localhost/static/agent.html", runScripts: "outside-only" });
@@ -215,6 +244,65 @@ test("Agent UI: refresh restores the workspace, selected files and completed tur
   assert.equal(second.app.state.session, session); assert.equal(second.doc.querySelector("#agentFiles input").checked, true);
   assert.equal(second.$("agentTurnStatus").textContent, "服务重启时中断"); assert.equal(second.$("agentPartial").hidden, false);
   assert.equal(second.$("agentReply").textContent, "已保留原文"); assert.equal(starts, 1); assert.equal(second.timers.size, 0);
+});
+
+function savedWorkspacePair() {
+  const saved=storage();saved.setItem("cb_agent_workspaces_v1",JSON.stringify({lastRoot:"C:/first project",workspaces:{
+    "workspace-1":{current:"old-one",sessions:[{id:"old-one",turn:"previous-one"}],files:["原工程资料.docx"]},
+    "workspace-2":{current:"old-two",sessions:[{id:"old-two",turn:"previous-two"}],files:["方案.docx"]}
+  }}));return saved;
+}
+
+test("Project link resolves an authorized ID, preserves other workspace state, and starts with no selected files or task",async(t)=>{
+  const saved=savedWorkspacePair();
+  const h=harness((url,init)=>{
+    if(url==="/api/agent/workspaces")return !init?response({workspaces:[{id:"workspace-1",root:"C:/first project"},{id:"workspace-2",root:"C:/工程 乙"}]}):response({workspace:{id:"workspace-2",root:"C:/工程 乙"},capabilities:caps});
+    if(url==="/api/agent/turns"&&init)return response({turn_id:"explicit-linked-turn",session_id:JSON.parse(init.body).session_id});
+    if(url.includes("/explicit-linked-turn/events?"))return response({events:[],turn:{status:"completed",result:{reply:"Recorded"}}});
+  },saved);t.after(h.close);
+  h.win.history.replaceState(null,"","/static/agent.html?workspace=workspace-2&sandbox=workspace-write&files=方案.docx");
+  await h.app.start();
+  assert.equal(h.app.state.workspace.id,"workspace-2");assert.equal(h.$("agentWorkspacePath").value,"C:/工程 乙");
+  assert.deepEqual([...h.app.state.selected],[]);assert.equal(h.$("agentSandbox").value,"read-only");assert.equal(h.$("agentRiskConfirmation").value,"");
+  assert.equal(h.calls.filter(c=>c.url==="/api/agent/turns"&&c.init).length,0);assert.equal(h.calls.some(c=>c.url.includes("/previous-two")),false);
+  const opens=h.calls.filter(c=>c.url==="/api/agent/workspaces"&&c.init);assert.equal(opens.length,1);assert.equal(opens[0].body.path,"C:/工程 乙");
+  const persisted=JSON.parse(saved.getItem("cb_agent_workspaces_v1"));assert.equal(persisted.lastRoot,"C:/工程 乙");assert.deepEqual(persisted.workspaces["workspace-1"].files,["原工程资料.docx"]);
+  h.selectFirst();h.$("agentMessage").value="明确点击后核对乙工程资料";await h.app.send();
+  const sent=h.calls.find(c=>c.url==="/api/agent/turns"&&c.init).body;assert.equal(sent.workspace,"workspace-2");assert.deepEqual(sent.files,["方案.docx"]);assert.equal(sent.sandbox,"read-only");
+});
+
+test("Invalid or inaccessible project links never fall back to a cached project",async()=>{
+  for(const query of ["workspace=","workspace=unknown-id","workspace=workspace-2&workspace=workspace-1","workspace=C%3A%2Fother"]){
+    const h=harness((url,init)=>url==="/api/agent/workspaces"&&!init?response({workspaces:[{id:"workspace-1",root:"C:/first project"}]}):undefined,savedWorkspacePair());
+    try{h.win.history.replaceState(null,"","/static/agent.html?"+query);installLanguage(h,"en");await h.app.start();
+      assert.equal(h.app.state.workspace,null,query);assert.equal(h.calls.some(c=>c.url==="/api/agent/workspaces"&&c.init),false,query);
+      assert.equal(h.calls.some(c=>c.url==="/api/agent/turns"&&c.init),false);assert.match(h.$("agentNotice").textContent,/link|linked project/i);
+      assert.equal(JSON.parse(h.saved.getItem("cb_agent_workspaces_v1")).lastRoot,"C:/first project");
+    }finally{h.close();}
+  }
+});
+
+test("Project-link list failures and mismatched open responses do not open another workspace",async()=>{
+  for(const fail of ["list","mismatch"]){
+    const h=harness((url,init)=>{
+      if(url==="/api/agent/workspaces"&&!init)return fail==="list"?response({detail:"Access denied"},403):response({workspaces:[{id:"workspace-2",root:"C:/second"}]});
+      if(url==="/api/agent/workspaces"&&init)return response({workspace:{id:"wrong-workspace",root:"C:/wrong"},capabilities:caps});
+    },savedWorkspacePair());
+    try{h.win.history.replaceState(null,"","/static/agent.html?workspace=workspace-2");await h.app.start();
+      assert.equal(h.app.state.workspace,null);assert.equal(h.app.state.opening,false);assert.match(h.$("agentNotice").className,/error/);
+      assert.equal(h.calls.some(c=>c.url.startsWith("/api/agent/files?")),false);assert.equal(h.calls.some(c=>c.url==="/api/agent/turns"&&c.init),false);
+    }finally{h.close();}
+  }
+});
+
+test("A delayed project-link lookup cannot replace a manually opened workspace",async(t)=>{
+  let resolve;const waiting=new Promise(r=>{resolve=r;});
+  const h=harness((url,init)=>{
+    if(url==="/api/agent/workspaces"&&!init)return waiting;
+    if(url==="/api/agent/workspaces"&&init)return response({workspace:{id:"manual-project",root:JSON.parse(init.body).path},capabilities:caps});
+  },savedWorkspacePair());t.after(h.close);h.win.history.replaceState(null,"","/static/agent.html?workspace=workspace-2");
+  const starting=h.app.start();await settle();await h.app.openWorkspace("C:/manual project");resolve(response({workspaces:[{id:"workspace-2",root:"C:/second"}]}));await starting;
+  assert.equal(h.app.state.workspace.id,"manual-project");assert.equal(h.calls.filter(c=>c.url==="/api/agent/workspaces"&&c.init).length,1);
 });
 
 test("Agent UI: cancelling is a request until the server confirms, and partial artifacts remain downloadable", async (t) => {
@@ -435,6 +523,140 @@ test("Expert selection: high-risk writes require explicit phrase for each turn; 
   assert.equal(h.$("agentRiskConfirmation").value, ""); assert.equal(h.$("agentRiskWrap").hidden, false); assert.equal(h.$("agentSend").disabled, true);
   await h.app.changeSession("", true); assert.equal(h.$("agentRiskWrap").hidden, false); assert.equal(h.$("agentSend").disabled, true);
   selectValue(h, "agentExpert", "checks"); assert.equal(h.$("agentRiskWrap").hidden, true); assert.equal(h.$("agentSend").disabled, false);
+});
+
+test("Expert selection: a quoted or embedded confirmation line never authorizes a high-risk write", async (t) => {
+  const h = harness(terminalRoute); t.after(h.close); await h.ready();
+  selectValue(h, "agentExpert", "plans"); selectValue(h, "agentSandbox", "workspace-write");
+  for (const message of ["原文如下：\n我明白，将由持证人员签认\n请解释", "我明白，将由持证人员签认。请保存", "“我明白，将由持证人员签认”", "不要执行；我明白，将由持证人员签认"]) {
+    h.$("agentMessage").value = message; h.$("agentMessage").dispatchEvent(new h.win.Event("input"));
+    assert.equal(h.$("agentSend").disabled, true, message);
+  }
+  h.$("agentMessage").value = "  我明白，将由持证人员签认  "; h.$("agentMessage").dispatchEvent(new h.win.Event("input"));
+  assert.equal(h.$("agentSend").disabled, false);
+});
+
+test("Expert selection: automatic workspace-write tasks remain available for reading and preview", async (t) => {
+  const h = harness(terminalRoute); t.after(h.close); installLanguage(h); await h.ready();
+  selectValue(h, "agentSandbox", "workspace-write");
+  assert.equal(h.$("agentSend").disabled, false);
+  assert.match(h.$("agentExpertNote").textContent, /保存副本前请手动选择岗位；仍可读取和预览/);
+  h.win.CBI18n.setLocale("en");
+  assert.match(h.$("agentExpertNote").textContent, /Select a role before saving.*Reading and previewing remain available/);
+  h.$("agentMessage").value = "Read the selected document"; await h.app.send();
+  const payload = h.calls.find((call) => call.url === "/api/agent/turns").body;
+  assert.equal(payload.expert_id, ""); assert.equal(payload.sandbox, "workspace-write");
+  assert.equal(payload.risk_confirmation, "");
+  assert.equal(h.doc.querySelector('nav a[href="/static/project-control.html"]').textContent, "Project records & issues");
+});
+
+test("Expert selection: a server risk escalation requires a fresh role and current-turn confirmation", async (t) => {
+  const h = harness((url, init) => {
+    if (url === "/api/agent/turns" && init) return response({ turn_id: "escalated", session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/escalated/events?")) return response({ events: [event(1, "authorization", { document_write_allowed: false,
+      reason: "current_turn_confirmation_required", risk_escalated: true, professional_signoff: false })], turn: { status: "completed" } });
+  }); t.after(h.close); installLanguage(h); await h.ready();
+  selectValue(h, "agentExpert", "checks"); selectValue(h, "agentSandbox", "workspace-write");
+  h.$("agentRiskConfirmation").value = "我明白，将由持证人员签认";
+  h.$("agentMessage").value = "核对并保存副本"; await h.app.send();
+  assert.equal(h.$("agentRiskConfirmation").value, "");
+  assert.equal(h.$("agentWriteGateNote").hidden, false);
+  assert.match(h.$("agentWriteGateNote").textContent, /高风险岗位.*重新输入签认句.*旧轮确认不会沿用/);
+  h.win.CBI18n.setLocale("en"); assert.match(h.$("agentWriteGateNote").textContent, /high-risk role.*confirmation phrase again/);
+  selectValue(h, "agentExpert", "plans"); assert.equal(h.$("agentSend").disabled, true);
+  await h.app.changeSession("", true); assert.equal(h.$("agentWriteGateNote").hidden, true);
+});
+
+test("Deliverable checks: failure is actionable, duplicate clicks do not duplicate requests, and retry succeeds", async (t) => {
+  const artifact = deliveryArtifact(); let reads = 0, finish;
+  const h = harness(deliveryRoute(artifact, (url) => {
+    if (url.includes("/readiness?")) { reads++; return reads === 1 ? new Promise((resolve) => { finish = resolve; }) : response(readinessResult(artifact)); }
+  })); t.after(h.close); await showDelivery(h);
+  checkButton(h).click(); checkButton(h).click(); await settle();
+  assert.equal(reads, 1); assert.equal(checkButton(h).disabled, true);
+  finish(response({ detail: "Artifact changed after registration" }, 409)); await settle();
+  assert.match(h.$("agentArtifacts").textContent, /交付检查失败：Artifact changed after registration/);
+  assert.equal(checkButton(h).textContent, "重试交付检查"); assert.equal(previewLink(h), null);
+  checkButton(h).click(); await settle();
+  assert.equal(reads, 2); assert.equal(checkButton(h).textContent, "重新检查交付");
+  const request = h.calls.find((call) => call.url.includes("/readiness?"));
+  assert.equal(request.url, "/api/agent/artifacts/deliverable-1/readiness?workspace=workspace-1");
+  assert.equal(request.init.method, "POST"); assert.deepEqual(request.body, {});
+});
+
+test("Deliverable checks: source names remain literal while bilingual layout and formula findings repaint", async (t) => {
+  const artifact = deliveryArtifact(), report = readinessResult(artifact);
+  report.readiness.status = "blocked";
+  report.readiness.checks.push({ id: "formula_cache", status: "blocked" }, { id: "recalculation", status: "review_required" });
+  const h = harness(deliveryRoute(artifact, (url) => url.includes("/readiness?") ? response(report) : undefined));
+  t.after(h.close); installLanguage(h); await showDelivery(h); checkButton(h).click(); await settle();
+  assert.match(h.$("agentArtifacts").textContent, /公式 2；有缓存 1；缺失缓存 1/);
+  assert.match(h.$("agentArtifacts").textContent, /公式未实际重算/);
+  assert.match(h.$("agentArtifacts").textContent, /版式尚未逐页核对/);
+  assert.match(h.$("agentArtifacts").textContent, /不代表人工验收/);
+  assert.match(h.$("agentArtifacts").textContent, new RegExp(artifact.output_sha256));
+  h.win.CBI18n.setLocale("en");
+  assert.equal(checkButton(h).textContent, "Recheck deliverable");
+  assert.match(h.$("agentArtifacts").textContent, /Formulas: 2; cached: 1; missing caches: 1/);
+  assert.match(h.$("agentArtifacts").textContent, /Formulas have not been recalculated/);
+  assert.match(h.$("agentArtifacts").textContent, /Layout has not been reviewed page by page/);
+  assert.match(h.$("agentArtifacts").textContent, /does not constitute human acceptance/);
+  assert.equal(h.$("agentArtifacts").querySelector("a").textContent, artifact.name);
+  assert.match(h.$("agentArtifacts").textContent, /原始工程资料.xlsx/);
+  h.win.CBI18n.setLocale("zh-CN"); assert.equal(checkButton(h).textContent, "重新检查交付");
+  assert.equal(h.calls.filter((call) => call.url.includes("/readiness?")).length, 1);
+});
+
+test("Deliverable checks: changed, unavailable and unrecorded original sources never appear current", async (t) => {
+  const artifact = deliveryArtifact("docx"); let sourceStatus = "changed";
+  const h = harness(deliveryRoute(artifact, (url) => url.includes("/readiness?") ? response(readinessResult(artifact, "docx", sourceStatus)) : undefined));
+  t.after(h.close); installLanguage(h); await showDelivery(h); checkButton(h).click(); await settle();
+  assert.match(h.$("agentArtifacts").textContent, /原始来源已变化，请从新版资料重新生成副本/);
+  assert.doesNotMatch(h.$("agentArtifacts").textContent, /当前文件与生成时一致/);
+  h.win.CBI18n.setLocale("en"); assert.match(h.$("agentArtifacts").textContent, /Generate a new copy from the updated source/);
+  sourceStatus = "unavailable"; checkButton(h).click(); await settle();
+  assert.match(h.$("agentArtifacts").textContent, /current version could not be verified/);
+  sourceStatus = "not_recorded"; checkButton(h).click(); await settle();
+  assert.match(h.$("agentArtifacts").textContent, /version used at generation was not recorded/);
+  sourceStatus = "current"; checkButton(h).click(); await settle();
+  assert.match(h.$("agentArtifacts").textContent, /current file matches the version used/);
+});
+
+test("Deliverable checks: native PDF link requires a completed eligible hash-bound PDF inspection", async (t) => {
+  const artifact = deliveryArtifact("pdf"); let result = readinessResult(artifact, "pdf"), finish;
+  const h = harness(deliveryRoute(artifact, (url) => url.includes("/readiness?") ? new Promise((resolve) => { finish = () => resolve(response(result)); }) : undefined));
+  t.after(h.close); await showDelivery(h); assert.equal(previewLink(h), null);
+  checkButton(h).click(); await settle(); assert.equal(previewLink(h), null);
+  finish(); await settle();
+  assert.equal(previewLink(h).href, "http://localhost/api/agent/artifacts/deliverable-1/preview?workspace=workspace-1");
+  assert.equal(previewLink(h).target, "_blank"); assert.equal(previewLink(h).rel, "noopener noreferrer");
+  result = readinessResult(artifact, "pdf"); result.readiness.preview.eligible = false;
+  checkButton(h).click(); await settle(); assert.equal(previewLink(h), null, "a recheck removes stale eligibility immediately");
+  finish(); await settle(); assert.equal(previewLink(h), null);
+  result = readinessResult(artifact, "docx"); result.readiness.preview = { kind: "native_pdf", eligible: true, rendered: false };
+  checkButton(h).click(); await settle(); finish(); await settle(); assert.equal(previewLink(h), null, "a DOCX cannot become a PDF preview");
+  result = readinessResult(artifact, "pdf"); result.readiness.checks.find((check) => check.id === "active_content").status = "blocked";
+  checkButton(h).click(); await settle(); finish(); await settle(); assert.equal(previewLink(h), null, "active-content findings override an inconsistent eligibility flag");
+  result = readinessResult(artifact, "pdf"); result.source_sha256 = "c".repeat(64);
+  checkButton(h).click(); await settle(); finish(); await settle();
+  assert.equal(previewLink(h), null); assert.match(h.$("agentArtifacts").textContent, /检查响应与当前副本不匹配/);
+});
+
+test("Deliverable checks: late results are discarded after changing session, workspace or turn", async (t) => {
+  for (const change of ["session", "workspace", "turn"]) await t.test(change, async (t) => {
+    const artifact = deliveryArtifact("pdf"); let finish;
+    const h = harness(deliveryRoute(artifact, (url, init) => {
+      if (url.includes("/readiness?")) return new Promise((resolve) => { finish = () => resolve(response(readinessResult(artifact, "pdf"))); });
+      if (url === "/api/agent/workspaces" && JSON.parse(init.body).path === "C:/second") return response({ workspace: { id: "workspace-2", root: "C:/second" }, capabilities: caps });
+    })); t.after(h.close); await showDelivery(h);
+    checkButton(h).click(); await settle();
+    if (change === "session") await h.app.changeSession("", true);
+    else if (change === "workspace") await h.app.openWorkspace("C:/second");
+    else { h.$("agentMessage").value = "下一轮任务"; await h.app.send(); }
+    finish(); await settle();
+    assert.equal(previewLink(h), null); assert.equal(h.app.state.artifactChecks.size, 0);
+    assert.doesNotMatch(h.$("agentArtifacts").textContent, /已检查副本 SHA-256/);
+  });
 });
 
 // Captured numeric fields from the real synthetic 400 x 600 mm rectangle and

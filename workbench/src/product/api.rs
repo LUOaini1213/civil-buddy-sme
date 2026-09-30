@@ -27,7 +27,7 @@ pub struct ProductState {
     pub runtime: RuntimeCore,
     pub worker: WorkerHost,
     pub auth: Arc<super::auth::InstanceAuth>,
-    index: Mutex<Connection>,
+    pub(super) index: Mutex<Connection>,
     _owner: std::fs::File,
 }
 type HttpError = (StatusCode, Json<Value>);
@@ -63,6 +63,7 @@ impl ProductState {
         runtime.recover_interrupted().map_err(|e| e.to_string())?;
         let index = Connection::open(folder.join("index.sqlite")).map_err(|e| e.to_string())?;
         index.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS workspaces(id TEXT PRIMARY KEY,root TEXT UNIQUE NOT NULL); CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,path TEXT NOT NULL,record TEXT NOT NULL);").map_err(|e|e.to_string())?;
+        super::project_control::initialize(&index)?;
         Ok(Arc::new(Self {
             worker: WorkerHost::detect(paths.repo_root.clone()),
             paths,
@@ -152,7 +153,8 @@ pub fn router(state: Arc<ProductState>) -> Router {
         .route("/api/agent/turns/{turn}/cancel", post(cancel))
         .route("/api/agent/artifacts/{id}", get(artifact))
         .layer(DefaultBodyLimit::max(256 * 1024))
-        .with_state(state)
+        .with_state(state.clone())
+        .merge(super::project_control::router(state))
 }
 
 async fn capabilities(State(st): State<Arc<ProductState>>) -> Json<Value> {
@@ -378,6 +380,7 @@ async fn start(
     stored_request["actor_id"] = json!(st.auth.owner());
     stored_request["identity_mode"] = st.auth.capabilities()["mode"].clone();
     stored_request["risk_confirmation_present"] = json!(agent::current_turn_confirmation(&req));
+    stored_request["document_write_classification"] = agent::document_write_classification(&req);
     let begun = match &key {
         Some(key) => st
             .runtime
@@ -406,6 +409,8 @@ async fn start(
     };
     lease.emit("authorization", json!({"actor_id":st.auth.owner(),"sandbox":req.sandbox,
         "risk_confirmation_present":agent::current_turn_confirmation(&req),"confirmation_scope":"current_turn",
+        "document_write_classification":agent::document_write_classification(&req),
+        "unclassified_document_writes":"blocked","model_risk_clearance":false,
         "professional_signoff":false})).map_err(bad)?;
     let response = json!({"turn_id":lease.turn_id(),"session_id":session});
     tokio::spawn(agent::run(st, ws, req, lease));

@@ -21,6 +21,7 @@ STATIC = (
     "sw.js", "modules/auth.js", "modules/toast.js", "modules/drafts.js", "modules/uploads.js",
     "modules/turn-stream.js", "modules/deliverables.js", "modules/session-watch.js", "modules/session-nav.js",
     "agent.html", "agent.css", "agent.js", "theme.css", "theme.js", "workbench-shell.css",
+    "project-control.html", "project-control.css", "project-control.js", "i18n-project.js",
     "i18n.js", "i18n-agent.js", "i18n-home.js", "i18n-engineering.js", "i18n-logistics.js",
     "icons/cb-icon-192.png", "icons/cb-icon-512.png", "icons/cb-icon.svg",
     "vendor/marked.LICENSE.md", "vendor/marked.min.js",

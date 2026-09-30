@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>项目资料与问题 · Civil Buddy</title>
+  <link rel="icon" href="/static/icons/cb-icon.svg" type="image/svg+xml">
+  <script src="/static/i18n.js"></script><script src="/static/i18n-project.js"></script><script src="/static/theme.js"></script>
+  <link rel="stylesheet" href="/static/theme.css"><link rel="stylesheet" href="/static/workbench-shell.css"><link rel="stylesheet" href="/static/project-control.css">
+</head>
+<body>
+  <header class="cb-app-header">
+    <a class="cb-app-brand" href="/static/index.html"><span class="cb-app-mark">CB</span><span>Civil Buddy<small>项目资料与问题</small></span></a>
+    <div class="cb-app-actions"><button type="button" data-cb-theme-toggle>切换主题</button></div>
+    <nav class="cb-app-nav" aria-label="工作台导航"><a href="/static/index.html">工作台</a><a href="/static/agent.html">Agent</a><a href="/static/project-control.html" aria-current="page">项目资料与问题</a><a href="/logistics">箱单与装运</a><a href="/engineering">工程计算</a><a href="/engineering/planning">施工计划</a></nav>
+  </header>
+  <main class="pc-main" id="projectControl">
+    <div class="pc-intro"><div><p class="pc-eyebrow">从原始资料到内部复核</p><h1>项目资料与问题</h1><p>登记资料版本，记录负责人和处理结果。原文件变化后，相关事项需要重新复核。</p></div><a id="pcAgent" class="pc-button" href="/static/agent.html">用 Agent 核对资料</a></div>
+    <section class="pc-panel" aria-label="工程文件夹">
+      <form id="pcWorkspaceForm" class="pc-row"><label class="pc-grow">工程文件夹<input id="pcWorkspacePath" required placeholder="输入本机工程文件夹的完整路径" autocomplete="off"></label><button type="submit">打开工程文件夹</button></form>
+      <div class="pc-row"><label class="pc-grow">已登记的文件夹<select id="pcWorkspaceSelect" data-i18n-skip><option value="">—</option></select></label><button id="pcRefresh" type="button" disabled>刷新并检查来源</button><a id="pcExport" class="pc-button" hidden>导出内部复核记录</a><a id="pcPackage" class="pc-button" hidden>下载资料交接包</a></div>
+      <p id="pcStatus" role="status" aria-live="polite" data-i18n-skip>正在读取工程列表…</p>
+      <p class="pc-muted">每个实例使用一个身份。负责人仅用于记录，不会自动发送通知；内部复核不替代专业签认。</p>
+    </section>
+    <div class="pc-metrics" id="pcMetrics" data-i18n-skip></div>
+    <div class="pc-columns">
+      <section class="pc-panel">
+        <h2>受控资料</h2><p class="pc-muted">登记时保留原文件快照和指纹。单文件上限 16 MiB。</p>
+        <div id="pcDocuments" class="pc-list" data-i18n-skip></div>
+        <details id="pcDocumentEditor"><summary>登记资料或新增修订</summary>
+          <form id="pcDocumentForm" class="pc-form">
+            <label>资料<select id="pcDocumentId" data-i18n-skip></select></label>
+            <label>来源文件<select id="pcSource" data-i18n-skip required></select></label>
+            <label>资料名称<input id="pcTitle" maxlength="160" required></label>
+            <div class="pc-row"><label class="pc-grow">专业或用途<input id="pcDiscipline" maxlength="80" required placeholder="例如：招采、幕墙、现场质量"></label><label class="pc-grow">版本标记<input id="pcRevision" maxlength="80" required placeholder="例如：Rev A、2026-09-30"></label></div>
+            <button type="submit">保存资料快照</button>
+          </form>
+        </details>
+        <div id="pcHistory" class="pc-list" data-i18n-skip></div>
+      </section>
+      <section class="pc-panel">
+        <h2>问题与跟进</h2><p class="pc-muted">每个事项绑定一份资料的具体修订。解决后仍需对资料进行内部复核。</p>
+        <label>筛选<select id="pcFilter"><option value="active">未解决</option><option value="all">全部事项</option></select></label>
+        <div id="pcIssues" class="pc-list" data-i18n-skip></div>
+        <details id="pcIssueEditor"><summary>新增或更新事项</summary>
+          <form id="pcIssueForm" class="pc-form">
+            <p id="pcIssueEditing" class="pc-muted" data-i18n-skip></p>
+            <label>关联资料<select id="pcIssueDocument" data-i18n-skip required></select></label>
+            <div class="pc-row"><label class="pc-grow">类型<select id="pcKind"><option value="rfi">技术询问</option><option value="quality">质量问题</option><option value="change">变更</option><option value="task">待办</option></select></label><label class="pc-grow">状态<select id="pcIssueStatus"><option value="open">待处理</option><option value="in_progress">处理中</option><option value="resolved">已解决</option></select></label></div>
+            <label>事项标题<input id="pcIssueTitle" maxlength="160" required></label><label>问题描述或证据位置<textarea id="pcDescription" rows="3" maxlength="8000" required></textarea></label>
+            <div class="pc-row"><label class="pc-grow">负责人<input id="pcAssignee" maxlength="100" required></label><label class="pc-grow">计划完成日期<input id="pcDue" type="date"></label></div>
+            <label>处理结果与依据<textarea id="pcResolution" rows="3" maxlength="8000"></textarea></label>
+            <p id="pcIssueEvidence" class="pc-muted" data-i18n-skip></p>
+            <div class="pc-row"><button type="submit">保存事项</button><button id="pcNewIssue" type="button">清空并新建</button></div>
+          </form>
+        </details>
+      </section>
+    </div>
+    <section id="pcReviewPanel" class="pc-panel" hidden><h2>内部复核</h2><form id="pcReviewForm" class="pc-form"><p id="pcReviewTarget" data-i18n-skip></p><label>复核范围与结论<textarea id="pcReviewNotes" rows="3" maxlength="4000" required></textarea></label><p class="pc-muted">仅对当前文件指纹登记内部复核。来源变更或事项未解决时无法完成；此记录不代表投标、施工或装运批准。</p><div class="pc-row"><button type="submit">登记内部复核</button><button id="pcReviewCancel" type="button">取消</button></div></form></section>
+    <section class="pc-panel"><details><summary>最近操作记录</summary><div id="pcEvents" class="pc-list" data-i18n-skip></div></details></section>
+  </main>
+  <script src="/static/project-control.js"></script>
+</body>
+</html>

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Façade demo: one curtain-wall subcontractor's jobs, run on the SYNTHETIC files in examples/facade-demo.
 
-  1 linked     the tender and the packing as ONE run: the ITT's logistics clauses, a loading plan from the panel
-               list under the clause's container type, the English statements tied to clause and plan figure, and
-               the link record; then a revised panel list (rev B) re-run, and the statements that changed are named
+  1 linked     the tender and packing as ONE run: preserve the ITT's logistics clauses and panel-list handling
+               requirements, explain why no loading plan is produced, and keep a source-hashed link record;
+               then read rev B and identify its changed source while the missing transport data remains open
   2 tender     解析招标 facade_itt_doc.md, then 技术标 and 废标检查 read the same session's hand-off
-  3 packing    按 facade_panels_zh.xlsx 装柜 (and the English list): container plan + the conservation line
+  3 packing    原幕墙清单的直立 / A 架 / 禁叠要求阻止自动成箱；输出逐行人工补充清单，不生成柜数
   4 site docs  项目日报 from daily_report_input.txt; 安全交底 from wah_briefing_input.txt, a high-risk post
                that writes nothing until a licensed person types the sign-off sentence. This script never
                types it: pass --sign "<the sentence>" yourself, the way `civil exec --confirm` is yours to pass.
@@ -19,6 +19,8 @@ opened) and writes nothing outside it. Exit 1 when a flow errors, 2 on bad argum
 from __future__ import annotations
 
 import argparse
+from hashlib import sha256
+import json
 import os
 import re
 import shutil
@@ -129,14 +131,14 @@ class Demo:
         f = statement.get("figures") or {}
         kind = statement.get("kind")
         if kind == "container_type":
-            return f"clause names {f.get('clause_names') or '-'}; plan made in {f.get('plan_container_type') or f.get('container_type')}"
+            return f"clause names {f.get('clause_names') or '-'}; " + (f"plan made in {f['plan_container_type']}" if f.get("plan_container_type") else "no loading plan generated")
         if kind == "containers_used" and f.get("containers_used") is not None:
             return (f"{f.get('containers_used')} x {f.get('container_type')} (N0 {f.get('n0')}) for {f.get('pieces')} pieces / "
                     f"{f.get('cargo_net_kg'):,.0f} kg net from {f.get('panel_list')}")
         if kind == "gross_mass" and f.get("max_gross_kg") is not None:
             return (f"heaviest container {f.get('max_gross_kg'):,} kg gross ({f.get('max_cargo_kg'):,} cargo + {f.get('container_tare_kg'):,} tare)"
                     f" vs limit {f.get('limit_kg'):,.0f} kg" + (f", margin {f.get('margin_kg'):,}" if f.get("margin_kg") is not None else ""))
-        if kind == "crate_structure":
+        if kind == "crate_structure" and f.get("n_boxes") is not None:
             return f"{f.get('pending_design')} of {f.get('n_boxes')} crates pending detailed design"
         return f"not modelled -> {statement.get('owner')}"
 
@@ -155,14 +157,19 @@ class Demo:
                                             for k in ("tender", "panel_list", "plan")))
         for s in link["statements"]:
             self.say(f"    {s['id']} {s.get('cite') or 'Clause ' + (s.get('clause') or '-')} · {s['kind']} · {s['status']} · {self.figure(s)}")
+        refusal = link.get("plan_refusal") or {}
+        if refusal:
+            self.say(f"    no loading plan: {refusal.get('error')}; source handling requirements remain unchanged")
+            for row in refusal.get("needs_human") or []:
+                self.say(f"      {row.get('id')} · {row.get('name')} · {row.get('ask')}")
         if record is not None:
-            self.say(f"    link record: {self.rel(record)} (statement -> clause -> plan figures -> sha256 of tender, list, plan)")
+            self.say(f"    link record: {self.rel(record)} (statements -> clauses; source hashes and unresolved transport requirements)")
         return {"out": out, "link": link, "record": record}
 
     def linked(self) -> None:
         from packing_assistant.tender_packing_link import KIND_TITLE
 
-        self.say("\n== 1 Tender <-> packing, linked: the ITT's logistics clauses, the plan under them, the English statements")
+        self.say("\n== 1 Tender <-> packing, linked: source requirements, missing transport data and English statements")
         first = self.link_turn(LINK_ASK, "first run")
         if not first:
             return
@@ -170,14 +177,11 @@ class Demo:
         clauses = link.get("clauses") or []
         self.say("    logistics clauses read from the ITT: " + "; ".join(f"{c['clause']} {'/'.join(c['kinds'])}" for c in clauses))
         by_kind = {s["kind"]: s for s in link["statements"]}
-        plan = link.get("plan") or {}
-        clause_type = next((c for c in clauses if "container_type" in c["kinds"]), None)
-        named = str((by_kind.get("container_type") or {}).get("figures", {}).get("clause_names") or "").split(", ")
-        if clause_type and plan.get("container_type") not in named:
-            self.errors.append(f"linked: plan in {plan.get('container_type')}, the ITT's Clause {clause_type['clause']} names {named}")
-        for kind in ("securing", "handling", "delivery_sequence"):
-            if by_kind.get(kind, {}).get("status") == "covered":
-                self.errors.append(f"linked: {kind} marked covered, the plan does not model it")
+        if link.get("plan") is not None or (link.get("plan_refusal") or {}).get("error") != "unsupported_transport_requirements":
+            self.errors.append("linked: original facade handling requirements did not block automatic boxing")
+        for kind, statement in by_kind.items():
+            if statement.get("status") == "covered":
+                self.errors.append(f"linked: {kind} marked covered without a loading plan")
         s2 = by_kind.get("containers_used") or {}
         self.say(f"    {KIND_TITLE['containers_used']} as the English bid-book states it ({s2.get('id')}): {s2.get('text')}")
         bidbook = next((self.rel(f["path"]) for f in first["out"].get("files") or [] if str(f.get("path", "")).endswith("bidbook.en.md")), "")
@@ -191,17 +195,20 @@ class Demo:
         self.say(f"    since the previous run: {changes.get('summary')}")
         for item in changes.get("changed") or []:
             moved = "; ".join(f"{k} {a} -> {b}" for k, (a, b) in item["figures"].items() if k != "rows_per_container")
-            self.say(f"      {item['id']} changed: {moved or 'rows per container moved'} -> re-confirm")
+            self.say(f"      {item['id']} changed: {moved or 'statement text or source changed'} -> re-confirm")
         if changes.get("unchanged"):
-            self.say("      re-derived with the same figures: " + ", ".join(c["id"] for c in changes["unchanged"]))
-        if not changes.get("needs_reconfirmation"):
-            self.errors.append("linked: the revised panel list changed no statement")
-        self.result["linked"] = {"first": {k: first["link"].get(k) for k in ("container", "inputs", "statements", "plan")},
-                                 "rev_b": {k: second["link"].get(k) for k in ("container", "inputs", "statements", "plan")},
+            self.say("      statements unchanged, still require human review: " + ", ".join(c["id"] for c in changes["unchanged"]))
+        if not any(item.get("input") == "panel_list" for item in changes.get("inputs_changed") or []):
+            self.errors.append("linked: the revised panel list was not recorded as a changed source")
+        if second["link"].get("plan") is not None or (second["link"].get("plan_refusal") or {}).get("error") != "unsupported_transport_requirements":
+            self.errors.append("linked: revision B bypassed its source handling requirements")
+        self.say("    source revision changed; transport data still needs a person. No container-count or mass change is invented.")
+        self.result["linked"] = {"first": {k: first["link"].get(k) for k in ("container", "inputs", "statements", "plan", "plan_refusal")},
+                                 "rev_b": {k: second["link"].get(k) for k in ("container", "inputs", "statements", "plan", "plan_refusal")},
                                  "changes": changes, "record": str(second["record"]) if second.get("record") else "",
                                  "submit_blocked": second["out"].get("submit_blocked")}
-        self.say("  sign-off: nothing here is booked or submitted (submit_blocked stays true). A person confirms the loading plan"
-                 " before booking, and re-confirms every statement the re-run names.")
+        self.say("  sign-off: nothing here is booked or submitted (submit_blocked stays true). Supply the missing transport data"
+                 " before any loading plan; the changed source and every statement still require human review.")
 
     # 2 ---------------------------------------------------------------------------------------------
     def tender(self) -> None:
@@ -241,55 +248,44 @@ class Demo:
 
     # 3 ---------------------------------------------------------------------------------------------
     def packing(self) -> None:
-        self.say("\n== 3 Packing and shipping: 24 unitised panels into 40HQ containers")
-        plans = {}
+        self.say("\n== 3 Packing and shipping: original handling constraints -> human supplement checklist")
+        reviews = {}
         for name, session in zip(PANELS, (SESSION, SESSION + "-en")):
             out = self.turn("packing", f"按 {name} 装柜，柜型 40HQ", "pack-ship", session=session)
-            plan = (out.get("pack_ship") or {}).get("plan") or {}
-            cons = plan.get("conservation") or {}
-            if not (out.get("ok") and plan.get("source") == "solver" and plan.get("can_fit") is True):
-                self.errors.append(f"packing {name}: no usable plan (ok={out.get('ok')}, error={out.get('error_code')})")
-            if cons.get("ok") is not True:
-                self.errors.append(f"packing {name}: conservation check did not pass: {cons}")
-            structure = plan.get("structure") or {}
-            self.say(f"    plan: {plan.get('containers_used')} × {plan.get('container_type')} · N0 {plan.get('n0')}"
-                     f" · can_fit {plan.get('can_fit')} · binding {plan.get('binding_constraint')} · crates {plan.get('n_boxes')} for {cons.get('pieces_in')} panels"
-                     f" · space {plan.get('utilization')} · weight {plan.get('weight_utilization')}")
-            self.say(f"    conservation (list -> crates): pieces {cons.get('pieces_in')} -> {cons.get('pieces_out')} · "
-                     f"kg {cons.get('kg_in')} -> {cons.get('kg_out')} · {'ok' if cons.get('ok') else 'FAILED'}")
-            self.say(f"    crate structure: pass {structure.get('pass')} · reinforce {structure.get('needs_reinforcement')} · fail "
-                     f"{structure.get('fail')} · pending detailed design {structure.get('pending_design')} (the engine does not invent a pass)")
-            plans[name] = plan
-        control = self.without_notes(self.job / "inputs" / "facade_panels.xlsx")
-        out = self.turn("packing", f"按 {control.name} 装柜，柜型 40HQ", "pack-ship", session=SESSION + "-control")
-        plans[control.name] = (out.get("pack_ship") or {}).get("plan") or {}
-        keys = ("containers_used", "n0", "n_boxes", "utilization", "weight_utilization", "binding_constraint")
-        changed = [name for name in PANELS if any(plans[name].get(k) != plans[control.name].get(k) for k in keys)]
-        self.say("    handling notes (glass / upright / no stack), against the same list with the notes removed: "
-                 + (f"they change the plan for {', '.join(changed)}" if changed else "no effect on the plan, in either language"))
-        library = (ROOT / "knowledge" / "packing_knowledge_base.json").read_text(encoding="utf-8").lower()
-        if "stillage" not in library and "a-frame" not in library:
-            self.say("    not modelled: A-frame stillages (the ITT asks for them). That needs the contractor's"
-                     " stillage size, tare and capacity.")
-        zh = plans["facade_panels_zh.xlsx"]
-        self.result["packing"] = {"plan": {k: zh.get(k) for k in (*keys, "container_type", "can_fit")},
-                                  "conservation": zh.get("conservation"), "notes_change_plan": changed}
-        self.say("  sign-off: pack-plan.md is an internal draft (不可直接订舱); a person confirms the plan in the workbench"
-                 " HITL step, and lashing / VGM are signed separately.")
-
-    @staticmethod
-    def without_notes(source: Path) -> Path:
-        """The control list: the same rows with the note column emptied, next to the source in the job folder."""
-        import openpyxl
-
-        target = source.with_name("panels_no_notes.xlsx")
-        wb = openpyxl.load_workbook(source)
-        ws = wb["materials"]
-        column = [c.value for c in ws[1]].index("note") + 1
-        for row in range(2, ws.max_row + 1):
-            ws.cell(row=row, column=column).value = None
-        wb.save(target)
-        return target
+            pack = out.get("pack_ship") or {}
+            rows = pack.get("needs_human") or []
+            if out.get("ok") or out.get("error_code") != "unsupported_transport_requirements" or pack.get("source") != "needs_human" or not rows:
+                self.errors.append(f"packing {name}: expected handling refusal was not returned (ok={out.get('ok')}, error={out.get('error_code')})")
+                continue
+            if out.get("wrote") or out.get("files") or pack.get("plan"):
+                self.errors.append(f"packing {name}: a loading plan was published despite unresolved handling requirements")
+            source = self.job / "inputs" / name
+            review = {"schema": "facade.demo.transport_review.v1", "synthetic": True,
+                      "source": self.rel(source), "source_sha256": sha256(source.read_bytes()).hexdigest(),
+                      "status": "needs_human", "reason": out["error_code"], "needs_human": rows,
+                      "requested_container_type": "40HQ", "plan": None, "containers_used": None, "can_fit": None,
+                      "confirmed_by_person": False, "submit_blocked": True}
+            folder = self.job / ".civil-buddy" / "out" / "facade-demo"
+            folder.mkdir(parents=True, exist_ok=True)
+            target = folder / (source.stem + "-transport-review.json")
+            target.write_text(json.dumps(review, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            md = ["# 幕墙运输补充资料清单 / Façade transport data checklist", "",
+                  "SYNTHETIC 合成示例。源文件的直立、A 架和禁叠要求保持原样；未生成装柜方案、柜数或可装结论。", "",
+                  f"Source: `{review['source']}`", f"SHA-256: `{review['source_sha256']}`", "",
+                  "请逐行补充已包装整体外尺寸、每包装毛重与包装数；A 架另需每架净重、皮重和声明载荷上限。",
+                  "在物流台账中按已包装箱件录入，并继续保留运输方向、禁叠和保护要求；人工核对不由本演示代填。", ""]
+            for row in rows:
+                md.extend([f"## {row.get('id', '')} · {row.get('name', '')}", "",
+                           "原始要求 / Source requirements:", "```json", json.dumps(row.get("requirements") or {}, ensure_ascii=False, indent=2), "```", "",
+                           str(row.get("ask") or row.get("reason") or ""), ""])
+                self.say(f"    needs_human {row.get('id')} · {row.get('name')} · {row.get('ask')}")
+            markdown = target.with_suffix(".md")
+            markdown.write_text("\n".join(md), encoding="utf-8")
+            reviews[name] = {**review, "checklist": str(markdown), "record": str(target)}
+            self.say(f"    human supplement checklist: {self.rel(markdown)}; record {self.rel(target)}")
+        self.result["packing"] = {"status": "needs_human", "plan": None, "sources": reviews, "submit_blocked": True}
+        self.say("  No loading plan or container count. Upright / A-frame / no-stack source requirements were retained;")
+        self.say("  a responsible person supplies the package data and separately reviews securing, VGM and handling.")
 
     # 4 ---------------------------------------------------------------------------------------------
     def daily(self) -> None:

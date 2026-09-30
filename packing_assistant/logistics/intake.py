@@ -29,7 +29,7 @@ def _norm(value):
 
 _ALIASES = {
     "container_id": ("集装箱号", "柜号", "container no", "container number", "container id", "ctn no"),
-    "package_type": ("包装类型", "包装形式", "package type", "packing type"),
+    "package_type": ("包装类型", "包装形式", "package type", "packing type", "A-frame", "a_frame", "stillage", "A架"),
     "package_id": ("箱号", "包装号", "package id", "package no", "case no", "case number", "box no", "carton no"),
     "material_id": ("物料编号", "材料编号", "物料编码", "材料编码", "料号", "件号", "item no", "item code", "part no", "material id", "sku"),
     "name": ("name", "品名", "货物名称", "材料名称", "名称", "货物名称及规格", "品名及规格", "description", "item description", "commodity"),
@@ -45,6 +45,11 @@ _ALIASES = {
     "gross_kg": ("gross", "gross weight", "g.w.", "毛重", "gross kg"),
     "dimension_scope": ("dimension scope", "尺寸范围", "尺寸口径"),
     "weight_scope": ("weight scope", "重量范围", "重量口径"),
+    "orientation": ("orientation", "transport orientation", "upright", "this_side_up", "this side up", "运输姿态", "保持直立", "此面向上", "竖放"),
+    "stacking": ("stacking", "stacking requirement", "no_stack", "no stack", "no stacking", "stackable", "堆叠要求", "禁止堆叠", "禁止叠放", "不可堆叠", "可堆叠", "允许堆叠"),
+    "handling_requirements": ("handling", "handling requirements", "handling instructions", "special handling", "transport requirements", "shipping instructions", "fragile", "易碎", "运输要求", "运输要求原文", "装卸要求", "特殊要求", "备注", "notes", "remarks"),
+    "tare_kg": ("tare kg", "tare", "tare weight", "package tare", "每包装皮重", "架体皮重", "皮重"),
+    "capacity_kg": ("capacity kg", "load capacity", "rated capacity", "package capacity", "每包装声明载荷上限", "声明载荷上限", "架体承载上限"),
     "dimensions": ("dimensions", "dimension", "尺寸", "长宽高", "l x w x h", "l*w*h", "l×w×h", "package dimensions", "箱外尺寸"),
 }
 _LOOKUP = {_norm(a): f for f, aliases in _ALIASES.items() for a in (*aliases, f)}
@@ -400,6 +405,8 @@ def _table_rows(tables, issues):
                     continue
                 if targets.count(field) > 1:
                     evidence["reason"] = "同一字段对应多个列，需人工选择，未自动取第一列。"
+                    previous = row["evidence"].get(field)
+                    evidence["alternatives"] = (previous.get("alternatives", [{k: v for k, v in previous.items() if k != "reason"}]) if previous else []) + [{k: v for k, v in evidence.items() if k != "reason"}]
                     row["evidence"][field] = evidence
                     continue
                 if cell.get("reason"):
@@ -408,6 +415,18 @@ def _table_rows(tables, issues):
                     value, reason = _number(raw, field, unit)
                 elif field in ("dimension_scope", "weight_scope"):
                     value, reason = _scope(raw, field == "dimension_scope"), ""
+                elif field in ("orientation", "stacking"):
+                    from packing_assistant.transport_constraints import normalize
+                    value, reason = normalize(field, raw, raw_header)
+                elif field == "package_type" and _norm(raw_header) in {"aframe", "stillage", "a架"}:
+                    if raw.strip().lower() in {"true", "yes", "1", "是"}:
+                        value, reason = "A-frame", ""
+                    elif raw.strip().lower() in {"false", "no", "0", "否", ""}:
+                        value, reason = UNSPECIFIED, ""
+                    else:
+                        value, reason = UNSPECIFIED, "A 架列须明确是/否；外尺寸、皮重和载荷上限需分别填写，不从此格猜测。"
+                elif field == "handling_requirements" and _norm(raw_header) in {"fragile", "易碎"}:
+                    value, reason = (UNSPECIFIED if raw.strip().lower() in {"false", "no", "0", "否", ""} else "fragile=" + raw), ""
                 else:
                     value, reason = raw.strip() or UNSPECIFIED, ""
                 row[field] = value

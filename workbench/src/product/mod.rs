@@ -7,3 +7,4 @@ pub mod agent;
 pub mod domains;
 pub mod engineering;
 pub mod auth;
+pub mod project_control;

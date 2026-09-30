@@ -108,7 +108,7 @@ def export_ledger(project, format):
         raise ValueError("台账导出只支持 json / xlsx。")
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill
-    fields = ["id", "container_id", "package_id", "package_type", "material_id", "name", "spec", "package_count", "quantity", "units_per_package", "unit", "length_mm", "width_mm", "height_mm", "dimension_scope", "net_kg", "gross_kg", "weight_scope"]
+    fields = ["id", "container_id", "package_id", "package_type", "material_id", "name", "spec", "package_count", "quantity", "units_per_package", "unit", "length_mm", "width_mm", "height_mm", "dimension_scope", "net_kg", "gross_kg", "weight_scope", "orientation", "stacking", "handling_requirements", "tare_kg", "capacity_kg"]
     wb = Workbook()
     ws = wb.active
     ws.title = "台账"
