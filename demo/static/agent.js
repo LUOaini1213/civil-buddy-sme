@@ -1,4 +1,5 @@
 import { createAuth } from "./modules/auth.js";
+import { renderAgentMarkdown } from "./modules/agent-markdown.js";
 
 const STORE_KEY = "cb_agent_workspaces_v1";
 const RISK_PHRASE = "我明白，将由持证人员签认";
@@ -6,6 +7,7 @@ const confirmedMessage = (text) => String(text || "").trim() === RISK_PHRASE;
 const TERMINAL = new Set(["completed", "succeeded", "failed", "cancelled", "interrupted"]);
 const STATUS = { queued: "等待执行", running: "执行中", waiting_approval: "等待确认", cancelling: "正在停止", completed: "已完成", succeeded: "已完成", failed: "未完成", cancelled: "已停止", interrupted: "服务重启时中断" };
 const EVENT_NAMES = { status: "执行阶段", context: "上下文预算", model: "模型调用", tool_started: "工具开始", tool_finished: "工具结束", subtask_started: "子任务开始", subtask_finished: "子任务结束", artifact: "产物已保存", source_evidence: "来源引文核验", decision: "工程判断", error: "执行错误", done: "本轮结束" };
+const CHILD_ROLES = { evidence: "证据检索", review: "独立复核" };
 const TURN_EVENTS = { "turn.started": "running", "turn.cancelling": "cancelling", "turn.completed": "completed", "turn.failed": "failed", "turn.cancelled": "cancelled", "turn.interrupted": "interrupted" };
 const idOf = (turn) => String(turn && (turn.turn_id || turn.id) || "");
 const object = (value) => value && typeof value === "object" && !Array.isArray(value);
@@ -49,7 +51,7 @@ export function createAgentWorkbench(deps) {
   const node = (tag, text, cls) => { const n = doc.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
   const state = { capabilities: null, workspace: null, session: "", files: [], selected: new Set(), turn: null,
     seq: 0, emptyEventPages: 0, nextTurnCursor: null, turnsLoading: false, sessionListEpoch: 0, sessionsLoading: false, nextSessionCursor: null, sessionHistoryMessage: null, artifacts: new Map(), artifactChecks: new Map(), engineeringResults: new Map(), epoch: 0, workspaceEpoch: 0, fileEpoch: 0, listEpoch: 0,
-    contextData: null, taskRows: [], eventRows: [], modelConfig: null, writeGateReason: null, sourceEvidence: null,
+    contextData: null, taskRows: [], eventRows: [], subtasks: new Map(), modelConfig: null, writeGateReason: null, sourceEvidence: null,
     engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, engineeringStatus: null, terminalNotice: false, experts: [],
     opening: false, submitting: false, cancelling: false, modelBusy: false, modelConfigured: false, disposed: false };
   let saved = { lastRoot: "", workspaces: {} }, timer = null, controller = null, started = false;
@@ -79,6 +81,7 @@ export function createAgentWorkbench(deps) {
   const post = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   function stopPolling() { if (timer !== null) unschedule(timer); timer = null; if (controller) controller.abort(); controller = null; }
   function resetView({ keepHistory = false } = {}) {
+    state.subtasks.clear();
     stopPolling(); state.epoch += 1; state.listEpoch += 1; state.turn = null; state.seq = 0; state.emptyEventPages = 0; state.turnsLoading = false; if (!keepHistory) { state.nextTurnCursor = null; state.taskRows = []; } state.eventRows = []; state.contextData = null; state.artifacts.clear(); state.artifactChecks.clear(); state.engineeringResults.clear();
     state.submitting = false; state.cancelling = false;
     state.writeGateReason = null; paintWriteGate();
@@ -322,7 +325,7 @@ export function createAgentWorkbench(deps) {
       for (const expert of state.experts) { const option = node("option", `${t(expert.category_name) || t("岗位")} · ${t(expert.name) || expert.id}`); option.value = expert.id; select.appendChild(option); }
       select.value = selected;
   }
-  async function openWorkspace(path, { expectedId = "", restoreSelection = true, restoreTurn = true } = {}) {
+  async function openWorkspace(path, { expectedId = "", restoreSelection = true, restoreTurn = true, manual = false } = {}) {
     if (!String(path || "").trim() || state.opening) return;
     cancelVoice();
     clearEngineering();
@@ -346,6 +349,14 @@ export function createAgentWorkbench(deps) {
       state.session = item.sessions.some((s) => s.id === item.current) ? item.current : item.sessions[0].id;
       item.current = state.session;
       state.selected = new Set(restoreSelection && Array.isArray(item.files) ? item.files : []); saved.lastRoot = state.workspace.root; persist();
+      if (manual) {
+        // A prior project-page link must not override this explicit choice on reload.
+        const url = new URL(win.location.href);
+        if (url.searchParams.has("workspace")) {
+          url.searchParams.delete("workspace");
+          win.history.replaceState(win.history.state, "", url.pathname + url.search + url.hash);
+        }
+      }
       $("agentWorkspacePath").value = displayPath(state.workspace.root); $("agentWorkspaceStatus").textContent = displayPath(state.workspace.root);
       paintSessions(); notice(t("工程文件夹已打开。可勾选资料后开始任务。"));
       await Promise.all([loadFiles(), loadSessions({ preferServer: !hasLocalSessions }), loadEngineering()]);
@@ -646,7 +657,7 @@ export function createAgentWorkbench(deps) {
   }
   function paintResult(result) {
     if (!object(result)) return;
-    if (typeof result.reply === "string") $("agentReply").textContent = result.reply;
+    if (typeof result.reply === "string") renderReply($("agentReply"), result.reply);
     if (Object.prototype.hasOwnProperty.call(result, "source_evidence")) paintSourceEvidence(result.source_evidence);
     $("agentPartial").hidden = result.partial !== true;
     for (const item of Array.isArray(result.artifacts) ? result.artifacts : []) paintArtifact(item);
@@ -659,6 +670,33 @@ export function createAgentWorkbench(deps) {
     $("agentTurnStatus").textContent = t(STATUS[state.turn.status]) || state.turn.status || t("状态待读取");
     $("agentTurnActor").textContent = t("任务发起者：") + (state.turn.actor_id || t("历史记录未标记身份"));
     paintResult(state.turn.result); controls();
+  }
+  function renderReply(host, text) {
+    renderAgentMarkdown(host, text, { lexer: typeof win.marked?.lexer === "function" ? win.marked.lexer.bind(win.marked) : null, t });
+  }
+  function subtaskEvent(li, kind, data) {
+    // RuntimeEvent.task_id identifies the parent lease; the child ID belongs
+    // to event data. It is a task label, never an actor/authorization identity.
+    const id = typeof data.task_id === "string" && ID.test(data.task_id) ? data.task_id : "";
+    const lifecycle = kind === "subtask_started" || kind === "subtask_finished";
+    if (!id || (!lifecycle && !state.subtasks.has(id))) return;
+    const previous = state.subtasks.get(id) || {};
+    const role = typeof data.role === "string" ? data.role : previous.role || "";
+    const status = kind === "subtask_started" ? "running"
+      : kind === "subtask_finished" ? (TERMINAL.has(data.status) ? data.status : "unknown") : previous.status;
+    state.subtasks.set(id, { role, status });
+    const meta = node("div", undefined, "subtask-meta");
+    meta.appendChild(node("strong", Object.hasOwn(CHILD_ROLES, role) ? t(CHILD_ROLES[role]) : role || t("子任务")));
+    const identifier = node("span", t("子任务 {id}", { id: id.slice(0, 8) })); identifier.title = id; meta.appendChild(identifier);
+    if (lifecycle) meta.appendChild(node("span", Object.hasOwn(STATUS, status) ? t(STATUS[status]) : t("状态待读取"), "status-tag"));
+    li.appendChild(meta);
+    if (kind === "subtask_started" && typeof data.goal === "string") li.appendChild(node("p", data.goal));
+    if (kind === "subtask_finished" && typeof data.error === "string") li.appendChild(node("p", data.error, "notice error"));
+    if (kind === "subtask_finished" && typeof data.findings === "string") {
+      const details = node("details", undefined, "subtask-findings"), reply = node("div", undefined, "reply");
+      details.appendChild(node("summary", t("查看子代理发现（模型自述）")));
+      renderReply(reply, data.findings); details.appendChild(reply); li.appendChild(details);
+    }
   }
   function eventFrame(event) {
     if (!event || !Number.isSafeInteger(event.seq) || event.seq <= state.seq) return;
@@ -676,6 +714,7 @@ export function createAgentWorkbench(deps) {
     if (TURN_EVENTS[kind]) paintTurn({ status: TURN_EVENTS[kind], ...(data.result ? { result: data.result } : {}) });
     const li = node("li"), title = node("div", undefined, "event-title");
     title.append(node("strong", kind === "authorization" ? t("本轮权限记录") : t(EVENT_NAMES[kind]) || t(STATUS[TURN_EVENTS[kind]]) || kind), node("span", `#${event.seq}` + (event.actor_id ? t(" · 发起者：{actor}", { actor: event.actor_id }) : ""))); li.appendChild(title);
+    subtaskEvent(li, kind, data);
     const text = data.message || data.text || data.summary || data.tool || data.name || data.phase || data.model;
     if (typeof text === "string") li.appendChild(node("p", text));
     if (Object.keys(data).length) { const details = node("details"); details.append(node("summary", t("查看事件数据")), node("pre", printable(data))); li.appendChild(details); }
@@ -764,6 +803,7 @@ export function createAgentWorkbench(deps) {
   }
   function languageChanged() {
     if (state.disposed) return;
+    const displayedTurn = state.turn ? { ...state.turn } : null;
     // UI state is repainted; user text, raw events, file names and saved outputs stay unchanged.
     if (state.capabilities) paintCapabilities(state.capabilities);
     paintSessions(); paintFiles(); paintExperts(); expertNote(); paintEngineering(); paintWriteGate();
@@ -780,8 +820,11 @@ export function createAgentWorkbench(deps) {
     }
     for (const item of state.artifacts.values()) { paintArtifact(item); break; }
     for (const item of state.engineeringResults.values()) { paintEngineeringResult(item); break; }
-    const events = state.eventRows.slice(); state.eventRows = []; state.seq = 0; $("agentEvents").replaceChildren();
+    const events = state.eventRows.slice(); state.eventRows = []; state.seq = 0; state.subtasks.clear(); $("agentEvents").replaceChildren();
     for (const event of events) eventFrame(event);
+    // A partially drained history can end with an old running event; keep the
+    // latest server snapshot authoritative after repainting historical rows.
+    if (displayedTurn) paintTurn(displayedTurn);
     paintTurns(); paintSessionHistory();
     if (state.modelConfig) {
       const cfg = state.modelConfig;
@@ -794,7 +837,7 @@ export function createAgentWorkbench(deps) {
     const startupWorkspaceEpoch = state.workspaceEpoch;
     win.addEventListener("cb:languagechange", languageChanged);
     languageChanged();
-    $("agentWorkspaceForm").addEventListener("submit", (event) => { event.preventDefault(); openWorkspace($("agentWorkspacePath").value); });
+    $("agentWorkspaceForm").addEventListener("submit", (event) => { event.preventDefault(); openWorkspace($("agentWorkspacePath").value, { manual: true }); });
     $("agentTaskForm").addEventListener("submit", (event) => { event.preventDefault(); send(); });
     $("agentModelForm").addEventListener("submit", (event) => { event.preventDefault(); saveModel(); });
     $("agentMode").addEventListener("change", controls); $("agentSandbox").addEventListener("change", controls);

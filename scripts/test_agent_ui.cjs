@@ -7,6 +7,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { JSDOM } = require("jsdom");
 const { createAgentWorkbench, artifactUrl } = require("../demo/static/agent.js");
+const { renderAgentMarkdown } = require("../demo/static/modules/agent-markdown.js");
+const markedSource = fs.readFileSync(path.join(__dirname, "../demo/static/vendor/marked.min.js"), "utf8");
 const html = fs.readFileSync(path.join(__dirname, "../demo/static/agent.html"), "utf8");
 const caps = { available: true, models: { configured: false }, modes: ["steps", "model"], sandbox: ["read-only", "workspace-write"],
   features: { cancel: true, context: true, subagents: true, documents: true }, sandbox_controls: { policy: true, os_enforced: false } };
@@ -67,6 +69,7 @@ function receiptRoute(receipt, reply = "模型解释：请核对原文。", even
 
 function harness(route = () => undefined, saved = storage()) {
   const dom = new JSDOM(html, { url: "http://localhost/static/agent.html", runScripts: "outside-only" });
+  dom.window.eval(markedSource);
   const doc = dom.window.document, calls = [], timers = new Map();
   let timerId = 0, sid = 0;
   const fetch = async (url, init) => {
@@ -415,6 +418,62 @@ test("A delayed project-link lookup cannot replace a manually opened workspace",
   },savedWorkspacePair());t.after(h.close);h.win.history.replaceState(null,"","/static/agent.html?workspace=workspace-2");
   const starting=h.app.start();await settle();await h.app.openWorkspace("C:/manual project");resolve(response({workspaces:[{id:"workspace-2",root:"C:/second"}]}));await starting;
   assert.equal(h.app.state.workspace.id,"manual-project");assert.equal(h.calls.filter(c=>c.url==="/api/agent/workspaces"&&c.init).length,1);
+});
+
+test("Manual workspace selection removes an old deep link only after success and reload restores the new workspace", async (t) => {
+  const saved = storage();
+  const route = (url, init) => {
+    if (url !== "/api/agent/workspaces") return;
+    if (!init) return response({ workspaces: [{ id: "old-project", root: "C:/old" }] });
+    const root = JSON.parse(init.body).path;
+    return response({ workspace: { id: root === "C:/old" ? "old-project" : "new-project", root }, capabilities: caps });
+  };
+  const first = harness(route, saved); t.after(first.close);
+  first.win.history.replaceState({ page: "preserved" }, "", "/static/agent.html?workspace=old-project&lang=en#answer");
+  await first.app.start();
+  assert.match(first.win.location.search, /workspace=old-project/);
+  assert.equal(first.app.state.selected.size, 0); assert.equal(first.app.state.turn, null);
+  first.$("agentWorkspacePath").value = "C:/new";
+  first.$("agentWorkspaceForm").dispatchEvent(new first.win.Event("submit", { cancelable: true }));
+  await settle(); await settle();
+  assert.equal(first.app.state.workspace.id, "new-project");
+  assert.equal(first.win.location.search, "?lang=en"); assert.equal(first.win.location.hash, "#answer");
+  assert.equal(first.win.history.state.page, "preserved");
+  first.selectFirst();
+  const second = harness(route, saved); t.after(second.close);
+  second.win.history.replaceState(null, "", first.win.location.href);
+  await second.app.start();
+  assert.equal(second.app.state.workspace.id, "new-project");
+  assert.deepEqual([...second.app.state.selected], ["方案.docx"]);
+  assert.equal(second.calls.some(call => call.url === "/api/agent/workspaces" && !call.init), false);
+  assert.equal(second.calls.some(call => call.url === "/api/agent/turns" && call.init), false);
+});
+
+test("A failed or stale manual workspace open preserves the previous deep link", async (t) => {
+  for (const outcome of ["failure", "stale"]) {
+    await t.test(outcome, async () => {
+      let finish;
+      const h = harness((url, init) => {
+        if (url === "/api/agent/workspaces" && init && JSON.parse(init.body).path === "C:/new") {
+          return outcome === "failure" ? response({ detail: "Unavailable folder" }, 403) : new Promise(resolve => { finish = resolve; });
+        }
+      });
+      try {
+        await h.ready();
+        h.win.history.replaceState(null, "", "/static/agent.html?workspace=workspace-1&lang=en#answer");
+        const opening = h.app.openWorkspace("C:/new", { manual: true });
+        await settle();
+        if (outcome === "stale") {
+          await h.app.changeSession("", true);
+          finish(response({ workspace: { id: "new-project", root: "C:/new" }, capabilities: caps }));
+        }
+        await opening;
+        assert.equal(h.win.location.search, "?workspace=workspace-1&lang=en");
+        assert.equal(h.win.location.hash, "#answer");
+        assert.equal(h.app.state.workspace.id, "workspace-1");
+      } finally { h.close(); }
+    });
+  }
 });
 
 test("Agent UI: cancelling is a request until the server confirms, and partial artifacts remain downloadable", async (t) => {
@@ -945,6 +1004,124 @@ test("History recovery: a terminal event cursor that makes no progress stops bou
   }); t.after(h.close); await h.ready(); await h.app.showTurn("stuck-turn");
   await h.tick(); await h.tick(); assert.equal(pages, 3); assert.equal(h.timers.size, 0);
   assert.match(h.$("agentNotice").textContent, /尚未完整恢复/);
+});
+
+test("Agent answers: local lexer renders headings, tables, lists and exact code using DOM nodes", (t) => {
+  const h = harness(); t.after(h.close);
+  const source = '# 核对结果\n\n**原文件.xlsx**、*原文*与~~旧值~~。\n\n| 项目 | 数值 |\n|---|---:|\n| sample_count | 6 |\n\n> 仅核对原文。\n\n3. 读取文件\n4. 核对来源\n\n- [x] 已读取\n- [ ] 待复核\n\n```xml\n<source sha="' + 'a'.repeat(64) + '">\n  sample_count=6\n</source>\n```\n\n`Counts!B2`';
+  const host = h.$("agentReply");
+  assert.equal(renderAgentMarkdown(host, source, { lexer: h.win.marked.lexer }), true);
+  assert.equal(host.querySelector("h3").textContent, "核对结果");
+  assert.equal(host.querySelector("strong").textContent, "原文件.xlsx");
+  assert.equal(host.querySelector("em").textContent, "原文");
+  assert.equal(host.querySelector("del").textContent, "旧值");
+  assert.equal(host.querySelectorAll("table").length, 1);
+  assert.equal(host.querySelector("tbody td:last-child").textContent, "6");
+  assert.equal(host.querySelector(".agent-table-scroll").tabIndex, 0);
+  assert.equal(host.querySelector("ol").start, 3);
+  assert.match(host.querySelector("ul").textContent, /☑ 已读取.*☐ 待复核/s);
+  assert.equal(host.querySelector("pre code").textContent, '<source sha="' + 'a'.repeat(64) + '">\n  sample_count=6\n</source>');
+  assert.equal(host.querySelectorAll("source,input").length, 0);
+  assert.match(html, /src="\/static\/vendor\/marked.min.js"/);
+});
+
+test("Agent answers: HTML stays literal, image URLs never load and dangerous links are inactive", (t) => {
+  const h = harness(); t.after(h.close);
+  const host = h.$("agentReply");
+  const source = '[good](https://example.invalid/reference) [js](javascript:alert%281%29) [data](data:text/html,evil) [file](file:///private) [relative](//evil.invalid) [credentials](https://user:secret@example.invalid)\n\n![箱单图片](https://evil.invalid/track.png)\n\n<script>window.bad=1</script>\n\n<img src="https://evil.invalid/x" onerror="bad()">\n\n<svg onload="bad()"><foreignObject><iframe src="https://evil.invalid"></iframe></foreignObject></svg>\n\n<style>@import "https://evil.invalid/a.css";</style>';
+  renderAgentMarkdown(host, source, { lexer: h.win.marked.lexer });
+  assert.equal(host.querySelectorAll("script,img,iframe,svg,style,object,embed,form,input,video,audio,link").length, 0);
+  assert.equal(host.querySelectorAll("a").length, 1);
+  const link = host.querySelector("a");
+  assert.equal(link.href, "https://example.invalid/reference");
+  assert.equal(link.rel, "noopener noreferrer"); assert.equal(link.referrerPolicy, "no-referrer");
+  assert.match(host.textContent, /箱单图片/); assert.match(host.textContent, /<script>window.bad=1<\/script>/);
+  assert.equal(h.win.bad, undefined);
+  assert.equal(host.querySelector("[src],[srcset],[onerror],[onload],[style]"), null);
+});
+
+test("Agent answers: lexer escaping is undone once while source entities, quotes and exact code remain intact", (t) => {
+  const h = harness(); t.after(h.close); const host = h.$("agentReply");
+  const code = '{"kind":"text","literal":"&amp; &quot; &#34; <tag>"}';
+  const prose = '原文 "quote" < 6 & literal &amp; &quot; &#34;';
+  const source = prose + '\n\n`' + code + '`\n\n```json\n' + code + '\n```\n\n\\<escaped\\>\n\n[query](https://example.invalid/?a=1&amp;b=2)';
+  renderAgentMarkdown(host, source, { lexer: h.win.marked.lexer });
+  assert.equal(host.querySelector("p").textContent, prose);
+  assert.equal(host.querySelector("p code").textContent, code);
+  assert.equal(host.querySelector("pre code").textContent, code);
+  assert.match(host.textContent, /<escaped>/);
+  assert.equal(host.querySelector("tag,escaped"), null);
+  assert.equal(new URL(host.querySelector("a").href).searchParams.get("b"), "2");
+  assert.equal(new URL(host.querySelector("a").href).searchParams.has("amp;b"), false);
+});
+
+test("Agent answers: unavailable, failing or excessive lexer output preserves complete plain text", (t) => {
+  const h = harness(); t.after(h.close); const host = h.$("agentReply"), source = "# 原文\n<script>仍是原文</script>";
+  for (const lexer of [undefined, () => { throw new Error("parser unavailable"); },
+    () => Array.from({ length: 7000 }, () => ({ type: "text", text: "ignored" })),
+    () => { let tokens = [{ type: "text", text: "deep" }]; for (let i = 0; i < 34; i++) tokens = [{ type: "blockquote", tokens }]; return tokens; }]) {
+    assert.equal(renderAgentMarkdown(host, source, { lexer }), false);
+    assert.equal(host.textContent, source); assert.equal(host.children.length, 0);
+  }
+  const large = "原".repeat(128001); let called = false;
+  assert.equal(renderAgentMarkdown(host, large, { lexer: () => { called = true; return []; } }), false);
+  assert.equal(called, false); assert.equal(host.textContent, large);
+});
+
+test("Agent subagents: roles, child IDs, outcomes and Markdown survive history reopening and language changes", async (t) => {
+  const saved = storage(), reply = '## 核对结果\n\n| 文件 | 数量 |\n|---|---|\n| 原文件.xlsx | 6 |\n\n```text\nsample_count=6\n' + 'a'.repeat(64) + '\n```';
+  const evidence = "a1234567-child-evidence", review = "b7654321-child-review";
+  const turn = { turn_id: "child-history", task_id: "parent-lease", status: "completed", last_seq: 8, result: { reply } };
+  const events = [event(1, "turn.started"),
+    event(2, "subtask_started", { task_id: evidence, role: "evidence", goal: "读取原文件.xlsx" }),
+    event(3, "model", { task_id: evidence, model: "synthetic-model" }),
+    event(4, "tool_finished", { task_id: evidence, name: "search_sources", result: {} }),
+    event(5, "subtask_finished", { task_id: evidence, role: "evidence", status: "completed", findings: "### 来源\n\n`sample_count=6`", trust: "assistant_claimed" }),
+    event(6, "subtask_started", { task_id: review, role: "review", goal: "复核来源" }),
+    event(7, "subtask_finished", { task_id: review, role: "review", status: "failed", error: "<img src=x>来源不可读" }),
+    event(8, "turn.completed")].map(row => ({ ...row, task_id: "parent-lease", actor_id: "test-owner" }));
+  const route = (url) => {
+    if (url.includes("/child-history/events?")) return response({ turn, events });
+    if (url.startsWith("/api/agent/turns/child-history?")) return response({ turn });
+  };
+  const first = harness(route, saved); installLanguage(first); await first.ready(); await first.app.showTurn(turn.turn_id);
+  const before = first.$("agentReply").textContent;
+  assert.equal(first.$("agentReply").querySelectorAll("table").length, 1);
+  for (const index of [1, 2, 3, 4]) {
+    assert.match(first.$("agentEvents").children[index].querySelector(".subtask-meta").textContent, /证据检索.*a1234567/);
+    assert.doesNotMatch(first.$("agentEvents").children[index].querySelector(".subtask-meta").textContent, /parent-lease|test-owner/);
+  }
+  assert.match(first.$("agentEvents").children[4].querySelector(".subtask-meta").textContent, /已完成/);
+  assert.match(first.$("agentEvents").children[6].querySelector(".subtask-meta").textContent, /独立复核.*b7654321.*未完成/);
+  assert.equal(first.doc.querySelector(".subtask-findings code").textContent, "sample_count=6");
+  assert.equal(first.doc.querySelector("#agentEvents img"), null);
+  first.win.CBI18n.setLocale("en");
+  assert.equal(first.$("agentReply").textContent, before); assert.equal(first.app.state.turn.result.reply, reply);
+  assert.match(first.$("agentEvents").children[6].querySelector(".subtask-meta").textContent, /Independent review.*b7654321.*Incomplete/);
+  assert.match(first.doc.querySelector(".subtask-findings summary").textContent, /model claims/);
+  assert.equal(first.$("agentEvents").children.length, 8);
+  first.close();
+  const second = harness(route, saved); t.after(second.close); installLanguage(second); await second.app.start();
+  assert.equal(second.$("agentReply").textContent, before); assert.equal(second.doc.querySelectorAll("#agentReply table").length, 1);
+  assert.equal(second.$("agentEvents").children.length, 8); assert.equal(second.app.state.subtasks.size, 2);
+  assert.equal(second.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+  await second.app.changeSession("", true); assert.equal(second.app.state.subtasks.size, 0);
+});
+
+test("Agent subagents: switching language during event draining retains the terminal snapshot and child role", async (t) => {
+  const turn = { turn_id: "child-drain", status: "interrupted", last_seq: 3, result: { reason: "runtime_restart" } };
+  const h = harness((url) => {
+    if (url.startsWith("/api/agent/turns/child-drain?")) return response({ turn });
+    if (url.includes("/child-drain/events?")) {
+      const after = Number(new URL(url, "http://local").searchParams.get("after_seq"));
+      return response({ turn, events: after ? [event(3, "subtask_finished", { task_id: "c1234567", status: "cancelled" })]
+        : [event(1, "turn.started"), event(2, "subtask_started", { task_id: "c1234567", role: "review" })] });
+    }
+  }); t.after(h.close); installLanguage(h); await h.ready(); await h.app.showTurn(turn.turn_id);
+  h.win.CBI18n.setLocale("en"); assert.equal(h.app.state.turn.status, "interrupted");
+  await h.tick();
+  assert.match(h.$("agentEvents").lastChild.querySelector(".subtask-meta").textContent, /Independent review.*c1234567.*Stopped/);
+  assert.equal(h.timers.size, 0); assert.equal(h.app.state.turn.status, "interrupted");
 });
 
 

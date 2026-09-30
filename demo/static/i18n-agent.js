@@ -1,5 +1,12 @@
 /* Agent UI vocabulary. Source material and calculation values are never translated. */
 window.CBI18n?.add({
+  "答案表格": "Answer table",
+  "图片未加载": "Image not loaded",
+  "证据检索": "Evidence search",
+  "独立复核": "Independent review",
+  "子任务": "Subtask",
+  "子任务 {id}": "Subtask {id}",
+  "查看子代理发现（模型自述）": "View subagent findings (model claims)",
   "Agent 工作台 · Civil Buddy": "Agent workbench · Civil Buddy",
   "Agent 工作台": "Agent workbench",
   "工程资料与任务": "Project files and tasks",

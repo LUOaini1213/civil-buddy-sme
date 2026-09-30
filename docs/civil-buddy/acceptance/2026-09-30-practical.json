@@ -524,6 +524,146 @@
       },
       "report": "work/practical-office-acceptance-20260930/report.json outside the repository",
       "scope": "Actual Microsoft Word/Excel checks on separate QA copies of existing simple synthetic live-model outputs; not product Office integration or complex real-project document acceptance"
+    },
+    "live_readonly_subagents": {
+      "passed": true,
+      "synthetic": true,
+      "real_provider_calls": true,
+      "source_commit": "324ca3d81f06c3734167913f181eb6131d20ea37",
+      "binary_sha256": "d8003abe5df1fc3f97d0dd3519ebb41fad8acddfd9ef5622de0416fa6dd16ed9",
+      "model": "deepseek-flash",
+      "provider_host": "api.deepseek.com",
+      "sandbox": "read-only",
+      "selected_files": [
+        "requirements.pdf"
+      ],
+      "children": [
+        {
+          "role": "evidence",
+          "model_calls": 3,
+          "tools": [
+            "search_sources",
+            "list_files",
+            "read_file",
+            "verify_sources"
+          ],
+          "checks": {
+            "completed": true,
+            "real_model_receipts": true,
+            "source_read_receipts": true,
+            "retrieved_quote_matches_independent_pdf": true,
+            "quote_verification": true,
+            "findings_include_requirement": true
+          },
+          "passed": true
+        },
+        {
+          "role": "review",
+          "model_calls": 4,
+          "tools": [
+            "search_sources",
+            "list_files",
+            "read_file",
+            "verify_sources"
+          ],
+          "checks": {
+            "completed": true,
+            "real_model_receipts": true,
+            "source_read_receipts": true,
+            "retrieved_quote_matches_independent_pdf": true,
+            "quote_verification": true,
+            "findings_include_requirement": true
+          },
+          "passed": true
+        }
+      ],
+      "parent_completed_after_children": true,
+      "partial": false,
+      "tool_errors": 0,
+      "model_responses": 9,
+      "elapsed_ms": 15905,
+      "usage": {
+        "provider_reported": {
+          "input_tokens": 23944,
+          "output_tokens": 3579,
+          "model_calls": 9
+        },
+        "estimated": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "model_calls": 0
+        },
+        "unknown": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "model_calls": 0
+        }
+      },
+      "task_count": 3,
+      "shared_budget_exhausted": false,
+      "reservations_at_completion": 0,
+      "new_artifacts": 0,
+      "original_hashes_unchanged": true,
+      "independent_pdf_text_verified": true,
+      "events": 39,
+      "jev_events": 0,
+      "verification_boundary": "Events retain child search hits and verification results but not verify_sources arguments; final host receipts are deduplicated without child attribution. This single selected source is also checked by independent PDF extraction.",
+      "provider_reported_is_billing_verified": false,
+      "scope": "One selected single-page synthetic PDF; two real-model read-only evidence/review children and parent synthesis. Not broad real-project or Jev-service acceptance.",
+      "report": "work/practical-live-subagents-20260930/report.json outside the repository",
+      "independent_record_review": {
+        "passed": true,
+        "checks_passed": 39,
+        "new_model_requests": 0,
+        "recorded_evidence_sha256": {
+          "report.json": "8521a3e5d81abcb0bd6e74db6e91e8325f060519274d484b429ed1c7c3980eed",
+          "events.jsonl": "fee1840f42a88f7627362e14ea1453d09d89b0beaa43ec2c05b0eae52b450107"
+        },
+        "report": "work/practical-live-subagents-20260930/independent-audit.json outside the repository",
+        "replay_script": "work/practical-live-subagents-20260930/verify_recorded_evidence.py outside the repository"
+      }
+    },
+    "agent_readability_followup": {
+      "agent_ui_passed": 60,
+      "agent_ui_total": 60,
+      "i18n_passed": 4,
+      "i18n_total": 4,
+      "release_tests_passed": 9,
+      "release_tests_total": 9,
+      "browser": {
+        "passed": true,
+        "synthetic_existing_live_task": true,
+        "new_model_requests": 0,
+        "turn_count_before": 1,
+        "turn_count_after": 1,
+        "model_calls_before": 9,
+        "model_calls_after": 9,
+        "events": 39,
+        "table_count": 1,
+        "heading_count": 5,
+        "original_quote_preserved": true,
+        "json_code_quotes_preserved": true,
+        "both_child_roles_and_completed_states_visible": true,
+        "bilingual_ui_verified": true,
+        "language_change_preserved_original_reply_and_quotes": true,
+        "manual_workspace_switch_clears_stale_query": true,
+        "reload_stays_in_selected_workspace": true,
+        "mobile_viewport_width": 390,
+        "mobile_document_client_width": 375,
+        "mobile_document_scroll_width": 375,
+        "code_blocks_scroll_locally": true,
+        "viewport_reset": true,
+        "screenshot": "deliverables/practical-workbench-20260930/agent-subagents-readable-v10.png",
+        "source_files_sha256": {
+          "demo/static/agent.js": "662223ec0e69397bbc1a36b35ae98c7a4c0a60e5e5c13539d10d7821980e8364",
+          "demo/static/agent.css": "3ce77f39b9a9d8ec9390da0bf5c985ae4e0433fc3c0deee36148c6b7b3521dc9",
+          "demo/static/agent.html": "a872329b8467f180f9e2a6d0cb708073da1c32b1b6ee1ac156fa49901cc68b95",
+          "demo/static/modules/agent-markdown.js": "8e34ac28e42955d860b3f4a0f2d05b5043eef3a1a444470cd9696db942d33906",
+          "demo/static/i18n-agent.js": "1950e710e4741068f2fe3bd8c624f5abc0a8c15f32ed2cc1fa70f023cf10db13"
+        }
+      },
+      "report": "work/practical-live-subagents-20260930/browser-review.json outside the repository",
+      "scope": "Existing real-model synthetic task replay, safe DOM rendering and child labels; no further model requests and no real-project acceptance"
     }
   },
   "remaining_acceptance": [

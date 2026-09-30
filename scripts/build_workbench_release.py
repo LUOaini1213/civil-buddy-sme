@@ -18,7 +18,7 @@ VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+
 STATIC = (
     "app.js", "chat-stream.js", "docpreview.js", "fixcard.js", "index.html",
     "manifest.webmanifest", "posts.js", "studio.js", "styles.css", "tickets.js", "voice.js",
-    "sw.js", "modules/auth.js", "modules/toast.js", "modules/drafts.js", "modules/uploads.js",
+    "sw.js", "modules/auth.js", "modules/agent-markdown.js", "modules/toast.js", "modules/drafts.js", "modules/uploads.js",
     "modules/turn-stream.js", "modules/deliverables.js", "modules/session-watch.js", "modules/session-nav.js",
     "agent.html", "agent.css", "agent.js", "theme.css", "theme.js", "workbench-shell.css",
     "project-control.html", "project-control.css", "project-control.js", "i18n-project.js",
