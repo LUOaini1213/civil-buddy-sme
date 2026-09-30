@@ -104,7 +104,7 @@ if not reqs or not rows:
 print(f"ok   tender parse: {len(reqs)} requirements, {len(rows)} response-matrix rows")
 PY
 
-# 3b. The tender <-> packing link from a browser upload, and the one-click demo route (both token-gated).
+# 3b. Original facade handling requirements must refuse automatic packing on both token-gated routes.
 EX="${ROOT}/examples/facade-demo"
 expect "POST /api/tender/link without token" 401 "$(code /api/tender/link /dev/null -F "tender=@$EX/facade_itt_doc.md" -F "panel_list=@$EX/facade_panels.xlsx")"
 expect "GET /demo without token" 401 "$(code /demo)"
@@ -114,17 +114,40 @@ expect "POST /api/tender/link facade_itt_doc.md + facade_panels.xlsx" 200 \
 expect "POST /api/tender/link same session, rev B" 200 \
   "$(code /api/tender/link "$TMP/link_b.json" "${AUTH[@]}" -F "tender=@$EX/facade_itt_doc.md" -F "panel_list=@$EX/facade_panels_rev_b.xlsx" -F session_id=smoke)"
 expect "POST /api/tender/link/demo" 200 "$(code /api/tender/link/demo "$TMP/demo.json" "${AUTH[@]}" -X POST)"
-python3 - "$TMP/link.json" "$TMP/link_b.json" "$TMP/demo.json" <<'PY'
-import json, sys
+python3 - "$TMP/link.json" "$TMP/link_b.json" "$TMP/demo.json" "$EX" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
 a, b, demo = (json.load(open(p, encoding="utf-8")) for p in sys.argv[1:4])
-ids = [s["id"] for s in a["statements"]]
-if ids != [f"S{i}" for i in range(1, 8)] or a["plan"]["containers_used"] != 6 or a["submit_blocked"] is not True:
-    sys.exit(f"FAIL: upload link gave {ids}, plan {a.get('plan')}, submit_blocked {a.get('submit_blocked')}")
-if b["previous_job_id"] != a["job_id"] or b["stale_statements"] != ["S2", "S3", "S6", "S7"]:
-    sys.exit(f"FAIL: rev B upload: previous {b.get('previous_job_id')}, stale {b.get('stale_statements')}")
-if demo["stale_statements"] != ["S2", "S3", "S6", "S7"] or demo["rev_b"]["plan"]["containers_used"] != 8:
-    sys.exit(f"FAIL: demo route: stale {demo.get('stale_statements')}")
-print(f"ok   linked upload: {len(ids)} statements, 6 x 40HQ; rev B stale {', '.join(b['stale_statements'])}; demo route the same")
+examples = Path(sys.argv[4])
+stale = ["S1", "S2", "S3", "S6"]
+def refused(d, source):
+    assert d["ok"] is True and d["plan"] is None, "original source unexpectedly produced a plan"
+    assert d["submit_blocked"] is True and d["confirmed_by_person"] is False, "draft was released"
+    assert d["inputs"]["plan"] == {"name": None, "sha256": None}, "stale plan remains attached"
+    assert d["inputs"]["panel_list"]["sha256"] == hashlib.sha256((examples / source).read_bytes()).hexdigest()
+    assert [s["id"] for s in d["statements"]] == [f"S{i}" for i in range(1, 8)]
+    assert all(s["status"] == "human_required" for s in d["statements"]) and d["counts"]["covered"] == 0
+    refusal = d["plan_refusal"]
+    assert (refusal["source"], refusal["error"]) == ("needs_human", "unsupported_transport_requirements")
+    assert refusal["needs_human"], "source rows missing"
+    for row in refusal["needs_human"]:
+        assert row["id"] and row["name"] and row["sheet_row"] >= 2 and row["ask"]
+        assert row["reason"] == "unsupported_transport_requirements"
+        assert all(term in row["requirements"]["note"] for term in ("upright", "A-frame", "do not stack"))
+    assert {f["name"] for f in d["files"]} == {"tender-packing-link.md", "bidbook.en.md", "tender-packing-link.json"}
+def revised(first, second):
+    assert second["previous_job_id"] == first["job_id"] and second["job_id"] != first["job_id"]
+    assert second["session_id"] == first["session_id"] and second["stale_statements"] == stale
+    old, new = (d["inputs"]["panel_list"]["sha256"] for d in (first, second))
+    assert old != new, "rev B reused the old input"
+    changes = second["changes_since_previous"]["inputs_changed"]
+    assert any(c["input"] == "panel_list" and c["old_sha256"] == old and c["new_sha256"] == new for c in changes)
+for first, second in ((a, b), (demo["rev_a"], demo["rev_b"])):
+    refused(first, "facade_panels.xlsx")
+    refused(second, "facade_panels_rev_b.xlsx")
+    revised(first, second)
+assert demo["ok"] is True and demo["synthetic"] is True and demo["stale_statements"] == stale
+print("ok   upload and demo: original transport constraints require human inputs; rev B source/hash changed; no plan reused; drafts blocked")
 PY
 
 # 3c. The typed agent request on the seeded job folder writes tender-packing-link.json under /app/demo/out.
@@ -132,6 +155,16 @@ docker exec "$NAME" sh -c 'mkdir -p /app/output/job && cp examples/facade-demo/f
 python3 -c 'import json; print(json.dumps({"text": "Link the tender facade_itt_doc.md to the packing list facade_panels.xlsx and write the logistics response", "session_id": "smoke-agent"}))' >"$TMP/agent.json"
 expect "POST /api/agent (linked request)" 200 \
   "$(code /api/agent "$TMP/agent_out.json" "${AUTH[@]}" -H 'content-type: application/json' --data @"$TMP/agent.json")"
+python3 - "$TMP/agent_out.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+r = d["tender_packing_link"]
+assert d["ok"] is True and r["plan"] is None
+assert r["plan_refusal"]["error"] == "unsupported_transport_requirements" and r["plan_refusal"]["needs_human"]
+assert d["submit_blocked"] is True and r["confirmed_by_person"] is False
+assert r["inputs"]["plan"]["sha256"] is None
+print("ok   typed agent request retains transport refusal and blocked draft")
+PY
 agent_record() { docker exec "$NAME" sh -c 'ls /app/demo/out/smoke-agent/*/tender-packing-link.json' >/dev/null 2>&1; }
 agent_record || fail "the linked agent turn wrote no tender-packing-link.json under /app/demo/out"
 echo "ok   linked agent turn wrote /app/demo/out/smoke-agent/.../tender-packing-link.json"

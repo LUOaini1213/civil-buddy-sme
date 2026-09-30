@@ -57,7 +57,9 @@
     "final_project_ui_regressions": {
       "passed": 14,
       "total": 14
-    }
+    },
+    "packaged_same_machine_http": "passed after adding missing gateway/idempotency.py to release allowlist; existing local Python environment reused",
+    "docker_assertion_contract": "updated against actual local HTTP JSON and bash -n; full Linux container run delegated to CI"
   },
   "remaining_acceptance": [
     "real project revision and issue workflow",
