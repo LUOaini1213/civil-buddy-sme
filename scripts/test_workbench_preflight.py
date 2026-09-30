@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import io
 import json
@@ -102,15 +103,60 @@ class PreflightTests(unittest.TestCase):
         self.assertNotIn("secret-output", preflight.format_report(report, self.root))
 
     def test_occupied_port_has_fix_and_is_not_silently_reassigned(self):
+        for reuse in (False, True):
+            with self.subTest(server_reuses_address=reuse), socket.socket() as listener:
+                if reuse:
+                    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind(("127.0.0.1", 0))
+                listener.listen()
+                port = listener.getsockname()[1]
+                problem = preflight.check_port(port)
+                self.assertIn(str(port), problem)
+                self.assertIn("--port", problem)
+            self.assertIsNone(preflight.check_port(port))
+        self.assertIn("1 and 65535", preflight.check_port(0))
+
+    @unittest.skipUnless(os.name == "posix", "POSIX server-side TCP TIME_WAIT restart contract")
+    def test_closed_server_with_accepted_connection_can_restart_during_time_wait(self):
         with socket.socket() as listener:
+            # Match asyncio/Tokio servers, without allowing concurrent listeners.
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind(("127.0.0.1", 0))
             listener.listen()
+            listener.settimeout(2)
             port = listener.getsockname()[1]
-            problem = preflight.check_port(port)
-            self.assertIn(str(port), problem)
-            self.assertIn("--port", problem)
+            with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
+                connection, _ = listener.accept()
+                with connection:
+                    connection.settimeout(2)
+                    # The server actively closes first, leaving its port (rather
+                    # than only the client's ephemeral port) in TIME_WAIT.
+                    connection.shutdown(socket.SHUT_WR)
+                    self.assertEqual(client.recv(1), b"")
+                    client.shutdown(socket.SHUT_WR)
+                    self.assertEqual(connection.recv(1), b"")
+        with socket.socket() as naive_probe:
+            with self.assertRaises(OSError) as occupied:
+                naive_probe.bind(("127.0.0.1", port))
+            self.assertEqual(occupied.exception.errno, errno.EADDRINUSE,
+                             "Fixture must reproduce TIME_WAIT rejection without address reuse")
         self.assertIsNone(preflight.check_port(port))
-        self.assertIn("1 and 65535", preflight.check_port(0))
+        with socket.socket() as restarted:
+            restarted.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            restarted.bind(("127.0.0.1", port))
+            restarted.listen()
+            self.assertIn("occupied", preflight.check_port(port), "A live restarted listener must still be refused")
+
+    def test_platform_socket_policy_is_exclusive_on_windows_and_never_reuses_port(self):
+        for platform in ("nt", "posix"):
+            with self.subTest(platform=platform), patch.object(preflight.os, "name", platform), \
+                 patch.object(preflight.socket, "SO_EXCLUSIVEADDRUSE", -5, create=True), \
+                 patch.object(preflight.socket, "socket") as create:
+                self.assertIsNone(preflight.check_port(8765))
+                probe = create.return_value.__enter__.return_value
+                option = -5 if platform == "nt" else socket.SO_REUSEADDR
+                probe.setsockopt.assert_called_once_with(socket.SOL_SOCKET, option, 1)
+                probe.bind.assert_called_once_with(("127.0.0.1", 8765))
 
     def test_check_returns_before_state_locks_configuration_or_product_start(self):
         state = self.root / "absent state"

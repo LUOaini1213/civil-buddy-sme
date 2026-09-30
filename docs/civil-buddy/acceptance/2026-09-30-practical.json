@@ -94,10 +94,12 @@
       "suites": 34
     },
     "preflight": {
-      "passed": 10,
-      "total": 10,
+      "passed": 11,
+      "total": 12,
       "missing_optional_nonblocking": true,
-      "check_writes_state": false
+      "check_writes_state": false,
+      "skipped": 1,
+      "platform": "Windows; POSIX TIME_WAIT test skipped here"
     },
     "launcher": {
       "passed": 11,
@@ -182,6 +184,20 @@
         "workbench-preflight",
         "human-approval"
       ]
+    },
+    "github_default_gate": {
+      "passed": 187,
+      "total": 187,
+      "source_commit": "f3352818f35e9183d821a7a5dd574e7499c44d25",
+      "scope": "smoke job and full default registry passed; separate Linux runtime restart preflight false-positive was still failing at this commit",
+      "job_api": "https://api.github.com/repos/LUOaini1213/civil-buddy-sme/actions/jobs/109802284407"
+    },
+    "posix_restart_regression": {
+      "platform": "WSL Ubuntu 24.04",
+      "passed": 3,
+      "total": 3,
+      "old_implementation_reproduced_failure": true,
+      "scope": "real accepted TCP connection leaves TIME_WAIT; restart allowed, active listeners refused; Windows exclusive bind retained"
     }
   },
   "remaining_acceptance": [

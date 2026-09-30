@@ -102,6 +102,12 @@ def check_port(port: int) -> str | None:
         with socket.socket() as listener:
             if os.name == "nt":
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                # Match the POSIX server bind: a previous accepted connection can
+                # leave TIME_WAIT after the listener closes. SO_REUSEADDR permits
+                # that restart, while a live listener still blocks the bind.
+                # Never enable SO_REUSEPORT, which could hide an active service.
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind(("127.0.0.1", port))
     except OSError:
         return f"Port {port} is occupied or unavailable. Stop the existing workbench, or choose a different free port with --port 8766."
