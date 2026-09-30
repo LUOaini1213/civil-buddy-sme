@@ -141,6 +141,7 @@ pub fn router(state: Arc<ProductState>) -> Router {
     Router::new()
         .route("/api/agent/capabilities", get(capabilities))
         .route("/api/agent/workspaces", get(workspaces).post(register))
+        .route("/api/agent/sessions", get(sessions))
         .route("/api/agent/files", get(files))
         .route("/api/agent/engineering/projects", get(engineering_projects))
         .route(
@@ -172,7 +173,7 @@ async fn capabilities(State(st): State<Arc<ProductState>>) -> Json<Value> {
         json!({"available":true,"models":{"configured":!cfg.api_key.is_empty(),"model":cfg.model,"provider_host":provider_host(&cfg.base_url)},
         "modes":["steps","model"],"sandbox":["read-only","workspace-write"],
         "sandbox_controls":{"policy":true,"os_enforced":null,"network_confined":null,"reads_confined":null,"probe":"workspace_required"},
-        "features":{"context":true,"subagents":true,"cancel":true,"documents":true,"retrieval":true,"voice":false},
+        "features":{"context":true,"subagents":true,"cancel":true,"documents":true,"retrieval":true,"voice":false,"session_discovery":true},
         "identity":st.auth.capabilities(),"unavailability_reason":null}),
     )
 }
@@ -239,6 +240,85 @@ async fn workspaces(State(st): State<Arc<ProductState>>) -> Result<Json<Value>, 
         .filter(|row| row["root"].as_str().is_some_and(|root| st.auth.authorize_workspace(std::path::Path::new(root)).is_ok())).collect();
     Ok(Json(json!({"workspaces":workspaces})))
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionListQuery {
+    workspace: String,
+    limit: Option<usize>,
+    cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TurnListQuery {
+    workspace: String,
+    session_id: Option<String>,
+    limit: Option<usize>,
+    cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", deny_unknown_fields)]
+enum HistoryCursor {
+    Sessions {scope: String, updated_at: String, session_id: SessionId},
+    Turns {scope: String, turn_id: TurnId},
+}
+impl HistoryCursor {
+    fn decode(value: &str) -> Result<Self, HttpError> {
+        if value.is_empty() || value.len() > 1024 || value.len() % 2 != 0
+            || !value.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(bad("invalid history cursor"));
+        }
+        let bytes: Vec<u8> = (0..value.len()).step_by(2)
+            .map(|i| u8::from_str_radix(&value[i..i+2], 16))
+            .collect::<Result<_, _>>().map_err(|_| bad("invalid history cursor"))?;
+        serde_json::from_slice(&bytes).map_err(|_| bad("invalid history cursor"))
+    }
+    fn encode(&self) -> Result<String, HttpError> {
+        Ok(serde_json::to_vec(self).map_err(bad)?.iter().map(|b| format!("{b:02x}")).collect())
+    }
+}
+fn page_limit(limit: Option<usize>, default: usize) -> Result<usize, HttpError> {
+    let limit = limit.unwrap_or(default);
+    if !(1..=100).contains(&limit) {
+        return Err(bad("history limit must be between 1 and 100"));
+    }
+    Ok(limit)
+}
+
+async fn sessions(
+    State(st): State<Arc<ProductState>>,
+    Query(q): Query<SessionListQuery>,
+) -> Result<Json<Value>, HttpError> {
+    let ws = st.workspace(&q.workspace).map_err(bad)?;
+    let limit = page_limit(q.limit, 50)?;
+    // Pagination context is not a credential or an authority grant. Every
+    // request independently reauthorizes the workspace and current actor.
+    let scope = super::tools::sha256(format!("sessions\0{}\0{}", st.auth.owner(), q.workspace).as_bytes());
+    let cursor = q.cursor.as_deref().map(HistoryCursor::decode).transpose()?;
+    let before = match cursor {
+        None => None,
+        Some(HistoryCursor::Sessions {scope:cursor_scope,updated_at,session_id}) if cursor_scope == scope => {
+            let timestamp = chrono::DateTime::parse_from_rfc3339(&updated_at).map_err(|_| bad("invalid history cursor"))?;
+            if timestamp.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Millis, true) != updated_at {
+                return Err(bad("invalid history cursor"));
+            }
+            Some((updated_at,session_id))
+        },
+        _ => return Err(bad("invalid history cursor for this actor/workspace")),
+    };
+    let mut rows = st.runtime.list_sessions(&ws, st.auth.owner(),
+        before.as_ref().map(|(updated,session)| (updated.as_str(),session)), limit+1).map_err(bad)?;
+    let has_more = rows.len() > limit;
+    rows.truncate(limit);
+    let next_cursor = if has_more {
+        let last = rows.last().expect("positive page limit");
+        Some(HistoryCursor::Sessions {scope, updated_at:last.updated_at.clone(), session_id:last.session_id.clone()}.encode()?)
+    } else { None };
+    Ok(Json(json!({"workspace":q.workspace,"sessions":rows,"next_cursor":next_cursor})))
+}
+
 #[derive(Deserialize)]
 pub struct Scope {
     pub workspace: String,
@@ -441,7 +521,7 @@ async fn start(
 }
 async fn turns(
     State(st): State<Arc<ProductState>>,
-    Query(q): Query<Scope>,
+    Query(q): Query<TurnListQuery>,
 ) -> Result<Json<Value>, HttpError> {
     let ws = st.workspace(&q.workspace).map_err(bad)?;
     let session = q
@@ -450,9 +530,22 @@ async fn turns(
         .map(SessionId::parse)
         .transpose()
         .map_err(bad)?;
-    Ok(Json(
-        json!({"turns":st.runtime.list_turns(&ws,session.as_ref(),100).map_err(bad)?}),
-    ))
+    let limit = page_limit(q.limit, 100)?;
+    let scope = super::tools::sha256(format!("turns\0{}\0{}\0{}", st.auth.owner(), q.workspace,
+        session.as_ref().map(SessionId::as_str).unwrap_or("*")).as_bytes());
+    let cursor = q.cursor.as_deref().map(HistoryCursor::decode).transpose()?;
+    let before = match cursor {
+        None => None,
+        Some(HistoryCursor::Turns {scope:cursor_scope,turn_id}) if cursor_scope == scope => Some(turn_id),
+        _ => return Err(bad("invalid history cursor for this actor/workspace/session")),
+    };
+    let mut rows = st.runtime.list_turns_page(&ws, st.auth.owner(), session.as_ref(), before.as_ref(), limit+1).map_err(bad)?;
+    let has_more = rows.len() > limit;
+    rows.truncate(limit);
+    let next_cursor = if has_more {
+        Some(HistoryCursor::Turns {scope, turn_id:rows.last().expect("positive page limit").turn_id.clone()}.encode()?)
+    } else { None };
+    Ok(Json(json!({"workspace":q.workspace,"session_id":session,"turns":rows,"next_cursor":next_cursor})))
 }
 async fn turn(
     State(st): State<Arc<ProductState>>,

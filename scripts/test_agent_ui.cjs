@@ -824,3 +824,144 @@ test("Engineering results: missing values are not calculated from curves and ret
   assert.match(host.textContent, /工具未返回采样极值/);
   assert.doesNotMatch(host.textContent, /999999|123456/);
 });
+
+const historyCaps = { ...caps, features: { ...caps.features, session_discovery: true } };
+const savedSession = (id, turn = `turn-${id}`) => ({ session_id: id, latest_turn_id: turn, status: "completed", turn_count: 1, updated_at: "2026-09-30T10:00:00Z" });
+function historyRoute(route = () => undefined) {
+  return (url, init) => {
+    const custom = route(url, init); if (custom !== undefined) return custom;
+    if (url === "/api/agent/capabilities") return response(historyCaps);
+    if (url === "/api/agent/workspaces") return response({ workspace: { id: "workspace-1", root: "C:/engineering" }, capabilities: historyCaps });
+    if (url.startsWith("/api/agent/sessions?")) return response({ workspace: "workspace-1", sessions: [], next_cursor: null });
+  };
+}
+
+test("History recovery: fresh browser discovers persisted sessions and reopens outputs without starting a task", async (t) => {
+  const artifact = deliveryArtifact(), turn = { turn_id: "persisted-turn", session_id: "server-session", status: "completed", last_seq: 1, result: { reply: "已保存的原文", artifacts: [artifact] } };
+  const h = harness(historyRoute((url) => {
+    if (url.startsWith("/api/agent/sessions?")) return response({ workspace: "workspace-1", sessions: [savedSession("server-session", turn.turn_id)], next_cursor: null });
+    if (url.startsWith("/api/agent/turns?")) { assert.equal(new URL(url, "http://local").searchParams.get("session_id"), "server-session"); return response({ turns: [turn], next_cursor: null }); }
+    if (url.includes("/persisted-turn/events?")) return response({ turn, events: [event(1, "artifact", artifact)] });
+    if (url.startsWith("/api/agent/turns/persisted-turn?")) return response({ turn });
+  })); t.after(h.close); installLanguage(h); await h.ready();
+  assert.equal(h.app.state.session, "server-session");
+  assert.equal(h.$("agentReply").textContent, "已保存的原文");
+  assert.equal(h.doc.querySelectorAll("#agentArtifacts .artifact").length, 1);
+  assert.equal(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+  h.win.CBI18n.setLocale("en");
+  assert.match(h.$("agentSession").textContent, /1 tasks/);
+  assert.equal(h.$("agentReply").textContent, "已保存的原文");
+});
+
+test("History recovery: session pages merge while refresh preserves unsent local drafts and permissions", async (t) => {
+  const h = harness(historyRoute((url) => {
+    if (url.startsWith("/api/agent/sessions?")) {
+      const cursor = new URL(url, "http://local").searchParams.get("cursor");
+      return response({ workspace: "workspace-1", sessions: cursor ? [savedSession("remote-2")] : [savedSession("remote-1")], next_cursor: cursor ? null : "page-two" });
+    }
+    if (/\/turns\/turn-remote-1/.test(url)) return response({ turn: { turn_id: "turn-remote-1", status: "completed", last_seq: 0, result: {} }, events: [] });
+  })); t.after(h.close); await h.ready();
+  await h.app.changeSession("", true); const draft = h.app.state.session;
+  h.$("agentMessage").value = "不要覆盖这个未发送草稿"; h.$("agentSandbox").value = "read-only"; h.selectFirst();
+  await h.app.loadSessions({ more: true }); await h.app.loadSessions();
+  assert.equal(h.app.state.session, draft); assert.equal(h.$("agentMessage").value, "不要覆盖这个未发送草稿");
+  assert.equal(h.$("agentSandbox").value, "read-only"); assert.equal(h.app.state.selected.size, 1);
+  const options = [...h.$("agentSession").options].map(option => option.value);
+  assert.ok(options.includes(draft)); assert.ok(options.includes("remote-2")); assert.equal(options.filter(id => id === "remote-1").length, 1);
+  assert.equal(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+});
+
+test("History recovery: a stale session page cannot cross a workspace change", async (t) => {
+  let delayed = false, release;
+  const h = harness(historyRoute((url, init) => {
+    if (url === "/api/agent/workspaces" && JSON.parse(init.body).path === "C:/other") return response({ workspace: { id: "workspace-2", root: "C:/other" }, capabilities: historyCaps });
+    if (url.startsWith("/api/agent/sessions?")) {
+      const workspace = new URL(url, "http://local").searchParams.get("workspace");
+      if (workspace === "workspace-1" && delayed) return new Promise(resolve => { release = resolve; });
+      return response({ workspace, sessions: [], next_cursor: null });
+    }
+  })); t.after(h.close); await h.ready(); delayed = true;
+  const pending = h.app.loadSessions(); await settle(); await h.app.openWorkspace("C:/other");
+  release(response({ workspace: "workspace-1", sessions: [savedSession("old-private")], next_cursor: "old-cursor" })); await pending;
+  assert.equal(h.app.state.workspace.id, "workspace-2"); assert.equal(h.app.state.nextSessionCursor, null);
+  assert.equal([...h.$("agentSession").options].some(option => option.value === "old-private"), false);
+});
+
+test("History recovery: invalid scope and repeated cursors retain drafts and provide retry feedback", async (t) => {
+  let mode = "normal";
+  const h = harness(historyRoute((url) => {
+    if (url.startsWith("/api/agent/sessions?")) return response({ workspace: mode === "wrong" ? "other" : "workspace-1", sessions: [], next_cursor: "same-cursor" });
+  })); t.after(h.close); await h.ready();
+  const current = h.app.state.session; h.$("agentMessage").value = "保留";
+  await h.app.loadSessions({ more: true }); assert.match(h.$("agentSessionHistoryStatus").textContent, /无法核对/);
+  mode = "wrong"; await h.app.loadSessions(); assert.match(h.$("agentSessionHistoryStatus").textContent, /无法核对/);
+  assert.equal(h.app.state.session, current); assert.equal(h.$("agentMessage").value, "保留");
+});
+
+test("History recovery: earlier task pages expose old artifacts and stale pages cannot cross sessions", async (t) => {
+  let hold = false, release;
+  const artifact = deliveryArtifact();
+  const h = harness((url) => {
+    if (url.startsWith("/api/agent/turns?")) {
+      const query = new URL(url, "http://local").searchParams;
+      if (query.get("cursor") && hold) return new Promise(resolve => { release = resolve; });
+      const turns = query.get("cursor") ? [{ turn_id: "old-task", session_id: query.get("session_id"), status: "completed" }] : Array.from({ length: 50 }, (_, i) => ({ turn_id: `recent-${i}`, session_id: query.get("session_id"), status: "completed" }));
+      return response({ turns, next_cursor: query.get("cursor") ? null : "older-tasks" });
+    }
+    if (url.includes("/old-task/events?")) return response({ turn: { turn_id: "old-task", status: "completed", last_seq: 0, result: { artifacts: [artifact] } }, events: [] });
+    if (url.startsWith("/api/agent/turns/old-task?")) return response({ turn: { turn_id: "old-task", status: "completed", last_seq: 0, result: { artifacts: [artifact] } } });
+  }); t.after(h.close); await h.ready(); await h.app.loadTurns({ more: true });
+  assert.equal(h.$("agentTurns").querySelectorAll("button").length, 51); await h.app.showTurn("old-task");
+  assert.equal(h.app.state.artifacts.size, 1); assert.equal(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+  assert.equal(h.app.state.taskRows.length, 51); assert.equal(h.app.state.nextTurnCursor, null);
+  assert.match(h.$("agentTurns").querySelector('[aria-current="true"]').textContent, /old-task/);
+  await h.app.loadTurns();
+  hold = true; const pending = h.app.loadTurns({ more: true }); await settle(); await h.app.changeSession("", true);
+  release(response({ turns: [{ turn_id: "stale-private", status: "completed" }], next_cursor: null })); await pending;
+  assert.equal(h.app.state.taskRows.some(row => row.turn_id === "stale-private"), false);
+});
+
+test("History recovery: interrupted terminal tasks drain more than 200 events and recover late artifacts", async (t) => {
+  const artifact = deliveryArtifact(); let pages = 0;
+  const turn = { turn_id: "restart-turn", status: "interrupted", last_seq: 202, result: { reason: "runtime_restart" } };
+  const h = harness((url) => {
+    if (url.startsWith("/api/agent/turns/restart-turn?")) return response({ turn });
+    if (url.includes("/restart-turn/events?")) {
+      pages += 1; const after = Number(new URL(url, "http://local").searchParams.get("after_seq"));
+      return response({ turn, events: after === 0 ? Array.from({ length: 200 }, (_, i) => event(i + 1, "status", { message: "原始记录" })) : [event(201, "artifact", artifact), event(202, "turn.interrupted", { result: turn.result })] });
+    }
+  }); t.after(h.close); await h.ready(); await h.app.showTurn("restart-turn");
+  assert.equal(h.app.state.seq, 200); assert.equal(h.timers.size, 1); assert.match(h.$("agentNotice").textContent, /恢复剩余/);
+  await h.tick(); assert.equal(pages, 2); assert.equal(h.app.state.seq, 202); assert.equal(h.timers.size, 0);
+  assert.equal(h.app.state.artifacts.size, 1); assert.match(h.$("agentNotice").textContent, /重启时中断/);
+  assert.equal(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+});
+
+test("History recovery: a terminal event cursor that makes no progress stops bounded automatic retries", async (t) => {
+  const turn = { turn_id: "stuck-turn", status: "completed", last_seq: 202, result: {} }; let pages = 0;
+  const h = harness((url) => {
+    if (url.startsWith("/api/agent/turns/stuck-turn?")) return response({ turn });
+    if (url.includes("/stuck-turn/events?")) { pages += 1; return response({ turn, events: [] }); }
+  }); t.after(h.close); await h.ready(); await h.app.showTurn("stuck-turn");
+  await h.tick(); await h.tick(); assert.equal(pages, 3); assert.equal(h.timers.size, 0);
+  assert.match(h.$("agentNotice").textContent, /尚未完整恢复/);
+});
+
+
+test("History recovery: task pages reject wrong outer workspace or session without changing history", async (t) => {
+  let wrong = null;
+  const h = harness((url) => {
+    if (url.startsWith("/api/agent/turns?")) {
+      const query = new URL(url, "http://local").searchParams;
+      return response({ workspace: wrong === "workspace" ? "other" : query.get("workspace"),
+        session_id: wrong === "session" ? "other" : query.get("session_id"),
+        turns: [{ turn_id: wrong ? "foreign-turn" : "own-turn", status: "completed" }], next_cursor: wrong ? "foreign-cursor" : "own-cursor" });
+    }
+  }); t.after(h.close); await h.ready();
+  for (wrong of ["workspace", "session"]) {
+    await h.app.loadTurns();
+    assert.match(h.$("agentNotice").textContent, /无法核对/);
+    assert.deepEqual(h.app.state.taskRows.map(row => row.turn_id), ["own-turn"]);
+    assert.equal(h.app.state.nextTurnCursor, "own-cursor");
+  }
+});

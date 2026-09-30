@@ -64,6 +64,17 @@ pub struct TurnRecord {
     pub last_seq: u64,
 }
 
+/// Discovery metadata only. Deliberately excludes prompts, results, paths and
+/// permissions; opening this summary never starts or replays a turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub session_id: SessionId,
+    pub latest_turn_id: TurnId,
+    pub updated_at: String,
+    pub status: TurnStatus,
+    pub turn_count: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeEvent {
     #[serde(default)]
@@ -121,6 +132,7 @@ impl RuntimeCore {
             CREATE UNIQUE INDEX IF NOT EXISTS runtime_one_active_session
                 ON runtime_turns(workspace_id, session_id) WHERE status IN ('running','cancelling');
             CREATE INDEX IF NOT EXISTS runtime_session_turns ON runtime_turns(workspace_id,session_id,created_at);
+            CREATE INDEX IF NOT EXISTS runtime_actor_sessions ON runtime_turns(workspace_id,json_extract(request_json,'$.actor_id'),session_id,created_at DESC);
             CREATE TABLE IF NOT EXISTS runtime_events (
                 turn_id TEXT NOT NULL REFERENCES runtime_turns(turn_id), seq INTEGER NOT NULL CHECK(seq > 0),
                 task_id TEXT NOT NULL, event TEXT NOT NULL, data_json TEXT NOT NULL, ts TEXT NOT NULL,
@@ -272,6 +284,77 @@ impl RuntimeCore {
             )
         })
         .collect()
+    }
+
+    /// Filter the actor before grouping, including counts and latest status.
+    /// Rows without a recorded actor cannot establish ownership and are hidden.
+    /// The extra (101st) row lets the HTTP layer detect another bounded page.
+    pub fn list_sessions(
+        &self,
+        workspace: &WorkspaceContext,
+        actor: &str,
+        before: Option<(&str, &SessionId)>,
+        limit: usize,
+    ) -> Result<Vec<SessionSummary>> {
+        let db = self.0.db.lock().map_err(|_| RuntimeError::Poisoned)?;
+        let mut statement = db.prepare(
+            "WITH scoped AS (
+                SELECT session_id,turn_id,status,
+                    MAX(updated_at) OVER (PARTITION BY session_id) AS session_updated_at,
+                    COUNT(*) OVER (PARTITION BY session_id) AS turn_count,
+                    ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY created_at DESC,rowid DESC) AS latest
+                FROM runtime_turns
+                WHERE workspace_id=?1 AND json_extract(request_json,'$.actor_id')=?2
+            )
+            SELECT session_id,turn_id,session_updated_at,status,turn_count
+            FROM scoped WHERE latest=1 AND (?3 IS NULL OR session_updated_at<?3
+                OR (session_updated_at=?3 AND session_id<?4))
+            ORDER BY session_updated_at DESC,session_id DESC LIMIT ?5",
+        )?;
+        let rows = statement.query_map(
+            params![workspace.id(), actor, before.map(|(updated, _)| updated),
+                before.map(|(_, session)| session.as_str()), limit.min(101) as i64],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, i64>(4)?)),
+        )?;
+        rows.map(|row| {
+            let (session, turn, updated_at, status, turn_count) = row?;
+            Ok(SessionSummary {session_id: SessionId::parse(session)?,
+                latest_turn_id: TurnId::parse(turn)?, updated_at,
+                status: TurnStatus::parse(&status)?, turn_count:turn_count as u64})
+        }).collect()
+    }
+
+    /// Actor-scoped history pages keep the existing newest-created ordering.
+    /// Resolve the boundary inside the same scope instead of trusting client
+    /// timestamps/row IDs, and never invoke execution or event replay.
+    pub fn list_turns_page(
+        &self,
+        workspace: &WorkspaceContext,
+        actor: &str,
+        session: Option<&SessionId>,
+        before: Option<&TurnId>,
+        limit: usize,
+    ) -> Result<Vec<TurnRecord>> {
+        let db = self.0.db.lock().map_err(|_| RuntimeError::Poisoned)?;
+        let boundary: Option<(String, i64)> = before.map(|turn| {
+            db.query_row("SELECT created_at,rowid FROM runtime_turns WHERE workspace_id=?1
+                AND json_extract(request_json,'$.actor_id')=?2 AND (?3 IS NULL OR session_id=?3) AND turn_id=?4",
+                params![workspace.id(), actor, session.map(SessionId::as_str), turn.as_str()],
+                |row| Ok((row.get(0)?,row.get(1)?))).optional()?.ok_or(RuntimeError::NotFound)
+        }).transpose()?;
+        let mut statement = db.prepare("SELECT turn_id,session_id FROM runtime_turns
+            WHERE workspace_id=?1 AND json_extract(request_json,'$.actor_id')=?2
+                AND (?3 IS NULL OR session_id=?3)
+                AND (?4 IS NULL OR created_at<?4 OR (created_at=?4 AND rowid<?5))
+            ORDER BY created_at DESC,rowid DESC LIMIT ?6")?;
+        let rows = statement.query_map(params![workspace.id(), actor, session.map(SessionId::as_str),
+            boundary.as_ref().map(|(created,_)| created.as_str()), boundary.as_ref().map(|(_,rowid)| rowid),
+            limit.min(101) as i64], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?;
+        rows.map(|row| {
+            let (turn, session) = row?;
+            read_turn(&db, workspace.id(), &SessionId::parse(session)?, &TurnId::parse(turn)?)
+        }).collect()
     }
 
     pub fn replay(

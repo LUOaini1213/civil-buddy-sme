@@ -239,6 +239,80 @@ def legacy_session_handoff(first, first_cookie, second, second_cookie, directory
     return result
 
 
+def agent_history_recovery(instance, cookie, documents):
+    """Discover an existing document turn using only GETs; never submit or replay it."""
+    workspace, session, turn_id = (documents[key] for key in ("workspace_id", "session_id", "turn_id"))
+    scope = {"workspace": workspace, "session_id": session}
+    endpoint = "/api/agent/turns/" + turn_id + "?" + urllib.parse.urlencode(scope)
+    before = json_request(instance.base, endpoint, cookie=cookie)["turn"]
+    require(before == documents["turn"] and before["status"] == "completed",
+            "Saved document task changed or is no longer completed")
+
+    def pages(path, field, query):
+        rows, cursors, cursor = [], set(), None
+        # This owned fixture has one document session and, after its existing
+        # crash test, one interrupted session. A one-row page exercises the
+        # cursor without generating additional tasks or model requests.
+        for page_number in range(1, 9):
+            params = {**query, "limit": 1}
+            if cursor:
+                params["cursor"] = cursor
+            page = json_request(instance.base, path + "?" + urllib.parse.urlencode(params), cookie=cookie)
+            require(page.get("workspace") == workspace, "History page crossed a workspace boundary")
+            if field == "turns":
+                require(page.get("session_id") == session, "History page crossed a session boundary")
+            require(isinstance(page.get(field), list) and len(page[field]) <= 1,
+                    "History page ignored its requested limit or returned an invalid list")
+            require("next_cursor" in page, "History response omitted its pagination contract")
+            rows.extend(page[field])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                return rows, page_number
+            require(isinstance(cursor, str) and 0 < len(cursor) <= 2048 and cursor not in cursors,
+                    "History cursor is invalid or made no progress")
+            cursors.add(cursor)
+        raise AssertionError("Synthetic history discovery exceeded its bounded page count")
+
+    sessions, session_pages = pages("/api/agent/sessions", "sessions", {"workspace": workspace})
+    summary_fields = {"session_id", "latest_turn_id", "updated_at", "status", "turn_count"}
+    require(all(isinstance(row, dict) and set(row) == summary_fields for row in sessions),
+            "Session summary leaked fields beyond discovery metadata")
+    require(len({row["session_id"] for row in sessions}) == len(sessions), "Session pages repeated a session")
+    matches = [row for row in sessions if row["session_id"] == session]
+    require(len(matches) == 1 and matches[0]["latest_turn_id"] == turn_id
+            and matches[0]["status"] == "completed" and matches[0]["turn_count"] == 1,
+            "Completed API-created document session was not discoverable")
+    turns, turn_pages = pages("/api/agent/turns", "turns", scope)
+    require(len(turns) == 1 and turns[0] == before,
+            "Discovered session did not recover its unchanged document task and result")
+
+    expected = {row["id"]: row for row in documents["artifacts"]}
+    artifacts = before["result"].get("artifacts", [])
+    require(expected and len(artifacts) == len(expected) and {row["id"] for row in artifacts} == set(expected),
+            "Recovered task lost registered document artifacts")
+    hashes = {}
+    for artifact in artifacts:
+        parsed = urllib.parse.urlsplit(artifact["url"])
+        require(not parsed.scheme and not parsed.netloc and not parsed.fragment
+                and parsed.path == "/api/agent/artifacts/" + artifact["id"]
+                and urllib.parse.parse_qs(parsed.query) == {"workspace": [workspace]},
+                "Recovered artifact URL escaped its instance or workspace")
+        status, _, content = request(instance.base, artifact["url"], cookie=cookie)
+        require(status == 200, f"Recovered artifact download returned HTTP {status}")
+        digest = sha256(content).hexdigest()
+        require(digest == artifact["output_sha256"] == expected[artifact["id"]]["output_sha256"]
+                and content == Path(expected[artifact["id"]]["download_path"]).read_bytes(),
+                "Recovered artifact differs from the original validated download")
+        hashes[artifact["id"]] = digest
+    after = json_request(instance.base, endpoint, cookie=cookie)["turn"]
+    require(after == before, "History discovery or download changed the task, events, result or usage")
+    return {"passed": True, "scope": "existing Rust Agent document task; GET discovery and downloads only",
+            "workspace_id": workspace, "session_id": session, "turn_id": turn_id,
+            "session_pages": session_pages, "turn_pages": turn_pages, "page_limit": 1,
+            "summary_metadata_only": True, "task_and_usage_unchanged": True,
+            "last_seq": after["last_seq"], "artifact_hashes": hashes, "artifacts_byte_identical": True}
+
+
 class Instance:
     def __init__(self, binary, directory, state_root, workspace, user, model_port):
         self.binary, self.directory, self.state_root, self.workspace = binary, directory, state_root, workspace
@@ -463,7 +537,18 @@ def run(binary, output):
         report["checks"]["document_agent_originals_copies_actor_usage"] = True
         report["document_report"] = str(output / "documents/report.json")
         report["usage"] = usage
+        report["agent_history_discovery"] = agent_history_recovery(first, cookie, documents)
+        report["checks"]["agent_history_discovery_and_artifact_downloads"] = True
         report["running_crash_recovery"] = running_crash_recovery(first)
+        if report["running_crash_recovery"].get("status") == "passed":
+            cookie = first.login()
+            report["agent_history_after_restart"] = agent_history_recovery(first, cookie, documents)
+            require(report["agent_history_after_restart"]["session_pages"] >= 2,
+                    "Post-restart discovery did not exercise the next session page")
+            report["checks"]["agent_history_after_restart_and_artifact_downloads"] = True
+        else:
+            report["agent_history_after_restart"] = {"status": "not_exercised",
+                                                     "reason": "Existing Windows crash/restart phase was not exercised"}
         first.stop()
         report["checks"]["both_processes_stopped"] = True
         report["passed"] = True

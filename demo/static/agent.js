@@ -16,6 +16,7 @@ const snapshotKey = (value) => JSON.stringify([value.kind, value.project_id, val
 const artifactKey = (value) => String(value.id || value.url || value.name || "");
 const artifactVersion = (value) => JSON.stringify([value.id, value.url, value.output_sha256, value.source, value.source_sha256]);
 const HASH = /^[a-f0-9]{64}$/i;
+const ID = /^[A-Za-z0-9_-]{1,128}$/;
 const READINESS_LABELS = { source_hash: "副本哈希", structure: "文件结构", active_content: "活动内容", external_links: "外部链接",
   layout: "版式核对", document_fields: "修订与域", formula_cache: "公式缓存", spreadsheet_errors: "错误单元格",
   recalculation: "公式重算", external_data: "外部数据", engineering_review: "专业核对" };
@@ -47,7 +48,7 @@ export function createAgentWorkbench(deps) {
   const $ = (id) => doc.getElementById(id);
   const node = (tag, text, cls) => { const n = doc.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
   const state = { capabilities: null, workspace: null, session: "", files: [], selected: new Set(), turn: null,
-    seq: 0, artifacts: new Map(), artifactChecks: new Map(), engineeringResults: new Map(), epoch: 0, workspaceEpoch: 0, fileEpoch: 0, listEpoch: 0,
+    seq: 0, emptyEventPages: 0, nextTurnCursor: null, turnsLoading: false, sessionListEpoch: 0, sessionsLoading: false, nextSessionCursor: null, sessionHistoryMessage: null, artifacts: new Map(), artifactChecks: new Map(), engineeringResults: new Map(), epoch: 0, workspaceEpoch: 0, fileEpoch: 0, listEpoch: 0,
     contextData: null, taskRows: [], eventRows: [], modelConfig: null, writeGateReason: null, sourceEvidence: null,
     engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, engineeringStatus: null, terminalNotice: false, experts: [],
     opening: false, submitting: false, cancelling: false, modelBusy: false, modelConfigured: false, disposed: false };
@@ -77,8 +78,8 @@ export function createAgentWorkbench(deps) {
   }
   const post = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   function stopPolling() { if (timer !== null) unschedule(timer); timer = null; if (controller) controller.abort(); controller = null; }
-  function resetView() {
-    stopPolling(); state.epoch += 1; state.listEpoch += 1; state.turn = null; state.seq = 0; state.eventRows = []; state.contextData = null; state.artifacts.clear(); state.artifactChecks.clear(); state.engineeringResults.clear();
+  function resetView({ keepHistory = false } = {}) {
+    stopPolling(); state.epoch += 1; state.listEpoch += 1; state.turn = null; state.seq = 0; state.emptyEventPages = 0; state.turnsLoading = false; if (!keepHistory) { state.nextTurnCursor = null; state.taskRows = []; } state.eventRows = []; state.contextData = null; state.artifacts.clear(); state.artifactChecks.clear(); state.engineeringResults.clear();
     state.submitting = false; state.cancelling = false;
     state.writeGateReason = null; paintWriteGate();
     state.sourceEvidence = null; paintSourceEvidence(null);
@@ -103,6 +104,13 @@ export function createAgentWorkbench(deps) {
     $("agentCancel").disabled = state.cancelling || state.turn && state.turn.status === "cancelling";
     for (const id of ["agentRefreshFiles", "agentRefreshTurns", "agentNewSession", "agentSession"]) $(id).disabled = !state.workspace || state.opening;
     $("agentWorkspaceOpen").disabled = state.opening;
+    const history = state.capabilities?.features?.session_discovery === true;
+    $("agentSessionHistory").hidden = !history;
+    $("agentRefreshSessions").disabled = !state.workspace || state.opening || state.sessionsLoading;
+    $("agentMoreSessions").hidden = !state.nextSessionCursor;
+    $("agentMoreSessions").disabled = state.opening || state.sessionsLoading;
+    $("agentMoreTurns").hidden = !state.nextTurnCursor;
+    $("agentMoreTurns").disabled = state.opening || state.turnsLoading;
     $("agentModelSave").disabled = state.modelBusy;
     $("agentRefreshEngineering").disabled = !state.workspace || state.opening || state.submitting || state.engineeringLoading;
     $("agentExpert").disabled = state.submitting;
@@ -138,8 +146,55 @@ export function createAgentWorkbench(deps) {
   }
   function paintSessions() {
     const select = $("agentSession"); select.replaceChildren();
-    for (const item of record()?.sessions || []) { const option = node("option", t("会话 ") + item.id.slice(0, 10)); option.value = item.id; select.appendChild(option); }
+    for (const item of record()?.sessions || []) {
+      const suffix = Number.isSafeInteger(item.turn_count) && item.turn_count > 0
+        ? t(" · {count} 条任务", { count: item.turn_count }) + " · " + (t(STATUS[item.status]) || item.status || "") : "";
+      const option = node("option", t("会话 ") + item.id.slice(0, 10) + suffix); option.value = item.id; select.appendChild(option);
+    }
     select.value = state.session;
+  }
+  function paintSessionHistory() {
+    const message = state.sessionHistoryMessage;
+    $("agentSessionHistoryStatus").textContent = message ? t(message.key, message.values || {}) : "";
+    controls();
+  }
+  async function loadSessions({ more = false, preferServer = false } = {}) {
+    if (!state.workspace || state.capabilities?.features?.session_discovery !== true) return;
+    if (more && (!state.nextSessionCursor || state.sessionsLoading)) return;
+    const workspace = state.workspace.id, workspaceEpoch = state.workspaceEpoch, selectedSession = state.session;
+    const requestId = ++state.sessionListEpoch, cursor = more ? state.nextSessionCursor : null;
+    state.sessionsLoading = true; state.sessionHistoryMessage = { key: "正在读取已保存的会话…" }; paintSessionHistory();
+    const query = new URLSearchParams({ workspace, limit: "50" }); if (cursor) query.set("cursor", cursor);
+    try {
+      const data = await request("/api/agent/sessions?" + query);
+      if (state.disposed || state.workspace?.id !== workspace || state.workspaceEpoch !== workspaceEpoch || requestId !== state.sessionListEpoch) return;
+      const valid = Array.isArray(data.sessions) && data.sessions.length <= 100 && data.workspace === workspace
+        && data.sessions.every(item => object(item) && ID.test(item.session_id || "") && ID.test(item.latest_turn_id || "")
+          && Number.isSafeInteger(item.turn_count) && item.turn_count > 0 && typeof item.updated_at === "string" && item.updated_at.length <= 64
+          && typeof item.status === "string" && Object.hasOwn(STATUS, item.status))
+        && (data.next_cursor === null || (typeof data.next_cursor === "string" && data.next_cursor.length > 0 && data.next_cursor.length <= 2048));
+      if (!valid || (cursor && data.next_cursor === cursor)) throw new Error(t("会话历史响应无法核对，请重新刷新。"));
+      const item = record(), known = new Map(item.sessions.map(row => [row.id, row]));
+      for (const row of data.sessions) {
+        const previous = known.get(row.session_id);
+        known.set(row.session_id, { ...previous, id: row.session_id, turn: previous?.turn || row.latest_turn_id,
+          latest_turn_id: row.latest_turn_id, updated_at: row.updated_at, status: row.status, turn_count: row.turn_count });
+      }
+      // Keep unsent local drafts and a user's historical task selection.
+      item.sessions = [...known.values()];
+      if (preferServer && state.session === selectedSession && data.sessions.length) {
+        state.session = data.sessions[0].session_id; item.current = state.session;
+      }
+      state.nextSessionCursor = data.next_cursor; persist(); paintSessions();
+      state.sessionHistoryMessage = { key: state.nextSessionCursor ? "已恢复会话，可继续加载更早记录。" : "已读取已保存的会话。" };
+    } catch (error) {
+      if (state.workspace?.id === workspace && state.workspaceEpoch === workspaceEpoch && requestId === state.sessionListEpoch)
+        state.sessionHistoryMessage = { key: "会话历史读取失败：{error}", values: { error: error.message } };
+    } finally {
+      if (state.workspace?.id === workspace && state.workspaceEpoch === workspaceEpoch && requestId === state.sessionListEpoch) {
+        state.sessionsLoading = false; paintSessionHistory();
+      }
+    }
   }
   function paintFiles() {
     const host = $("agentFiles"); host.replaceChildren();
@@ -272,7 +327,8 @@ export function createAgentWorkbench(deps) {
     cancelVoice();
     clearEngineering();
     resetView(); const epoch = state.epoch, requestId = ++state.workspaceEpoch;
-    state.opening = true; controls(); notice(t("正在打开工程文件夹…"));
+    state.sessionListEpoch += 1; state.sessionsLoading = false; state.nextSessionCursor = null; state.sessionHistoryMessage = null;
+    state.opening = true; controls(); paintSessionHistory(); notice(t("正在打开工程文件夹…"));
     try {
       const data = await request("/api/agent/workspaces", post({ path: path.trim() }));
       if (!current(epoch) || requestId !== state.workspaceEpoch) return;
@@ -284,34 +340,54 @@ export function createAgentWorkbench(deps) {
       if (data.capabilities) paintCapabilities(data.capabilities);
       let item = saved.workspaces[state.workspace.id];
       if (object(item) && Array.isArray(item.sessions)) item.sessions = item.sessions.filter((s) => s && typeof s.id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(s.id));
-      if (!object(item) || !Array.isArray(item.sessions) || !item.sessions.length) item = { sessions: [{ id: newId(), turn: "" }], files: [] };
+      const hasLocalSessions = object(item) && Array.isArray(item.sessions) && item.sessions.length > 0;
+      if (!hasLocalSessions) item = { sessions: [{ id: newId(), turn: "" }], files: [] };
       saved.workspaces[state.workspace.id] = item;
       state.session = item.sessions.some((s) => s.id === item.current) ? item.current : item.sessions[0].id;
       item.current = state.session;
       state.selected = new Set(restoreSelection && Array.isArray(item.files) ? item.files : []); saved.lastRoot = state.workspace.root; persist();
       $("agentWorkspacePath").value = displayPath(state.workspace.root); $("agentWorkspaceStatus").textContent = displayPath(state.workspace.root);
       paintSessions(); notice(t("工程文件夹已打开。可勾选资料后开始任务。"));
-      await Promise.all([loadFiles(), loadTurns(), loadEngineering()]);
+      await Promise.all([loadFiles(), loadSessions({ preferServer: !hasLocalSessions }), loadEngineering()]);
+      if (!current(epoch) || requestId !== state.workspaceEpoch) return;
+      await loadTurns();
       if (restoreTurn && current(epoch) && sessionRecord()?.turn) await showTurn(sessionRecord().turn);
     } catch (error) { if (current(epoch)) notice(t("打开失败：") + error.message, true); }
     finally { if (requestId === state.workspaceEpoch) { state.opening = false; controls(); } }
   }
-  async function loadTurns() {
-    if (!state.workspace) return;
+  function paintTurns() {
+    const host = $("agentTurns"); host.replaceChildren();
+    if (!state.taskRows.length) host.appendChild(node("p", t("本会话暂无执行记录。"), "muted"));
+    for (const turn of state.taskRows) {
+      const id = idOf(turn); if (!id) continue;
+      const button = node("button", (turn.message || turn.title || id.slice(0, 12)) + " · " + (t(STATUS[turn.status]) || turn.status || t("状态待读取")) + t(" · 发起者：") + (turn.actor_id || t("历史记录未标记")));
+      button.type = "button"; button.setAttribute("aria-current", String(id === idOf(state.turn)));
+      button.addEventListener("click", () => showTurn(id)); host.appendChild(button);
+    }
+    controls();
+  }
+  async function loadTurns({ more = false, keepHistory = false } = {}) {
+    if (!state.workspace || (more && (!state.nextTurnCursor || state.turnsLoading))) return;
     const epoch = state.epoch, requestId = ++state.listEpoch;
+    const cursor = more ? state.nextTurnCursor : null;
+    const query = new URLSearchParams({ workspace: state.workspace.id, session_id: state.session, limit: "50" });
+    if (cursor) query.set("cursor", cursor);
+    state.turnsLoading = true; controls();
     try {
-      const data = await request("/api/agent/turns?" + scoped());
+      const data = await request("/api/agent/turns?" + query);
       if (!current(epoch) || requestId !== state.listEpoch) return;
-      const host = $("agentTurns"); host.replaceChildren();
-      const turns = Array.isArray(data.turns) ? data.turns : []; state.taskRows = turns;
-      if (!turns.length) host.appendChild(node("p", t("本会话暂无执行记录。"), "muted"));
-      for (const turn of turns) {
-        const id = idOf(turn); if (!id) continue;
-        const button = node("button", (turn.message || turn.title || id.slice(0, 12)) + " · " + (t(STATUS[turn.status]) || turn.status || t("状态待读取")) + t(" · 发起者：") + (turn.actor_id || t("历史记录未标记")));
-        button.type = "button"; button.setAttribute("aria-current", String(id === idOf(state.turn)));
-        button.addEventListener("click", () => showTurn(id)); host.appendChild(button);
-      }
-    } catch (error) { if (current(epoch)) notice(t("执行记录读取失败：") + error.message, true); }
+      if ((data.workspace !== undefined && data.workspace !== state.workspace.id)
+        || (data.session_id !== undefined && data.session_id !== state.session)
+        || !Array.isArray(data.turns) || data.turns.length > 100
+        || data.turns.some(row => !object(row) || !ID.test(idOf(row)) || (row.session_id && row.session_id !== state.session))
+        || (data.next_cursor != null && (typeof data.next_cursor !== "string" || !data.next_cursor || data.next_cursor.length > 2048))
+        || (cursor && data.next_cursor === cursor)) throw new Error(t("执行历史响应无法核对，请重新刷新。"));
+      const keepCursor = keepHistory && state.taskRows.length > 0;
+      const merged = new Map((more ? state.taskRows : data.turns).map(row => [idOf(row), row]));
+      for (const row of (more ? data.turns : keepHistory ? state.taskRows : [])) if (more || !merged.has(idOf(row))) merged.set(idOf(row), row);
+      state.taskRows = [...merged.values()]; if (!keepCursor) state.nextTurnCursor = data.next_cursor || null; paintTurns();
+    } catch (error) { if (current(epoch) && requestId === state.listEpoch) notice(t("执行记录读取失败：") + error.message, true); }
+    finally { if (current(epoch) && requestId === state.listEpoch) { state.turnsLoading = false; controls(); } }
   }
   async function changeSession(id, create = false) {
     if (!record()) return;
@@ -608,24 +684,34 @@ export function createAgentWorkbench(deps) {
   async function poll() {
     if (!state.workspace || !state.turn || state.disposed) return;
     const epoch = state.epoch, id = idOf(state.turn), query = scoped();
-    controller = new AbortController(); let delay = 900, retry = false;
+    controller = new AbortController(); let delay = 900, retry = false, draining = false;
     try {
       const data = await request(`/api/agent/turns/${encodeURIComponent(id)}/events?${query}&after_seq=${state.seq}`, { signal: controller.signal });
       if (!current(epoch) || id !== idOf(state.turn)) return;
+      const previousSeq = state.seq;
       for (const event of (Array.isArray(data.events) ? data.events : []).slice().sort((a, b) => a.seq - b.seq)) eventFrame(event);
       paintTurn(data.turn);
-      if (TERMINAL.has(state.turn.status)) { terminalNotice(); await loadTurns(); }
+      draining = Number.isSafeInteger(state.turn.last_seq) && state.turn.last_seq > state.seq;
+      if (draining) {
+        state.emptyEventPages = state.seq > previousSeq ? 0 : state.emptyEventPages + 1;
+        if (state.emptyEventPages >= 3) {
+          draining = false; notice(t("执行记录尚未完整恢复，请重新打开该任务重试。"), true);
+        } else { delay = state.emptyEventPages ? 2500 : 0; notice(t("正在恢复剩余执行记录…")); }
+      } else {
+        state.emptyEventPages = 0;
+        if (TERMINAL.has(state.turn.status)) { terminalNotice(); await loadTurns({ keepHistory: true }); }
+      }
     } catch (error) {
       if (!current(epoch) || error.name === "AbortError") return;
       retry = true; delay = 2500; notice(t("连接暂时中断，将从已收到的事件继续恢复：") + error.message, true);
     } finally {
-      if (current(epoch) && id === idOf(state.turn)) { controller = null; if (active() || retry) timer = later(poll, delay); }
+      if (current(epoch) && id === idOf(state.turn)) { controller = null; if (active() || retry || draining) timer = later(poll, delay); }
     }
   }
   async function showTurn(id) {
     if (!state.workspace || !id) return;
-    resetView(); const epoch = state.epoch;
-    state.turn = { turn_id: id, status: "queued" }; controls();
+    resetView({ keepHistory: true }); const epoch = state.epoch;
+    state.turn = { turn_id: id, status: "queued" }; paintTurns();
     try {
       const data = await request(`/api/agent/turns/${encodeURIComponent(id)}?${scoped()}`);
       if (!current(epoch)) return;
@@ -635,7 +721,7 @@ export function createAgentWorkbench(deps) {
   async function send() {
     if ($("agentSend").disabled || !$("agentMessage").value.trim()) return;
     cancelVoice();
-    const message = $("agentMessage").value.trim(); resetView(); state.submitting = true; controls();
+    const message = $("agentMessage").value.trim(); resetView({ keepHistory: true }); state.submitting = true; controls();
     const epoch = state.epoch;
     notice(t("正在提交任务…"));
     try {
@@ -696,14 +782,7 @@ export function createAgentWorkbench(deps) {
     for (const item of state.engineeringResults.values()) { paintEngineeringResult(item); break; }
     const events = state.eventRows.slice(); state.eventRows = []; state.seq = 0; $("agentEvents").replaceChildren();
     for (const event of events) eventFrame(event);
-    const host = $("agentTurns"); host.replaceChildren();
-    if (!state.taskRows.length) host.appendChild(node("p", t("本会话暂无执行记录。"), "muted"));
-    for (const turn of state.taskRows) {
-      const id = idOf(turn); if (!id) continue;
-      const button = node("button", (turn.message || turn.title || id.slice(0, 12)) + " · " + (t(STATUS[turn.status]) || turn.status || t("状态待读取")) + t(" · 发起者：") + (turn.actor_id || t("历史记录未标记")));
-      button.type = "button"; button.setAttribute("aria-current", String(id === idOf(state.turn)));
-      button.addEventListener("click", () => showTurn(id)); host.appendChild(button);
-    }
+    paintTurns(); paintSessionHistory();
     if (state.modelConfig) {
       const cfg = state.modelConfig;
       $("agentModelLabel").textContent = cfg.configured ? cfg.model || t("已配置") : t("未配置，可先检查资料");
@@ -721,7 +800,10 @@ export function createAgentWorkbench(deps) {
     $("agentMode").addEventListener("change", controls); $("agentSandbox").addEventListener("change", controls);
     $("agentExpert").addEventListener("change", () => { expertNote(); controls(); }); $("agentRefreshEngineering").addEventListener("click", loadEngineering);
     $("agentRiskConfirmation").addEventListener("input", controls); $("agentMessage").addEventListener("input", controls);
-    $("agentCancel").addEventListener("click", cancel); $("agentRefreshFiles").addEventListener("click", loadFiles); $("agentRefreshTurns").addEventListener("click", loadTurns);
+    $("agentCancel").addEventListener("click", cancel); $("agentRefreshFiles").addEventListener("click", loadFiles); $("agentRefreshTurns").addEventListener("click", () => loadTurns());
+    $("agentMoreTurns").addEventListener("click", () => loadTurns({ more: true }));
+    $("agentRefreshSessions").addEventListener("click", () => loadSessions());
+    $("agentMoreSessions").addEventListener("click", () => loadSessions({ more: true }));
     $("agentNewSession").addEventListener("click", () => changeSession("", true)); $("agentSession").addEventListener("change", () => changeSession($("agentSession").value));
     await Promise.all([loadCapabilities(), loadExperts(), loadModel().catch((error) => { $("agentModelLabel").textContent = t("暂不可用"); $("agentModelStatus").textContent = t("模型设置暂不可用：") + error.message; })]);
     if (state.disposed || state.workspaceEpoch !== startupWorkspaceEpoch) return;
@@ -750,7 +832,7 @@ export function createAgentWorkbench(deps) {
     if (saved.lastRoot && state.capabilities?.available === true) await openWorkspace(saved.lastRoot);
   }
   function dispose() { win.removeEventListener("cb:languagechange", languageChanged); cancelVoice(); state.disposed = true; state.epoch += 1; stopPolling(); }
-  return { state, start, openWorkspace, loadFiles, loadTurns, loadEngineering, inspectEngineering, changeSession, showTurn, send, cancel, poll, saveModel, dispose };
+  return { state, start, openWorkspace, loadFiles, loadTurns, loadSessions, loadEngineering, inspectEngineering, changeSession, showTurn, send, cancel, poll, saveModel, dispose };
 }
 
 if (typeof document !== "undefined" && document.getElementById("agentWorkbench")) {

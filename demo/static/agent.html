@@ -51,8 +51,14 @@
       <div class="section-title"><h2>会话</h2><button id="agentNewSession" type="button" class="quiet" disabled>新会话</button></div>
       <label class="sr-only" for="agentSession">当前会话</label>
       <select id="agentSession" data-i18n-skip disabled></select>
+      <div id="agentSessionHistory" hidden>
+        <button id="agentRefreshSessions" type="button" class="quiet" disabled>刷新会话</button>
+        <button id="agentMoreSessions" type="button" class="quiet" hidden>加载更早会话</button>
+        <p id="agentSessionHistoryStatus" class="muted small" role="status" data-i18n-skip></p>
+      </div>
       <div class="section-title"><h2>执行记录</h2><button id="agentRefreshTurns" type="button" class="quiet" disabled>刷新</button></div>
       <div id="agentTurns" data-i18n-skip class="turn-list"><p class="muted">本会话暂无执行记录。</p></div>
+      <button id="agentMoreTurns" type="button" class="quiet" hidden>加载更早任务</button>
     </aside>
     <section class="main-panel" aria-label="任务执行">
       <div id="agentCapability" class="notice" role="status">正在检测 Agent 能力…</div>

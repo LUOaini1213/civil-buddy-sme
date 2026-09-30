@@ -388,6 +388,75 @@
       "asr_synthetic_http": 200,
       "python_environment": "task-owned isolated full preview environment",
       "microphone_used": false
+    },
+    "agent_history_recovery": {
+      "source_base_commit": "9a6fd62",
+      "source_state": "working-tree persisted Agent history recovery follow-up; not clean 9a6fd62",
+      "implementation": {
+        "server_session_discovery": true,
+        "local_unsent_drafts_preserved": true,
+        "session_pagination": {
+          "default_limit": 50,
+          "maximum_limit": 100,
+          "cursor": "scope-bound keyset"
+        },
+        "task_pagination": {
+          "default_limit": 100,
+          "maximum_limit": 100,
+          "frontend_limit": 50,
+          "cursor": "scope-bound keyset with stored boundary validation",
+          "existing_turns_field_preserved": true
+        },
+        "actor_workspace_and_session_scope_checked": true,
+        "late_response_scope_checked": true,
+        "terminal_events_drained_through_last_sequence": true,
+        "event_no_progress_guard": true,
+        "older_task_history_position_preserved": true,
+        "model_autostart": false,
+        "tool_replay": false,
+        "saved_write_permissions_restored": false
+      },
+      "offline_backend": {
+        "command": "cargo test --manifest-path workbench/Cargo.toml --test product_sessions --test product_identity --test runtime_core",
+        "product_sessions": 5,
+        "product_identity": 17,
+        "runtime_core": 13,
+        "passed": 35,
+        "total": 35,
+        "pagination_fixture_sessions": 105,
+        "pagination_fixture_tasks": 105,
+        "scope": "Persisted state reopen, tied-timestamp pagination, actor/workspace/session isolation, invalid cursors and no event replay during history reads"
+      },
+      "offline_frontend": {
+        "agent_ui_passed": 50,
+        "agent_ui_total": 50,
+        "i18n_previously_passed": 4,
+        "i18n_previous_total": 4,
+        "scope": "Server session and task pagination, response scope checks, terminal history beyond 200 events, no-progress handling and older-task history position preservation"
+      },
+      "same_machine_fresh_origin_browser": {
+        "passed": true,
+        "browser_origin": "http://127.0.0.1:18794",
+        "fresh_origin_no_previous_browser_history": true,
+        "browser_discovered_saved_session": true,
+        "browser_opened_saved_task": true,
+        "browser_bilingual_verified": true,
+        "original_filenames_and_quotations_preserved": true,
+        "turn_count_before": 1,
+        "turn_count_after": 1,
+        "same_turn_ids": true,
+        "restored_events": 43,
+        "restored_source_quotations": 4,
+        "downloaded_artifacts": 2,
+        "downloaded_artifact_hashes_match": true,
+        "existing_model_calls_before": 5,
+        "existing_model_calls_after": 5,
+        "new_model_requests": 0,
+        "cross_computer": false,
+        "browser_history_over_200_events_tested": false,
+        "report": "work/practical-history-recovery-20260930/report.json outside the repository",
+        "scope": "Same machine and existing state, fresh browser origin; reuse of one persisted synthetic live-model task without a new model request"
+      }
     }
   },
   "remaining_acceptance": [
