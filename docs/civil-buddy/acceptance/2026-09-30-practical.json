@@ -457,11 +457,78 @@
         "report": "work/practical-history-recovery-20260930/report.json outside the repository",
         "scope": "Same machine and existing state, fresh browser origin; reuse of one persisted synthetic live-model task without a new model request"
       }
+    },
+    "same_machine_upgrade_restore": {
+      "passed": true,
+      "same_machine": true,
+      "cross_computer": false,
+      "new_program_version": "0.5.0-practical-preview.20260930.8",
+      "new_program_directory": true,
+      "complete_offline_backup": true,
+      "offline_backup_hashes_match": true,
+      "same_path_restore_hashes_match": true,
+      "prior_directories_retained": true,
+      "original_absolute_workspace_and_state_roots_reused": true,
+      "identity_preserved": true,
+      "turn_and_usage_unchanged": true,
+      "session_discovered": true,
+      "artifact_downloads_byte_identical": true,
+      "artifacts": [
+        "report-draft-ae4ebe12ca5d.docx",
+        "quantities-draft-bf1c35023039.xlsx"
+      ],
+      "originals_unchanged": true,
+      "new_model_requests": 0,
+      "host_listener_stopped": true,
+      "report": "work/practical-upgrade-restore-20260930/report.json outside the repository",
+      "scope": "Complete offline backup and restore to the same absolute workspace and state paths, followed by a new program-directory launch on the same computer; not workspace relocation or cross-computer acceptance"
+    },
+    "office_application_followup": {
+      "synthetic": true,
+      "existing_live_model_artifacts_reused": true,
+      "product_tool_integration": false,
+      "new_model_requests": 0,
+      "word": {
+        "version": "16.0",
+        "passed": true,
+        "source_opened_readonly": true,
+        "repaginated": true,
+        "pdf": "word-rendered.pdf",
+        "pages": 1,
+        "pdf_renderer": "Microsoft Word 16.0 ExportAsFixedFormat",
+        "png_renderer": "Poppler pdftoppm 150 dpi",
+        "visually_reviewed_pages": [
+          1
+        ],
+        "visual_review_passed": true,
+        "pdf_text_verified_against_source_paragraphs": true,
+        "visual_scope": "Simple synthetic one-page fixture; no clipping, overlap, missing text or text errors observed. Not complex real-project layout coverage."
+      },
+      "excel": {
+        "version": "16.0",
+        "passed": true,
+        "recalculation_method": "CalculateFullRebuild",
+        "save_method": "SaveAs to a separate copy",
+        "output": "excel-recalculated.xlsx",
+        "formula": "=B2*2",
+        "B2": 6,
+        "D2": 12.0,
+        "saved_formula_cache_verified": true,
+        "cache_verification": "openpyxl data_only"
+      },
+      "registered_artifact_hashes_unchanged": true,
+      "source_originals_unchanged": true,
+      "outputs": {
+        "word-rendered.pdf": "8c6ef60fd6d4187659b9285347fba382e07856e8d3e489b70486cedd587d1632",
+        "excel-recalculated.xlsx": "d87b7dabce5ea7aac18de44f57d2b467f104a7e8ee1460a55c2cdedcf5f8ca61"
+      },
+      "report": "work/practical-office-acceptance-20260930/report.json outside the repository",
+      "scope": "Actual Microsoft Word/Excel checks on separate QA copies of existing simple synthetic live-model outputs; not product Office integration or complex real-project document acceptance"
     }
   },
   "remaining_acceptance": [
     "real project revision and issue workflow",
-    "actual Word pagination and Excel recalculation",
+    "complex real-project Word pagination and Excel formula recalculation",
     "second Windows computer install and restore",
     "real microphone and field speech accuracy, including terminology, accents and noise"
   ]

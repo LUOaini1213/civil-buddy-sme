@@ -10,17 +10,17 @@
 
 本机试用可继续使用 `scripts/start_unified_workbench.py`。需要身份和工程隔离时，每位同事使用独立且互不包含的工程目录、状态目录和启动端口；不能把同一个物理工程目录同时分给两个人。登录口令文件必须放在工程目录外，避免被选为资料。
 
-下面命令在解压后的发布包根目录运行。先安装 README 列出的 Python 依赖；`D:\CivilJobs\demo` 必须是自己已有的工程目录。
+下面命令在解压后的发布包根目录运行。先安装 README 列出的 Python 依赖；`C:\CivilJobs\demo` 必须是自己已有的工程目录。日常使用将工程和状态放在发布包外，升级程序时保留它们原来的绝对路径。
 
 ```powershell
-# 在本机生成登录口令文件；不要提交到 Git 或放入交接包。
-& .venv/Scripts/python.exe -c "import secrets,pathlib; pathlib.Path('login-token.txt').write_text(secrets.token_urlsafe(48),encoding='utf-8')"
-& .venv/Scripts/python.exe scripts/start_unified_workbench.py --binary bin/civil-workbench.exe --python .venv/Scripts/python.exe --state-root runtime/unified --user-id teammate-a --workspace D:/CivilJobs/demo --token-file login-token.txt --port 8765 --open
+# 仅首次生成个人口令；已有文件会拒绝覆盖，之后继续使用它。
+& .venv/Scripts/python.exe -c "import secrets,pathlib; p=pathlib.Path('C:/CivilBuddySecrets/teammate-a/login-token.txt'); p.parent.mkdir(parents=True,exist_ok=True); p.open('x',encoding='utf-8').write(secrets.token_urlsafe(48))"
+& .venv/Scripts/python.exe scripts/start_unified_workbench.py --binary bin/civil-workbench.exe --python .venv/Scripts/python.exe --state-root C:/CivilBuddyState/teammate-a/demo --user-id teammate-a --workspace C:/CivilJobs/demo --token-file C:/CivilBuddySecrets/teammate-a/login-token.txt --port 8765 --open
 ```
 
 在 `/auth/login` 页面粘贴该文件中的口令。页面使用 HttpOnly、SameSite=Strict 会话 Cookie，退出或服务重启后重新登录。口令不放在 URL 中。后台工具服务使用另一个每次启动随机生成的内部口令，不接受匿名请求，也不接收模型提供商密钥。
 
-一个实例只绑定一位用户和一个精确工程根目录。状态在 `runtime/unified/accounts/<user>/projects/<root-hash>/`，工程目录另有 `.civil-buddy/instance-owner.sqlite` 归属记录；不能通过修改请求里的用户、工程路径或 session_id 切换归属。现有实现**不是同一进程多租户平台**。无身份配置的入口仅供本机使用。
+一个实例只绑定一位用户和一个精确工程根目录。启动器在传入的状态基础目录下追加 `accounts/<user>/projects/<root-hash>/`，终端的 `State:` 显示这个实际实例目录；工程目录另有 `.civil-buddy/instance-owner.sqlite` 归属记录。再次启动仍传最初的 `--state-root` 基础目录，不能把 `State:` 的 `accounts/.../projects/...` 叶目录再次传入，否则会重复追加层级并触发归属拒绝。不能通过修改请求里的用户、工程路径或 session_id 切换归属。现有实现**不是同一进程多租户平台**。无身份配置的入口仅供本机使用。
 
 工程和状态目录必须互不包含，也不能包含其他实例的归属目录。`identity.sqlite` 是保留的实例状态文件，不能作为工程资料放入工程根；归属检查扫描超过 100000 项时拒绝启动，应选择专用工程目录。该检查不是针对同一操作系统账号下恶意文件修改的隔离边界。
 
@@ -51,7 +51,89 @@ CAD、排程、物流页面分别使用自身的项目导出/导入。导入创�
 
 岗位会话包保留原附件、角色、交付物与业务会话，导入产生新会话并清除原签认。它不包含新 Rust Agent 页的执行数据库；Agent 执行历史由同一归属下的完整状态备份恢复，不能把岗位会话包称为整个工作台的完整备份。
 
-离开当前电脑前：保存项目，导出项目包，关闭启动器，再备份自己的工程目录和对应状态目录。完整状态备份只用于同一归属下的恢复；不同同事使用业务项目包交接，不复制身份 SQLite、登录口令、模型密钥或活动 Cookie。恢复至不同绝对路径需要建立新实例并导入项目包，不直接改数据库绑定。
+完整状态备份用于自己同一归属下的恢复，必须同时保留**工程根的绝对路径、最初 `--state-root` 基础目录的绝对路径、`--user-id`**。工程内的归属数据库还绑定实际实例状态目录；只改程序目录可以，移动工程或状态、改用户名不能直接延续原实例。不同同事使用业务项目包交接，不复制身份 SQLite、登录口令、模型密钥或活动 Cookie。需改变工程或状态绝对路径时，建立新实例并导入支持导入的业务项目包；这不迁移 Rust Agent 执行历史，不直接改数据库绑定。
+
+### 停机后备份自己的实例
+
+先保存页面中的项目，等待任务结束或取消完成，再在启动窗口按 Ctrl+C，等启动器退出、两个服务停止。以下命令不会关闭正在运行的服务；只有停机后才可复制数据库。不要只复制单个 `.sqlite` 文件，要连同可能存在的 WAL 文件、工程中的 `.civil-buddy` 和新文档副本一起保存。
+
+将下面四项改成自己的实际值。备份目录必须尚不存在，且位于工程和状态目录之外；建议使用独立的受控磁盘。示例状态基础目录仅供这一位用户的这一项工程使用。脚本只读取原目录，写入新的个人备份目录，不删除原件。
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$workspaceRoot = 'C:\CivilJobs\demo'
+$stateBase = 'C:\CivilBuddyState\teammate-a\demo'
+$instanceUser = 'teammate-a'
+$backupRoot = 'E:\CivilBuddyBackups\demo-20260930-1800'
+$workspaceRoot = (Resolve-Path -LiteralPath $workspaceRoot).ProviderPath.TrimEnd('\')
+$stateBase = (Resolve-Path -LiteralPath $stateBase).ProviderPath.TrimEnd('\')
+$backupRoot = [IO.Path]::GetFullPath($backupRoot).TrimEnd('\')
+if (Test-Path -LiteralPath $backupRoot) { throw '备份目标已存在，请选择新的空目录名。' }
+foreach ($source in @($workspaceRoot, $stateBase)) {
+    if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "源目录不存在：$source" }
+    if ($backupRoot.Equals($source, [StringComparison]::OrdinalIgnoreCase) -or
+        $backupRoot.StartsWith($source + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw '备份目录不能位于工程或状态目录内。'
+    }
+}
+New-Item -ItemType Directory -Path $backupRoot | Out-Null
+Copy-Item -LiteralPath $workspaceRoot -Destination (Join-Path $backupRoot 'workspace') -Recurse -Force
+Copy-Item -LiteralPath $stateBase -Destination (Join-Path $backupRoot 'state-base') -Recurse -Force
+[ordered]@{
+    user_id = $instanceUser
+    workspace_root = $workspaceRoot
+    state_base = $stateBase
+    saved_at = (Get-Date).ToString('o')
+} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $backupRoot 'restore-locations.json') -Encoding UTF8
+```
+
+只有两份目录复制和清单写入全部成功，才保留为完成的备份。若命令失败，保留原目录不动，下次选择另一新备份目录，不把半份备份当成可恢复证据。该备份含个人实例的归属数据库和历史，不能作为发给同事的项目包。示例口令文件和模型配置在备份目录之外，继续由本人单独保管，不写进清单。
+
+### 升级程序，继续使用原状态
+
+停止旧启动器，将新版解压到另一个程序目录，按新版 README 准备其虚拟环境。**不搬动或合并工程与状态目录**，从新版目录使用同样的三个归属参数启动：
+
+```powershell
+Set-Location 'C:\CivilBuddyApps\preview-new'
+& .venv/Scripts/python.exe scripts/start_unified_workbench.py --binary bin/civil-workbench.exe --python .venv/Scripts/python.exe --state-root C:/CivilBuddyState/teammate-a/demo --user-id teammate-a --workspace C:/CivilJobs/demo --token-file C:/CivilBuddySecrets/teammate-a/login-token.txt --port 8765 --check
+& .venv/Scripts/python.exe scripts/start_unified_workbench.py --binary bin/civil-workbench.exe --python .venv/Scripts/python.exe --state-root C:/CivilBuddyState/teammate-a/demo --user-id teammate-a --workspace C:/CivilJobs/demo --token-file C:/CivilBuddySecrets/teammate-a/login-token.txt --port 8765 --open
+```
+
+若旧实例最初传的是 `--state-root runtime/unified`，应继续指向**旧程序目录下这个基础目录的绝对路径**，例如 `C:/CivilBuddyApps/preview-old/runtime/unified`；不要在新版目录继续使用相对路径，也不要把状态复制进新目录后尝试重新绑定。前面的包外目录示例供首次建立实例使用，不是现有实例的迁移步骤。
+
+### 从个人备份恢复到原路径
+
+先停止自己的旧实例。只在两个原目标目录均不存在或为空时执行；任一目标已有内容就停止，不能将备份与现有数据库混合。下面命令沿用备份步骤中的四个变量，先核对记录的两个绝对路径和用户名，再复制；没有删除或覆盖非空目录的操作。
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$locations = Get-Content -LiteralPath (Join-Path $backupRoot 'restore-locations.json') -Raw | ConvertFrom-Json
+if ($locations.user_id -cne $instanceUser -or
+    $locations.workspace_root -cne $workspaceRoot -or $locations.state_base -cne $stateBase) {
+    throw '用户名或原绝对路径不一致，停止恢复；不要修改归属数据库。'
+}
+$copies = @(
+    @{ Source = (Join-Path $backupRoot 'workspace'); Target = $workspaceRoot },
+    @{ Source = (Join-Path $backupRoot 'state-base'); Target = $stateBase }
+)
+foreach ($copy in $copies) {
+    if (-not (Test-Path -LiteralPath $copy.Source -PathType Container)) { throw "备份目录缺失：$($copy.Source)" }
+    if (Test-Path -LiteralPath $copy.Target) {
+        if (-not (Test-Path -LiteralPath $copy.Target -PathType Container) -or
+            @(Get-ChildItem -LiteralPath $copy.Target -Force).Count -ne 0) {
+            throw "恢复目标非空或不是目录，拒绝覆盖：$($copy.Target)"
+        }
+    }
+}
+foreach ($copy in $copies) {
+    if (-not (Test-Path -LiteralPath $copy.Target)) { New-Item -ItemType Directory -Path $copy.Target | Out-Null }
+    Get-ChildItem -LiteralPath $copy.Source -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $copy.Target -Recurse -Force
+    }
+}
+```
+
+复制完成后，按上面的新版启动命令重新登录。在 Agent 中打开原工程，从服务端会话列表找回历史任务，核对任务状态、原件 SHA-256，并下载一份旧副本与备份文件核对哈希；同时重开所用的 CAD、计划或物流项目。没有核对通过前不要开始新写入。浏览器缓存不是备份，历史签认也不会授权新任务。以上是同归属原路径恢复流程；另一台电脑是否可用仍需实际验收。
 
 验证发布 ZIP：
 
@@ -77,7 +159,7 @@ CAD、排程、物流页面分别使用自身的项目导出/导入。导入创�
 
 “下载项目交接包”调用 `GET /api/project-control/package?workspace=<已注册工程 ID>`，导出当前台账修订的只读原文件快照、`manifest.json` 和完整工程审计记录 `audit.jsonl`。清单保存版本、SHA-256、来源状态及检查时间、事项与截止日期、内部复核记录和导出截止时间；内容与清单在同一数据库读快照中绑定，并逐文件核对哈希。来源已变更、不可读或尚未完成复核时仍可交接，清单明确标记草稿、未就绪，不形成签认。包大小上限 128 MiB，逐文件处理并通过临时文件流式下载；超限可分别下载修订快照和 JSON 交接记录，不删除历史。这个项目包不包含旧修订的文件内容、未登记文件、实例数据库、登录凭据、模型配置或运行会话，不能替代实例备份与恢复。
 
-下一阶段的验收应覆盖：真实招标补遗导致旧应答失效、两组不同的已包装货物、真实工程计划变更、Word 实际分页、Excel 实际重算，以及另一台 Windows 机器的安装与恢复。公开指南可以帮助选择流程，不能代替这些实测证据。
+下一阶段的验收应覆盖：真实招标补遗导致旧应答失效、两组不同的已包装货物、真实工程计划变更、真实工程文档的 Word 分页与 Excel 重算，以及另一台 Windows 机器的安装与恢复。公开指南可以帮助选择流程，不能代替这些实测证据。
 
 | 场景 | 必须保留的证据 | 边界 |
 |---|---|---|
@@ -91,7 +173,7 @@ CAD、排程、物流页面分别使用自身的项目导出/导入。导入创�
 
 ### 2026-09-30 本机验证与基准说明
 
-自动化和浏览器演示使用合成工程、独立临时状态和本地脚本模型。首次 DeepSeek 请求因启动环境继承了不同的 Key 返回 HTTP 401。随后按用户指示读取现有项目的本地配置，通过官方模型列表接口验证并接入 deepseek-flash；未把密钥复制进仓库或发布包。首轮已认证的真实模型工作流取得 9 次模型响应，但连续文档预览未通过修改数字的引用校验，最终触发预算拒绝；没有生成副本，原件哈希不变。该失败保留在验收记录中，不算完整工作流通过；供应商返回的 token 用量也不等于费用账单。 补齐工具参数结构和格式错误提示后，使用同一提示、样例生成器、校验标准和预算重新验收：5 次真实模型响应、约 15.6 秒完成，Word 与 Excel 两个新副本数值正确，未改部分和目标样式保留，原件哈希不变。这只验证了一条合成资料流程，尚未进行 Word 渲染或 Excel 重算。本轮没有迁移私人业务目录或完成另一台电脑验收。真实浏览器已验证资料登记、事项保存、重启后恢复、中英文切换、带工程目录进入 Agent 的只读检查，以及实际下载 ZIP。下载包逐成员解压和 CRC 检查通过，未解决事项保留为草稿。
+自动化和浏览器演示使用合成工程、独立临时状态和本地脚本模型。首次 DeepSeek 请求因启动环境继承了不同的 Key 返回 HTTP 401。随后按用户指示读取现有项目的本地配置，通过官方模型列表接口验证并接入 deepseek-flash；未把密钥复制进仓库或发布包。首轮已认证的真实模型工作流取得 9 次模型响应，但连续文档预览未通过修改数字的引用校验，最终触发预算拒绝；没有生成副本，原件哈希不变。该失败保留在验收记录中，不算完整工作流通过；供应商返回的 token 用量也不等于费用账单。 补齐工具参数结构和格式错误提示后，使用同一提示、样例生成器、校验标准和预算重新验收：5 次真实模型响应、约 15.6 秒完成，Word 与 Excel 两个新副本数值正确，未改部分和目标样式保留，原件哈希不变。这次模型流程只验证了一条合成资料流程，当时未进行 Word 渲染或 Excel 重算。后续独立 Office 验收已用本机 Microsoft Word 16.0 将其简单报告只读转为一页 PDF，并逐页检查；Microsoft Excel 16.0 重算并另存独立副本，公式 `D2=B2*2` 在 `B2=6` 时返回并保存缓存 `12`。原件与登记副本哈希保持不变。此检查没有把 Office 引擎接入产品，也未覆盖复杂真实工程文档。本轮没有迁移私人业务目录或完成另一台电脑验收。真实浏览器已验证资料登记、事项保存、重启后恢复、中英文切换、带工程目录进入 Agent 的只读检查，以及实际下载 ZIP。下载包逐成员解压和 CRC 检查通过，未解决事项保留为草稿。
 
 Rust 主机与固定 Python 服务的真实 HTTP 验收覆盖登录 Cookie、目录与身份隔离、工程重启恢复、会话包交接、文档副本和来源保留、双进程停止。自动测试另覆盖修订冲突、问题变化后的复核失效、凭据文件拒绝、交接包快照及哈希一致性、活跃内容 PDF 禁止内嵌预览，以及 Excel 原件和早期导出副本不被自动覆盖。
 
@@ -123,3 +205,5 @@ npm run check:full
 示例主机名和模型名须与使用者实际选定的服务一致。脚本不会读取或修改提供商密钥；缺少可核对的主机元数据时拒绝开始。超时会请求取消并等待终态，失败或取消后仍核对原件哈希；如果没有观察到停机，会明确保留“仍运行或未知”。报告区分提供商返回的用量和估算值，不宣称能限定货币费用，也不将产品回执当作提供商独立证明。
 
 第二台电脑与真实资料验收可填写[验收记录模板](acceptance/sme-preview-checklist.md)。空项不算通过，填写后的私人业务记录不要回传公共仓库。
+
+2026-09-30 另在停机的合成验收实例完成完整目录备份、逐文件哈希核对、保留原目录后原路径恢复，再用不同程序目录的 `.8` 包启动。原身份、任务、用量和两份下载字节一致；未新增模型调用。该实测验证同机、同绝对路径恢复和程序升级，不代表迁移到新工程路径或第二台电脑通过。

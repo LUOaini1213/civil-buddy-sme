@@ -208,15 +208,30 @@ py -3.11 -m venv .venv
 主程序和 Python 领域服务均监听本机；浏览器打开 `http://127.0.0.1:8765/static/agent.html`。
 保留启动窗口，按 Ctrl+C 停止两个服务。端口冲突时追加 `--port 8766`。
 `--state-root` 保存产品状态与日志；新文档副本保存在所选工程目录 `.civil-buddy/out`。
-升级时另行保留自己的工程目录和状态目录，勿将旧 `.env` 或状态混入分发包。
+上面的相对状态目录用于本机演示。具名日常工程应将状态放在包外；升级时保留工程根、
+状态基础目录的两个绝对路径和 `--user-id`，勿将旧 `.env` 或状态混入分发包。
 
 无需模型 Key 可执行资料结构检查。自然语言 Agent 任务需在页面模型设置配置兼容服务，
 或显式传入自己创建的 `--env-file <路径>`；`.env.example` 仅为模板。Jev 为可选工程决策建议，默认关闭。
 岗位签认、引用哈希、先预览再保存及只读权限仍由主程序执行；模型不能把文件或自身提议变成工程事实。
 
-具名账号和独立工程启动、登录、备份及同事导入见 `docs/civil-buddy/release-handoff.md`。
+具名账号和独立工程启动、登录、停机备份及原路径恢复见 `docs/civil-buddy/release-handoff.md`。
 具名模式使用 `--user-id`、`--workspace`、`--token-file`；每位用户独立目录与进程，
 不是同一进程多租户平台。`examples/facade-demo` 是明确标注的合成演示资料。
+
+例如已按交接指南建立工程目录和个人口令后，可在**新版解压目录**继续启动原实例：
+
+```powershell
+& ".\\.venv\\Scripts\\python.exe" scripts/start_unified_workbench.py --binary bin/civil-workbench.exe --python .venv/Scripts/python.exe --state-root C:/CivilBuddyState/teammate-a/demo --user-id teammate-a --workspace C:/CivilJobs/demo --token-file C:/CivilBuddySecrets/teammate-a/login-token.txt --port 8765 --open
+```
+
+每次传最初的 `--state-root` 基础目录；启动器会追加 `accounts/<user>/projects/<root-hash>/`，
+不要把终端 `State:` 显示的叶目录再次传入。若旧实例最初用了 `runtime/unified`，新版必须继续
+指向旧程序目录中该基础目录的绝对路径，不能复制到新版目录后直接重新绑定。
+个人完整备份需先停止两个服务，再复制整个工程与状态基础目录到新的空备份目录；
+恢复只允许原绝对路径且目标不存在或为空，遇到非空目录拒绝覆盖。交接指南提供可执行步骤。
+完整个人备份含归属数据库，不能交给同事；同事使用支持导入的业务项目包建立新副本，
+这不会迁移 Rust Agent 的完整执行历史，也不会继承签认。
 
 ## 原入口与可选能力
 
