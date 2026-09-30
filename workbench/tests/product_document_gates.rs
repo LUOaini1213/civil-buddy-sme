@@ -123,6 +123,125 @@ fn rejected(result: Result<Value, String>) {
     );
 }
 
+#[test]
+fn model_tool_contract_declares_nested_evidence_and_read_arguments() {
+    let definitions = civil_workbench::product::tools::definitions(true, false);
+    let parameters = |name: &str| definitions.iter().find(|d| d["function"]["name"] == name)
+        .unwrap()["function"]["parameters"].clone();
+    for name in ["preview_document", "apply_document"] {
+        let schema = parameters(name);
+        let evidence = &schema["properties"]["patches"]["items"]["properties"]["evidence"];
+        assert_eq!(evidence["type"], "array");
+        assert_eq!(evidence["maxItems"], 50);
+        assert_eq!(evidence["items"]["required"], json!(["source", "source_sha256", "locator", "quote"]));
+        assert_eq!(evidence["items"]["properties"]["locator"]["type"], "object");
+        assert_eq!(evidence["items"]["additionalProperties"], true, "Complete search hits retain metadata");
+        assert!(schema["properties"].get("evidence").is_none(), "Evidence is per-patch, never top-level");
+    }
+    assert_eq!(parameters("verify_sources")["properties"]["references"]["maxItems"], 100);
+    let read = parameters("read_file");
+    for name in ["sheet", "range", "block_ids", "pages"] {
+        assert!(read["properties"]["arguments"]["properties"].get(name).is_some());
+        assert!(read["properties"].get(name).is_none());
+    }
+}
+
+#[tokio::test]
+async fn independent_verification_does_not_attach_patch_evidence_and_bad_shapes_are_actionable() {
+    let f = Fixture::new();
+    let scope = f.scope("依照选中文件修改", true);
+    let search = scope.execute("search_sources", json!({"query":"sample_count"})).await.unwrap();
+    let hit = search["result"]["hits"].as_array().unwrap().iter()
+        .find(|h| h["source"] == "requirements.pdf").unwrap().clone();
+    let verified = scope.execute("verify_sources", json!({"references":[hit]})).await.unwrap();
+    assert_eq!(verified["result"]["valid"], true);
+    for (source, patch) in [("report.docx", word("sample_count=6")), ("quantities.xlsx", cell("number", json!(6)))] {
+        let missing = scope.execute("preview_document", f.args(source, patch.clone())).await.unwrap_err();
+        assert!(missing.contains("新增数字 6") && missing.contains("patches[i].evidence") && missing.contains("verify_sources"), "{missing}");
+        for malformed in [hit.clone(), json!("verified"), Value::Null, json!([{"status":"valid"}])] {
+            let mut bad = patch.clone();
+            bad["evidence"] = malformed;
+            let error = scope.execute("preview_document", f.args(source, bad)).await.unwrap_err();
+            assert!(error.contains("patches[0].evidence"), "{error}");
+            assert!(!error.contains("新增数字"), "Malformed reference should get a shape diagnosis, not pretend no source exists");
+        }
+        for name in ["evidence", "references"] {
+            let mut top_level = f.args(source, patch.clone());
+            top_level[name] = json!([hit]);
+            let error = scope.execute("preview_document", top_level).await.unwrap_err();
+            assert!(error.contains("顶层") && error.contains("patches[i].evidence"), "{error}");
+        }
+    }
+    let mut many = word("sample_count=6");
+    many["evidence"] = json!(vec![hit; 50]);
+    let mut too_many = f.args("report.docx", many.clone());
+    too_many["patches"] = json!([many,many,many]);
+    let error = scope.execute("preview_document", too_many).await.unwrap_err();
+    assert!(error.contains("100项") && error.contains("拆成"), "{error}");
+    f.no_documents_published();
+}
+
+#[tokio::test]
+async fn explicit_evidence_allows_real_word_and_excel_preview_and_new_copies() {
+    let f = Fixture::new();
+    let scope = f.scope("依照选中文件修改", true);
+    let search = scope.execute("search_sources", json!({"query":"sample_count"})).await.unwrap();
+    let hit = search["result"]["hits"].as_array().unwrap().iter()
+        .find(|h| h["source"] == "requirements.pdf").unwrap().clone();
+    let mut validated = Vec::new();
+    for (source, mut patch) in [("report.docx", word("sample_count=6")), ("quantities.xlsx", cell("number", json!(6)))] {
+        let original = std::fs::read(f.workspace.root().join(source)).unwrap();
+        patch["evidence"] = json!([hit]);
+        let args = f.args(source, patch);
+        let preview = scope.execute("preview_document", args.clone()).await.unwrap();
+        assert_eq!(preview["ok"], true, "{preview}");
+        assert_eq!(preview["result"]["evidence_validation"]["references"]["valid"], true);
+        validated.push((source, original, args));
+    }
+    f.no_documents_published();
+    for (source, original, args) in validated {
+        let result = scope.execute("apply_document", args).await.unwrap();
+        assert_eq!(result["ok"], true, "{result}");
+        let output = std::fs::read(result["result"]["output_path"].as_str().unwrap()).unwrap();
+        assert_eq!(sha256(&output), result["result"]["output_sha256"]);
+        assert_ne!(original, output);
+        assert_eq!(std::fs::read(f.workspace.root().join(source)).unwrap(), original);
+    }
+}
+
+#[tokio::test]
+async fn xlsx_default_inspects_and_explicit_reads_require_nested_sheet() {
+    let f = Fixture::new();
+    let scope = f.scope("读取选中文件", false);
+    let inspect = scope.execute("read_file", json!({"source":"quantities.xlsx"})).await.unwrap();
+    assert_eq!(inspect["ok"], true, "{inspect}");
+    assert!(inspect["result"]["sheets"].as_array().unwrap().iter().any(|s| s["name"] == "Counts"));
+    assert!(inspect["result"].get("rows").is_none(), "Default must not guess a sheet or read a broad blank range");
+    for args in [json!({"source":"quantities.xlsx","operation":"read"}),
+        json!({"source":"quantities.xlsx","operation":"read","arguments":{"range":"A1:D3"}})] {
+        let error = scope.execute("read_file", args).await.unwrap_err();
+        assert!(error.contains("arguments.sheet") && error.contains("arguments.range") && error.contains("inspect"), "{error}");
+        assert!(!error.contains("Worksheet does not exist"));
+    }
+    let error = scope.execute("read_file", json!({"source":"quantities.xlsx","sheet":"Counts","range":"A1:D3"})).await.unwrap_err();
+    assert!(error.contains("arguments内"), "{error}");
+    let read = scope.execute("read_file", json!({"source":"quantities.xlsx","arguments":{"sheet":"Counts","range":"B2:B2"}})).await.unwrap();
+    assert_eq!(read["ok"], true, "{read}");
+    assert_eq!(read["result"]["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(read["result"]["rows"][0][0]["value"], 4);
+    let compatible = scope.execute("read_file", json!({"source":"quantities.xlsx","operation":"read","arguments":{"sheet":"Counts"}})).await.unwrap();
+    assert_eq!(compatible["ok"], true, "Keep existing explicit-sheet callers valid: {compatible}");
+    assert_eq!(compatible["result"]["range"], "A1:J20");
+    let wrong = scope.execute("read_file", json!({"source":"quantities.xlsx","operation":"read","arguments":{"sheet":"Sheet1","range":"B2:B2"}})).await.unwrap();
+    assert_eq!(wrong["ok"], false, "Never replace an explicit wrong sheet with the first real sheet");
+    for (source, field) in [("report.docx", "blocks"), ("requirements.pdf", "pages")] {
+        let read = scope.execute("read_file", json!({"source":source})).await.unwrap();
+        assert_eq!(read["ok"], true, "{read}");
+        assert!(read["result"][field].is_array(), "Non-XLSX defaults remain read: {read}");
+    }
+    f.no_documents_published();
+}
+
 #[tokio::test]
 async fn novel_numbers_without_evidence_are_rejected_for_word_excel_and_pdf() {
     let f = Fixture::new();

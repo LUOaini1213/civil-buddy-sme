@@ -102,8 +102,10 @@
       "platform": "Windows; POSIX TIME_WAIT test skipped here"
     },
     "launcher": {
-      "passed": 11,
-      "total": 11
+      "passed": 12,
+      "total": 12,
+      "source_base_commit": "e199ab77b890cd8fc91f31e9a4cb1c3f97a07eeb",
+      "source_state": "working-tree ASR launcher patch; not clean e199ab7"
     },
     "acceptance_http_client": {
       "passed": 27,
@@ -198,12 +200,200 @@
       "total": 3,
       "old_implementation_reproduced_failure": true,
       "scope": "real accepted TCP connection leaves TIME_WAIT; restart allowed, active listeners refused; Windows exclusive bind retained"
+    },
+    "github_ci_e199ab7": {
+      "passed": true,
+      "source_commit": "e199ab77b890cd8fc91f31e9a4cb1c3f97a07eeb",
+      "run_id": 36691392773,
+      "url": "https://github.com/LUOaini1213/civil-buddy-sme/actions/runs/36691392773",
+      "jobs_passed": 4,
+      "jobs_total": 4,
+      "smoke_passed": 187,
+      "smoke_total": 187,
+      "scope": "Clean e199ab7; predates and does not validate the subsequent working-tree ASR follow-up"
+    },
+    "local_asr_http": {
+      "passed": true,
+      "report": "work/practical-asr-acceptance-20260930/report.json (local evidence outside repository)",
+      "source_base_commit": "e199ab77b890cd8fc91f31e9a4cb1c3f97a07eeb",
+      "source_state": "working-tree ASR launcher patch atop e199ab7; not clean e199ab7 or an already updated release package",
+      "binary_sha256": "9ea59abe85ece661425ba75d3c8eb24578cc5c1828d4f019fbf679427cc63351",
+      "platform": "Windows",
+      "synthetic_audio": true,
+      "real_microphone": false,
+      "field_accuracy_validated": false,
+      "real_provider_calls": false,
+      "model": "faster-whisper small",
+      "packages": {
+        "faster-whisper": "1.2.1",
+        "ctranslate2": "4.8.2",
+        "av": "18.1.0"
+      },
+      "model_preparation": {
+        "initial_state": "missing",
+        "before_prepare_http_status": 409,
+        "explicit_prepare": true,
+        "downloaded_public_model": true,
+        "download_used_network": true,
+        "ready_seconds": 48.594
+      },
+      "successful_http_transcriptions": 3,
+      "clips": [
+        {
+          "file": "L01_huihui.webm",
+          "source_sha256": "f5a1444076b61ee7e92c9f0e413bd0a1df9697fcb799ea2018fafe17a6ceb8c7",
+          "language": "zh",
+          "audio_seconds": 6.37,
+          "http_status": 200,
+          "http_seconds": 5.14,
+          "transcript": "请帮我核对这份相单,看看能不能装进一个40尺高柜。",
+          "observed_error": {
+            "expected_term": "箱单",
+            "transcribed_term": "相单"
+          }
+        },
+        {
+          "file": "L19_yaoyao.webm",
+          "source_sha256": "1e22ad53e50e53a008eeb3925eb68d95cfcdee472bb7ba4754802744f808b4f4",
+          "language": "zh",
+          "audio_seconds": 4.24,
+          "http_status": 200,
+          "http_seconds": 4.782,
+          "transcript": "哪些属于危大工程,需要编专项方案。"
+        },
+        {
+          "file": "english-synthetic.wav",
+          "source_sha256": "1635f115ac1104fc682451a2851ac957d3719f509bb94b4933c1bb589faeac74",
+          "language": "en",
+          "audio_seconds": 4.77,
+          "http_status": 200,
+          "http_seconds": 4.078,
+          "transcript": "Please compare the tender requirements and prepare an editable draft for review."
+        }
+      ],
+      "cancellation": {
+        "status": "cancelled",
+        "process_reaped": true,
+        "transcription_http_status": 409,
+        "active_after": false
+      },
+      "source_preservation": {
+        "audio_hashes_unchanged": true,
+        "workspace_files_unchanged": true,
+        "agent_turns_before": 0,
+        "agent_turns_after": 0,
+        "state_audio_files": []
+      },
+      "launcher_exit_code": 0,
+      "scope": "Actual local HTTP decoding/transcription/cancellation with three synthetic clips; not a speech-accuracy benchmark, field recording, browser microphone test or cloud LLM acceptance"
+    },
+    "voice_error_i18n_followup": {
+      "source_base_commit": "e199ab77b890cd8fc91f31e9a4cb1c3f97a07eeb",
+      "source_state": "working-tree voice UI localization follow-up; not clean e199ab7",
+      "voice_ui_passed": 23,
+      "voice_ui_total": 23,
+      "i18n_passed": 4,
+      "i18n_total": 4,
+      "scope": "Known English error details, unknown backend text and original Chinese transcript preservation, timeout and cancellation"
+    },
+    "local_provider_configuration": {
+      "provider_host": "api.deepseek.com",
+      "official_models_http_status": 200,
+      "available_models": [
+        "deepseek-flash",
+        "deepseek-v4-pro"
+      ],
+      "configured_model": "deepseek-flash",
+      "credentials_source": "existing user-selected local project configuration; no secret copied into repository or package",
+      "cause_of_previous_401": "startup inherited a different key from the existing local project configuration"
+    },
+    "first_authenticated_live_workflow": {
+      "passed": false,
+      "live_provider_verified": true,
+      "synthetic": true,
+      "provider_host": "api.deepseek.com",
+      "model": "deepseek-flash",
+      "model_calls": 9,
+      "provider_reported_input_tokens": 82496,
+      "provider_reported_output_tokens": 2512,
+      "billing_verified": false,
+      "artifacts": 0,
+      "originals_unchanged": true,
+      "failure": "repeated document preview provenance refusals, then shared budget refusal",
+      "diagnostic_boundary": "events confirm repeated missing numeric evidence; raw model arguments were not persisted, so their exact malformed shape is unknown",
+      "report": "work/practical-live-localkey-20260930/report/report.json outside the repository"
+    },
+    "isolated_full_preview_environment": {
+      "requirements": [
+        "requirements.txt",
+        "requirements-documents.txt",
+        "requirements-asr.txt",
+        "requirements-cad.txt",
+        "requirements-engineering.txt"
+      ],
+      "import_groups_passed": 7,
+      "pip_check": "No broken requirements found",
+      "asr_cached_model": "small",
+      "original_environment_modified": false,
+      "java_runtime_available": false,
+      "unsupported_without_java": [
+        "mpp",
+        "xer",
+        "pmxml"
+      ],
+      "scope": "Package/native import and cache checks; does not establish engineering correctness or field speech quality"
+    },
+    "document_tool_contract_regressions": {
+      "product_document_gates": 17,
+      "source_receipts": 5,
+      "passed": 22,
+      "total": 22,
+      "source_fixture_oracle_and_budget_unchanged": true
+    },
+    "authenticated_live_workflow_after_contract_fix": {
+      "passed": true,
+      "live_provider_verified": true,
+      "synthetic": true,
+      "provider_host": "api.deepseek.com",
+      "model": "deepseek-flash",
+      "model_calls": 5,
+      "provider_reported_tokens": {
+        "input_tokens": 46294,
+        "output_tokens": 1760,
+        "model_calls": 5
+      },
+      "elapsed_ms": 15623,
+      "billing_verified": false,
+      "artifacts": 2,
+      "originals_unchanged": true,
+      "output_checks": {
+        "originals_unchanged": true,
+        "docx_artifact_exists": true,
+        "docx_changed_and_preserved": true,
+        "xlsx_artifact_exists": true,
+        "xlsx_changed_and_preserved": true
+      },
+      "untouched_parts_and_target_styles_preserved": true,
+      "rendering": "not_performed",
+      "formula_recalculation": "not_performed",
+      "binary_sha256": "f42c7a1318fa75332c6b5fc82397b11e681c95b45d43fae989846f6f98247df0",
+      "report": "work/practical-live-contractfix-20260930/report/report.json outside repository",
+      "scope": "One synthetic cross-document workflow, not general reliability or real project acceptance"
+    },
+    "restarted_user_preview": {
+      "port": 18789,
+      "model": "deepseek-flash",
+      "credential_source": "existing selected local file read only at startup",
+      "asr_ready": true,
+      "asr_synthetic_http": 200,
+      "python_environment": "task-owned isolated full preview environment",
+      "microphone_used": false
     }
   },
   "remaining_acceptance": [
     "real project revision and issue workflow",
     "actual Word pagination and Excel recalculation",
     "second Windows computer install and restore",
-    "live provider acceptance with user configuration"
+    "real microphone and field speech accuracy, including terminology, accents and noise"
   ]
 }

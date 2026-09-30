@@ -205,6 +205,11 @@ def main(argv=None):
         domain_port = reserved.getsockname()[1]
     domain_env = {k: v for k, v in os.environ.items() if k.upper() in
                   {"PATH", "SYSTEMROOT", "WINDIR", "PATHEXT", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "LANG"}}
+    # These are local model/cache preferences, not provider credentials. Use the
+    # merged configuration so an explicitly selected env file behaves like the host.
+    for key in ("CB_ASR_MODEL", "HF_HOME", "HUGGINGFACE_HUB_CACHE", "XDG_CACHE_HOME"):
+        if key in environment:
+            domain_env[key] = environment[key]
     domain_token = secrets.token_urlsafe(48)
     domain_env.update(PYTHONUTF8="1", PYTHON_DOTENV_DISABLED="1", CIVIL_OUT_ROOT=str(args.state_root / "domains"),
                       CIVIL_DOMAIN_TOKEN=domain_token, CIVIL_DATA_ROOT=str(args.state_root / "legacy/data"),

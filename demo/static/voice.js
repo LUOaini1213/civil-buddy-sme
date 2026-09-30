@@ -1,16 +1,33 @@
 /* 语音输入（可选）。
    说完只把文字回填到输入框：不会自动发送，由人核对、改好后自己按发送。
    识别来源按顺序选：
-     1) 本机识别：Python 工作台的 /api/asr（faster-whisper + 土木术语表），录音只在本机内存里处理。
+     1) 本机识别：统一工作台固定 Python 服务的 /api/asr（faster-whisper + 土木术语表），录音只在本机内存里处理。
         模型没准备好（第一次要下载约 460 MB）时先准备、准备好再录，不会让人白说一段；
-     2) 浏览器自带识别：本机识别不可用或运行出错时才用（如 Rust 试用包）。Chrome 会把录音发到
+     2) 浏览器自带识别：本机识别未安装依赖、未准备好或运行出错时才用。Chrome 会把录音发到
         Google 的服务器，第一次使用前弹窗说明，同意后才开始；
      3) 两者都没有：按钮置灰并说明原因。
    一段录音最长 20 秒（后端 asr.MAX_SECONDS）：页面提前 1 秒自动停，后端另有 2 秒宽限并裁到 20 秒。 */
 (function () {
   "use strict";
   const cbVoiceText = (source, values = {}) => window.CBI18n?.t(source, values) ?? String(source || "").replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
-
+  // Translate only the fixed ASR error contract. Unknown details and transcripts
+  // may contain user data, so never pass arbitrary backend text through i18n.
+  const serverErrorMessages = new Set([
+    "本机未安装 faster-whisper", "缺少术语表 demo/asr_lexicon.txt", "本机识别子进程未返回有效结果", "模型准备失败",
+    "识别模型正在准备，准备好之前先不要录音", "请先准备本机识别模型，再开始录音", "这次语音请求已结束或已取消，请重新录音",
+    "正在识别上一段，请稍候再试", "没有收到录音", "录音不能超过 8 MB", "不支持这种音频格式", "录音里没有音轨",
+    "无法解码这段录音", "录音太短，请说完一句再停", "一段录音最长 20 秒，请分段说（再点一次语音，文字会接在后面）",
+    "语音请求已取消", "本机识别超时，已停止转写进程", "本机识别失败", "录音上传已取消", "录音上传超时", "无效的语音请求标识"
+  ]);
+  function serverErrorText(value) {
+    if (typeof value !== "string") return value;
+    const suffix = "，页面会改用浏览器自带识别";
+    const fallback = value.endsWith(suffix), detail = fallback ? value.slice(0, -suffix.length) : value;
+    const typed = /^(本机识别子进程不可用|语音识别引擎无法加载|语音识别模型加载失败|本机识别运行失败|模型准备失败)：([A-Za-z_][A-Za-z0-9_]{0,127})$/.exec(detail);
+    const translated = serverErrorMessages.has(detail) ? cbVoiceText(detail)
+      : typed ? cbVoiceText(typed[1] + "：{error}", { error: typed[2] }) : null;
+    return translated === null ? value : translated + (fallback ? cbVoiceText(suffix) : "");
+  }
 
   const MAX_SECONDS = 20;
   const MAX_MS = (MAX_SECONDS - 1) * 1000;
@@ -125,7 +142,7 @@
       const response = await fetch("/api/asr/status");
       if (response.ok) { const info = await response.json(); supportsCancel = info.supports_cancel === true; return info; }
     } catch (_) {
-      /* 服务没有这个接口（Rust 试用包）或断网 */
+      /* 服务未启用这个接口，或网络连接失败。 */
     }
     return null;
   }
@@ -146,7 +163,7 @@
     if (info.state === "failed") {
       serverBroken = true;
       mode = null;
-      say(cbVoiceText("本机识别模型准备失败（") + (info.load_error || cbVoiceText("原因未知")) + cbVoiceText("）。再点一次「语音」将改用浏览器识别。"), "warn");
+      say(cbVoiceText("本机识别模型准备失败（") + (serverErrorText(info.load_error) || cbVoiceText("原因未知")) + cbVoiceText("）。再点一次「语音」将改用浏览器识别。"), "warn");
       return false;
     }
     try {
@@ -172,7 +189,7 @@
         serverBroken = true;
         mode = null;
         setPhase("idle");
-        say(cbVoiceText("本机识别模型准备失败") + (info && info.load_error ? "（" + info.load_error + "）" : "") +
+        say(cbVoiceText("本机识别模型准备失败") + (info && info.load_error ? cbVoiceText("（{detail}）", { detail: serverErrorText(info.load_error) }) : "") +
           cbVoiceText("。再点一次「语音」将改用浏览器识别。"), "warn");
         return false;
       }
@@ -239,10 +256,10 @@
         // 本机识别运行出错：本页不再撞它，下一次改走浏览器识别
         serverBroken = true;
         mode = null;
-        throw new Error((data.detail || cbVoiceText("本机识别不可用")) +
+        throw new Error((serverErrorText(data.detail) || cbVoiceText("本机识别不可用")) +
           (BrowserRecognition ? cbVoiceText("。再点一次「语音」将改用浏览器识别。") : ""));
       }
-      if (!response.ok) throw new Error(data.detail || "HTTP " + response.status);
+      if (!response.ok) throw new Error(serverErrorText(data.detail) || "HTTP " + response.status);
       if (fill(data.text)) {
         say(cbVoiceText("已转成文字（本机识别，") + data.elapsed_seconds + cbVoiceText(" 秒）。请核对后再发送，不会自动发送。"), "ok");
       }

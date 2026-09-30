@@ -80,7 +80,19 @@ The Agent page lists saved CAD section and explicit frame projects from the doma
 
 The fixed domain service also mounts the existing CAD, analysis, schedule, planning and routing pages. Planning/schedule records in the unified launcher use its state directory. These extra pages retain their deterministic services; they are not all registered as arbitrary model tools. IFC and planning remain on their own pages.
 
-Speech uses a cancellable fixed process with an explicit prepare step for model download. Audio transcription produces editable text and never auto-submits. Missing faster-whisper/model assets are reported as unavailable. Browser speech fallback requires the existing explicit consent flow. The current acceptance environment did not exercise a real microphone or download a speech model.
+Speech uses a cancellable fixed process with an explicit prepare step for model download. Audio transcription produces editable text and never auto-submits. Missing faster-whisper/model assets are reported as unavailable. Browser speech fallback requires the existing explicit consent flow.
+
+On 2026-09-30, actual Windows HTTP acceptance used a dedicated ASR environment and the **working-tree ASR launcher patch on top of `e199ab7`**, not that clean commit alone. The launcher forwarded the selected local model/cache settings without forwarding provider credentials. An explicit prepare request downloaded the public faster-whisper `small` model and reached `ready` in 48.594 seconds; transcription before preparation returned HTTP 409. The runtime used faster-whisper 1.2.1, CTranslate2 4.8.2 and PyAV 18.1.0. Model download required network access; transcription ran locally without a cloud LLM call.
+
+| Synthetic clip | Actual HTTP result | Observed transcript boundary |
+|---|---|---|
+| `L01_huihui.webm`, Chinese, 6.37 s | 200; 5.140 s end to end | Returned `请帮我核对这份相单,看看能不能装进一个40尺高柜。`; **箱单 was incorrectly recognised as 相单** |
+| `L19_yaoyao.webm`, Chinese, 4.24 s | 200; 4.782 s end to end | Returned `哪些属于危大工程,需要编专项方案。` |
+| `english-synthetic.wav`, English, 4.77 s | 200; 4.078 s end to end | Returned `Please compare the tender requirements and prepare an editable draft for review.` |
+
+A separate in-flight request was cancelled: the cancellation endpoint reported `process_reaped=true`, the transcription returned HTTP 409, and the service reported no active request afterwards. Source audio hashes and the workspace file list were unchanged, no audio files were found in the state directory, and the Agent task list stayed empty. These observations establish three functioning synthetic-audio HTTP transcriptions and cancellation, not a speech-accuracy score, real microphone acceptance or field/noise/accent performance. Transcripts still require human review. The local report is `work/practical-asr-acceptance-20260930/report.json` outside the repository; its bounded summary is recorded in the [2026-09-30 acceptance record](acceptance/2026-09-30-practical.json).
+
+The same working-tree follow-up passed launcher tests 12/12, voice UI tests 23/23 and i18n tests 4/4, including known English error details, original Chinese transcripts, timeout and cancellation. Separately, clean commit `e199ab7` passed all four [CI jobs in run 36691392773](https://github.com/LUOaini1213/civil-buddy-sme/actions/runs/36691392773), with smoke 187/187. That CI run predates the ASR working-tree follow-up and does not certify these later changes.
 
 Build a Windows source-plus-executable package after committing distribution sources:
 
@@ -112,3 +124,10 @@ The Agent page checks registered DOCX, XLSX and PDF outputs against their regist
 Office checks inspect package structure, macros, embedded objects and external relationships without opening links or executing content. XLSX reports formula/cache/error counts: missing or invalid caches and error cells block delivery; existing caches remain unverified. `calcMode=auto`, `fullCalcOnLoad` and `forceFullCalc` on a generated copy request future calculation but do not prove it happened. No Office renderer or spreadsheet calculation engine runs in this check, so page layout and formula results still need review in the appropriate application.
 
 A structurally inspected PDF with no detected active-content markers can open in the browser's native PDF viewer. The preview endpoint rechecks the registered output hash and rejects changed bytes. This is an actual view of that PDF, not a converted DOCX preview or evidence that every page has been visually reviewed. Checks neither validate engineering conclusions nor authorize tender submission, construction or shipment.
+
+
+## Live document workflow follow-up (2026-09-30)
+
+A selected local project credential resolved an inherited-key HTTP 401. The first authenticated synthetic workflow reached the real provider but repeatedly failed numeric evidence checks and then stopped at the unchanged budget gate. Tool schemas now describe nested Word/Excel patch fields and complete `patches[i].evidence` references; invalid shapes have actionable errors. A separate `verify_sources` success never grants later writes. XLSX calls without an operation or worksheet inspect available sheets first; explicitly requested reads still need an actual sheet name. Existing bounded default ranges remain supported.
+
+With the same fixture generator, task, validation oracle and budget, the next real `deepseek-flash` workflow completed in about 15.6 seconds with five provider responses. Both actual new copies contained the PDF-required value; original hashes, untouched document parts, styles and the unmodified worksheet were preserved. These are structural/content checks on synthetic files, not Word pagination, Excel calculation, engineering sign-off or a field reliability score. The model key stays outside the repository and release archive.
