@@ -38,7 +38,7 @@ STATIC = (
     "vendor/three/OrbitControls.js", "vendor/three/LICENSE.txt", "vendor/three/manifest.json",
 )
 EXPLICIT = (
-    "gateway/__init__.py", "gateway/app.py", "frontend/index.html", "frontend/workbench.html",
+    "gateway/__init__.py", "gateway/app.py", "gateway/idempotency.py", "frontend/index.html", "frontend/workbench.html",
     "gateway/web_link.py", "gateway/pages/access.html", "gateway/pages/demo.html",
     "frontend/manifest.webmanifest", "frontend/icons/cb-icon.svg",
     "frontend/icons/cb-icon-192.png", "frontend/icons/cb-icon-512.png",
