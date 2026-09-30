@@ -41,6 +41,28 @@ jobs:
           cargo build --locked --manifest-path workbench/Cargo.toml --bin civil-workbench
           python scripts/start_unified_workbench.py --python python --binary workbench/target/debug/civil-workbench --check
           python scripts/test_unified_runtime_http.py --binary workbench/target/debug/civil-workbench
+      - name: Bounded startup diagnostics on failure
+        if: failure()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          for root in sorted(Path("output").glob("unified-runtime-http-*"))[-1:]:
+              # Only these synthetic-run startup logs; never upload state or login-token files.
+              secrets = [p.read_text().strip() for p in root.glob("*/login-token.txt")]
+              logs = sorted(root.glob("*/launcher-*.log"))
+              logs += sorted(root.glob("state/accounts/*/projects/*/domains.log"))
+              logs += sorted(root.glob("state/accounts/*/projects/*/rust.log"))
+              for path in logs:
+                  with path.open("rb") as source:
+                      source.seek(max(0, path.stat().st_size - 12000))
+                      tail = source.read(12000).decode("utf-8", errors="replace")
+                  for secret in secrets:
+                      if secret:
+                          tail = tail.replace(secret, "[REDACTED]")
+                  tail = re.sub(r"(?i)(bearer\s+)[^\s\"']+", r"\1[REDACTED]", tail)
+                  print(str(path), tail, sep="\n")
+          PY
 
   smoke:
     runs-on: ubuntu-latest
