@@ -39,6 +39,7 @@ jobs:
       - name: Build the host and verify authenticated restart and handoff
         run: |
           cargo build --locked --manifest-path workbench/Cargo.toml --bin civil-workbench
+          python scripts/start_unified_workbench.py --python python --binary workbench/target/debug/civil-workbench --check
           python scripts/test_unified_runtime_http.py --binary workbench/target/debug/civil-workbench
 
   smoke:
