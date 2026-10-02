@@ -4,7 +4,8 @@
 覆盖：
 1) 3 条 happy-path resume
 2) reject：未 confirm 禁止进 B
-3) multi-container：重票 resume 后 used≥2 或 can_fit 明确
+3) multi-container：28t 完整实物票 resume 后 used≥2
+4) 原来依赖虚拟拆件的重票，即使磁盘恢复并确认也不能装柜
 """
 from __future__ import annotations
 
@@ -133,10 +134,10 @@ def _reject_path() -> None:
     print("PASS hitl reject blocks team B")
 
 
-def _multi_container_materials() -> list:
-    """轻量多柜料：8×3.5t ≈28t，逼出 used≥2，避免 230 行 32t 票拖慢门禁。"""
+def _multi_container_materials(count=8, unit_weight=3500) -> list:
+    """Keep the original 8×3.5t case; use complete lighter pieces for positive loading."""
     mats = []
-    for i in range(8):
+    for i in range(count):
         mats.append(
             {
                 "id": f"MC{i:02d}",
@@ -145,14 +146,14 @@ def _multi_container_materials() -> list:
                 "length_mm": 2800,
                 "width_mm": 1100,
                 "height_mm": 1000,
-                "total_weight_kg": 3500,
-                "weight_kg": 3500,
+                "total_weight_kg": unit_weight,
+                "weight_kg": unit_weight,
             }
         )
     return mats
 
 
-def _multi_container_resume() -> None:
+def _multi_container_resume(*, virtual_split=False) -> None:
     """多柜票：HITL resume 后柜数路径可观测。"""
     from packing_assistant.graph_resume import (
         load_resume_state,
@@ -160,9 +161,10 @@ def _multi_container_resume() -> None:
         run_team_a_segment,
     )
     from packing_assistant.session_store import load_session, save_session
+    from packing_assistant.tools.cargo_conservation import check_conservation
 
-    mats = _multi_container_materials()
-    sid = "hitl-comp-multi"
+    mats = _multi_container_materials() if virtual_split else _multi_container_materials(count=20, unit_weight=1400)
+    sid = "hitl-comp-multi-refused" if virtual_split else "hitl-comp-multi"
     print(f"--- A segment multi session={sid} n_mats={len(mats)}")
     st_a = run_team_a_segment(
         "多柜 HITL：轻量重模块票",
@@ -179,6 +181,9 @@ def _multi_container_resume() -> None:
     n_boxes = len(st_a.get("boxes") or [])
     print(f"    phase={st_a.get('phase')} boxes={n_boxes}")
     assert n_boxes >= 1, "multi: no boxes after A"
+    conservation = check_conservation(mats, st_a.get("boxes") or [])
+    assert conservation.get("ok"), conservation
+    assert bool(conservation.get("mass_split_rows")) is virtual_split, conservation
 
     st_disk = load_session(sid) or load_resume_state(sid)
     assert st_disk
@@ -196,8 +201,16 @@ def _multi_container_resume() -> None:
         f"segment={st_b.get('graph_segment')}"
     )
     assert plan.get("containers_used") is not None or can_fit is not None
-    # 32t 量级通常 used≥2；若引擎压进 1 柜也允许但须 can_fit 有结论
-    assert used >= 1
+    if virtual_split:
+        assert can_fit is False and used == 0, plan
+        assert not plan.get("layout"), plan
+        assert st_b.get("ship_ok") is False, st_b.get("phase")
+        assert any(row.get("reason") == "physical_split_not_authorized" for row in st_b.get("needs_human", []))
+        print("PASS hitl virtual split remains blocked after disk resume")
+        return
+    # This positive fixture has 28t in actual complete items, plus packaging.
+    assert can_fit is True and used >= 2, plan
+    assert not check_conservation(mats, st_b.get("boxes") or []).get("mass_split_rows")
     assert st_b.get("graph_segment") == "team_b_done" or st_b.get("phase") in (
         "done",
         "need_revision",
@@ -237,7 +250,8 @@ def main() -> int:
 
     _reject_path()
     _multi_container_resume()
-    print("ALL_HITL_RESUME_PASS n=5 (3 happy + reject + multi)")
+    _multi_container_resume(virtual_split=True)
+    print("ALL_HITL_RESUME_PASS n=6 (3 happy + reject + complete-piece multi + virtual-split refusal)")
     return 0
 
 

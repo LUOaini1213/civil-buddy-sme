@@ -219,6 +219,7 @@ CHECKS = (
     Check("release-package", ("scripts/test_trial_pack.py",)),
     Check("business-files", ("scripts/test_business_reliability.py",)),
     Check("trace-artifacts", ("scripts/test_trace_artifacts.py",)),
+    Check("hitl-disk-resume", ("scripts/test_hitl_resume_competition.py",), timeout=300),
     Check("pack-ship-weight-validation", ("scripts/test_pack_ship_weight_validation.py",)),
     Check("pack-ship-conservation", ("scripts/test_pack_ship_conservation.py",), timeout=300),
     Check("pack-ship-crates-structure", ("scripts/test_pack_ship_crates_structure.py",)),
