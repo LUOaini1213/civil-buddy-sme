@@ -5,6 +5,7 @@ Runs under pytest and, like every other script here, directly: `python scripts/t
 """
 import math
 import sys
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -121,6 +122,37 @@ def test_no_container_count_comes_out_of_an_unusable_weight():
         plan = run_plan(materials=[{**BASE, **extra}])
         assert plan["ok"] is False and plan["source"] == "needs_human", (extra, plan)
         assert "containers_used" not in plan, extra
+
+
+def test_conflicting_source_weights_stop_shared_entrypoint_before_boxing():
+    for fields in ({"weight_kg": 2000, "total_weight_kg": 1000, "quantity": 1},
+                   {"weight_kg": 1000, "total_weight_kg": 2000, "quantity": 1},
+                   {"weight_kg": 1000, "total_weight_kg": 1000, "qty": "2"},
+                   {"单重_kg": 1000, "总重_kg": 1000, "数量": 2}):
+        row = {key: value for key, value in BASE.items() if key != "quantity"} | fields
+        for lang in ("zh", "en"):
+            needs = rows_needing_human([row], lang=lang, sheet_rows=[7])
+            assert len(needs) == 1, (fields, needs)
+            assert needs[0]["reason"] == "source_weight_mismatch"
+            assert needs[0]["source_material"] == row
+            assert needs[0]["source_material"] is not row
+            assert needs[0]["sheet_row"] == 7
+        with patch("packing_assistant.agents.box_scheme.agent_box_scheme", side_effect=AssertionError("must not box")):
+            plan = run_plan(materials=[row], container_type="40HQ", max_containers=1,
+                            packing_options={"max_box_net_kg": 1500})
+        assert plan["ok"] is False and plan["source"] == "needs_human", plan
+        assert "containers_used" not in plan
+        assert plan["needs_human"][0]["source_material"] == row
+
+
+def test_matching_and_rounded_totals_do_not_expand_the_weight_gate():
+    for fields in ({"weight_kg": 12.5, "total_weight_kg": 25, "quantity": 2},
+                   {"weight_kg": "12.5", "total_weight_kg": "25", "qty": "2"},
+                   {"单重_kg": 12.5, "总重_kg": 25, "数量": 2},
+                   {"weight_kg": 333.33, "total_weight_kg": 1000, "quantity": 3},
+                   {"weight_kg": 12.5, "total_weight_kg": 12.5}):
+        row = {key: value for key, value in BASE.items() if key != "quantity"} | fields
+        assert rows_needing_human([row]) == [], fields
 
 
 if __name__ == "__main__":

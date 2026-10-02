@@ -95,6 +95,113 @@ class PackingReplanWorkerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             service.run(self.root, {**self.payload(), "packing_options": {}})
 
+    def test_virtual_mass_splits_refuse_before_solver_and_preserve_source(self):
+        # One 2000 kg item must not turn into two supposedly feasible 1000 kg
+        # boxes. Also cover total-only weights and a lower internal boxing cap.
+        for changes, cap in (({"weight_kg": 2000}, 1500),
+                             ({"weight_kg": None, "total_weight_kg": 4000, "quantity": 2}, 1500),
+                             ({"length_mm": 5000, "weight_kg": 2000}, 3200)):
+            material = {"id": "SYN-ONE", "name": "Synthetic solid member", "length_mm": 1200,
+                        "width_mm": 120, "height_mm": 100, "weight_kg": 2000, "quantity": 1, **changes}
+            self.document.update(materials=[material], max_box_net_kg=cap, clearance_mm=0, max_containers=1)
+            self.write()
+            before = self.source.read_bytes()
+            with self.subTest(changes=changes, cap=cap), patch.object(
+                service, "_solve", side_effect=AssertionError("virtual pieces must not reach solver")
+            ):
+                result = self.run_worker()
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "needs_human")
+            self.assertIsNone(result["baseline"])
+            self.assertIsNone(result["final"])
+            self.assertEqual(result["rounds"], [])
+            refusal = result["needs_human"][0]
+            self.assertEqual(refusal["reason"], "physical_split_not_authorized")
+            self.assertEqual(refusal["source_material"], material)
+            self.assertGreater(refusal["parts_per_unit"], 1)
+            # Arithmetic conservation alone does not establish physical pieces.
+            self.assertTrue(result["conservation"]["ok"])
+            self.assertEqual(self.source.read_bytes(), before)
+
+    def test_conflicting_source_weights_refuse_before_boxing_without_choosing_a_value(self):
+        for unit, total, quantity in ((2000, 1000, 1), (1000, 2000, 1),
+                                      (2000, 2000, 2), (500, 1000.02, 2), ("2000", "1000", 1)):
+            material = {"id": "SYN-MASS", "name": "Synthetic solid members", "length_mm": 1200,
+                        "width_mm": 120, "height_mm": 100, "weight_kg": unit,
+                        "total_weight_kg": total, "quantity": quantity}
+            self.document.update(materials=[material], max_box_net_kg=1500, clearance_mm=0, max_containers=1)
+            self.write()
+            before = self.source.read_bytes()
+            with self.subTest(unit=unit, total=total, quantity=quantity), patch(
+                "packing_assistant.agents.box_scheme.agent_box_scheme",
+                side_effect=AssertionError("conflicting source weights must not reach boxing")
+            ):
+                result = self.run_worker()
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "needs_human")
+            self.assertEqual(result["outcome"], "needs_human")
+            self.assertIsNone(result["baseline"])
+            self.assertIsNone(result["final"])
+            self.assertEqual(result["rounds"], [])
+            self.assertEqual(result["needs_human"][0]["reason"], "source_weight_mismatch")
+            self.assertEqual(result["needs_human"][0]["source_material"], material)
+            self.assertEqual(self.source.read_bytes(), before)
+
+    def test_single_matching_and_rounded_weight_declarations_remain_usable(self):
+        for weights, quantity in (({"weight_kg": 1000}, 1), ({"total_weight_kg": 1000}, 1),
+                                  ({"weight_kg": 500}, 2), ({"total_weight_kg": 1000}, 2),
+                                  ({"weight_kg": 500, "total_weight_kg": 1000}, 2),
+                                  ({"weight_kg": "500", "total_weight_kg": "1000"}, 2),
+                                  ({"weight_kg": 333.33, "total_weight_kg": 1000}, 3),
+                                  ({"weight_kg": 500, "total_weight_kg": 0}, 2),
+                                  ({"weight_kg": None, "total_weight_kg": 1000}, 2)):
+            material = {"id": "SYN-MASS", "name": "Synthetic solid members", "length_mm": 1200,
+                        "width_mm": 120, "height_mm": 100, "quantity": quantity, **weights}
+            self.document.update(materials=[material], max_box_net_kg=1500, clearance_mm=0, max_containers=1)
+            self.write()
+            before = self.source.read_bytes()
+            with self.subTest(weights=weights, quantity=quantity), patch(
+                "socket.socket.connect", side_effect=AssertionError("network must not be used")
+            ):
+                result = self.run_worker()
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "completed")
+            self.assertTrue(result["final"]["can_fit"])
+            self.assertTrue(result["conservation"]["ok"])
+            self.assertEqual(result["conservation"]["mass_split_rows"], [])
+            self.assertEqual(self.source.read_bytes(), before)
+
+    def test_whole_pieces_can_use_separate_boxes_with_general_notes(self):
+        self.document.update(max_box_net_kg=1500, clearance_mm=0, max_containers=1,
+                             materials=[{"id": "SYN-PAIR", "name": "Synthetic solid members", "length_mm": 1200,
+                                         "width_mm": 120, "height_mm": 100, "weight_kg": 1000, "quantity": 2,
+                                         "note": "Batch 3; tip sheet enclosed; painted blue"}])
+        self.write()
+        with patch("socket.socket.connect", side_effect=AssertionError("network must not be used")):
+            result = self.run_worker()
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["final"]["can_fit"])
+        self.assertTrue(result["final"]["layout_verified"])
+        self.assertEqual(result["final"]["n_boxes"], 2)
+        self.assertEqual(result["conservation"]["mass_split_rows"], [])
+        self.assertTrue(all(item["split_of"] == 1 for box in result["boxes"] for item in box["contents"]))
+
+    def test_explicit_tipping_and_face_orientation_in_notes_refuse_before_boxing(self):
+        for note in ("Fragile glass; do not tip; keep this face upward", "do not tip", "keep this face upward"):
+            self.document["materials"][0]["note"] = note
+            self.write()
+            before = self.source.read_bytes()
+            with self.subTest(note=note), patch(
+                "packing_assistant.agents.box_scheme.agent_box_scheme",
+                side_effect=AssertionError("source transport constraints must stop automatic boxing")
+            ):
+                result = self.run_worker()
+            self.assertEqual(result["status"], "needs_human")
+            self.assertIsNone(result["final"])
+            refusal = next(row for row in result["needs_human"] if row["reason"] == "unsupported_transport_requirements")
+            self.assertEqual(refusal["requirements"]["note"], note)
+            self.assertEqual(self.source.read_bytes(), before)
+
     def test_handling_aliases_cannot_silently_bypass_transport_refusal(self):
         requirement = "Transport upright on A-frame; do not stack"
         original = deepcopy(self.document)

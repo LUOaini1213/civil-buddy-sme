@@ -90,7 +90,8 @@ def test_repro_carries_every_unit() -> None:
 
 def test_run_plan_reports_the_account() -> None:
     result = run_plan(file_path=_repro_path())
-    assert result["ok"] is True, result
+    assert result["ok"] is False and result["error"] == "physical_split_not_authorized", result
+    assert result["can_fit"] is False and "containers_used" not in result, result
     kept = result["conservation"]
     assert (kept["pieces_in"], kept["pieces_out"]) == (58, 58), kept
     assert kept["kg_in"] == 6040.0 and abs(kept["kg_out"] - 6040.0) < 1.5, kept
@@ -98,8 +99,51 @@ def test_run_plan_reports_the_account() -> None:
     split = {row["id"]: row for row in kept["mass_split_rows"]}
     assert split["GL-1"]["units"] == 2 and split["GZ-2"]["units"] == 4, split
     report = plan_report_md(result, "repro.csv")
-    assert "件数 58 → 58" in report and "净重 6040.0 →" in report, report
-    assert "钢梁 GL-1：2 件" in report and "计算上的拆分" in report, report  # 虚拟拆分必须说出来
+    assert "钢梁 GL-1" in report and "虚拟份额" in report, report
+    assert "人工" in report and "用柜数" not in report, report
+    assert {row["id"] for row in result["needs_human"]} == {"GL-1", "GZ-2"}
+
+
+def test_physical_splits_refuse_loading_and_shipping_drafts() -> None:
+    from copy import deepcopy
+    from packing_assistant.agents.loader import agent_loader
+    from packing_assistant.tools.cargo_conservation import physical_split_issues
+
+    materials = [_row(id="SOLID", name="One solid member", quantity=1, weight_kg=2000,
+                      width_mm=120, height_mm=100, note="Batch 3")]
+    original = deepcopy(materials)
+    options = {"max_box_net_kg": 1500, "clearance_mm": 0, "max_stack_layers": 1,
+               "prefer_stack": False, "standard_boxes": True, "force_dense_sheets": False,
+               "crate_passthrough": False, "multi_start": False}
+    scheme = agent_box_scheme({"materials": materials, "container_type": "40HQ", "packing_options": options})
+    assert scheme["cargo_conservation"]["ok"] is True
+    assert scheme["ship_ok"] is False and scheme["materials_incomplete"] is True
+    assert scheme["needs_human"][0]["source_material"] == original[0]
+    assert physical_split_issues(materials, scheme["boxes"])[0]["parts_per_unit"] == 2
+    # Loader invocation without the boxer's flags cannot bypass the content gate,
+    # including the shortcut that previously always declared one box per cabinet.
+    for extra in ({}, {"one_box_per_container": True}):
+        with patch("packing_assistant.agents.loader.pack_boxes_api", side_effect=AssertionError("must not pack virtual pieces")):
+            loaded = agent_loader({"materials": materials, "boxes": scheme["boxes"],
+                                   "container_type": "40HQ", "packing_options": {**options, **extra}})
+        assert loaded["container_plan"]["can_fit"] is False
+        assert loaded["container_plan"]["layout"] == []
+        assert loaded["needs_human"][0]["reason"] == "physical_split_not_authorized"
+    result = run_plan(materials=materials, container_type="40HQ", max_containers=1, packing_options=options)
+    assert result["ok"] is False and result["can_fit"] is False
+    assert result["needs_human"][0]["source_material"] == original[0]
+    # Draft tools use the shared gate with their own default boxing limits.
+    heavy = [dict(materials[0], weight_kg=4000)]
+    for draft in (draft_vgm(materials=heavy), draft_booking(materials=heavy)):
+        assert draft["ok"] is False and draft["error"] == "physical_split_not_authorized", draft
+        assert "booking_request" not in draft and "containers_used" not in draft, draft
+    assert materials == original
+    # The same total mass as two real, complete pieces is allowed.
+    whole = [dict(materials[0], quantity=2, weight_kg=1000)]
+    valid = run_plan(materials=whole, container_type="40HQ", max_containers=1, packing_options=options)
+    assert valid["ok"] is True and valid["can_fit"] is True, valid
+    assert valid["conservation"]["mass_split_rows"] == []
+    assert valid["per_container"][0]["rows"] == {"SOLID": 2}
 
 
 def test_mass_split_unit_level() -> None:
@@ -369,7 +413,14 @@ def test_every_tracked_fixture_conserves(show: bool = False, everything: bool = 
         if name.startswith("sim/t80_") and not everything:
             continue  # 300–570 行，成箱各 4–16 s；修复前后都守恒，另有 test_anchor_t80_long_mix.py 盯着
         scheme = agent_box_scheme({"materials": mats, "container_type": "40HQ", "packing_options": dict(opts)})
-        if scheme.get("materials_incomplete"):
+        if scheme.get("materials_incomplete") and any(
+            row.get("reason") == "physical_split_not_authorized" for row in scheme.get("needs_human", [])
+        ):
+            # Preserve all arithmetic conservation coverage of rejected virtual
+            # candidate boxes; they are evidence, never a usable loading plan.
+            assert scheme["boxes"] and scheme["ship_ok"] is False, name
+            assert all(row.get("source_material") for row in scheme["needs_human"]), name
+        elif scheme.get("materials_incomplete"):
             assert not scheme["boxes"], name  # 缺尺寸：整票拒收，不是丢货
             if any(row.get("reason") == "unsupported_transport_requirements" for row in scheme.get("needs_human", [])):
                 handling_refused += 1
@@ -406,6 +457,7 @@ def main() -> int:
     tests = [
         test_repro_carries_every_unit,
         test_run_plan_reports_the_account,
+        test_physical_splits_refuse_loading_and_shipping_drafts,
         test_mass_split_unit_level,
         test_split_weight_follows_row_total,
         test_passthrough_one_crate_per_unit,

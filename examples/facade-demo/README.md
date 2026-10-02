@@ -43,17 +43,26 @@ It reads the ITT's logistics clauses, takes the container type from Clause 4.8 (
 gets 40HQ by default and says so; a type the planner cannot model, several types, a size with no type such as
 "40-foot", or a type in a sentence that also says *not* gets no plan and goes to a person, who can name the type in
 the request, e.g. `... write the logistics response in 40HQ`; a plan that does not fit states no type, count or
-mass), plans the
-panel list through the same `run_plan` path as the packing flow (conservation check, needs-human gates) and writes,
+mass). It runs the same source-preserving transport and needs-human gates as the packing flow before
+planning. The supplied façade lists stop at this gate because their upright / A-frame / no-stack
+requirements are unsupported by automatic boxing. It writes,
 in `.civil-buddy/out/<session>/bid-parse/`:
 
 - `tender-packing-link.md` — the clauses, the logistics matrix (status, owner, plan figure per statement) and what
   changed since the previous run;
-- `bidbook.en.md` (and a Word copy) — the English bid-book, its chapter 6 written from the plan: each statement cites
-  its clause and plan figure; qualifications and price stay `[TO FILL]` for people;
+- `bidbook.en.md` (and a Word copy) — the English bid-book; each logistics statement cites its clause and either
+  a supported plan figure or the unresolved source requirement. Qualifications and price stay `[TO FILL]`;
 - `tender-packing-link.json` — the link record: statement → clause → plan figures → sha256 of the tender, the panel
   list and the plan;
-- `pack-plan.json` — the plan the figures come from.
+- `pack-plan.json` — only when planning is supported and succeeds; absent for the original façade fixture.
+
+**Current preview, verified offline on 2026-10-03:** 5 logistics clauses, 7 statements, all
+`human_required`; `unsupported_transport_requirements`, no plan name or hash, and no container
+count. Revision B changes the source hash but still produces no plan. The packing-only flow writes
+a row-by-row transport supplement checklist. Supply loaded package dimensions, gross mass and
+count; A-frame/stillage packages also need net mass, tare and capacity.
+
+### Historical result (2026-09-26, superseded for these fixtures)
 
 On 2026-09-26 it printed 6 × 40HQ from Clause 4.8 (S1 covered); the count (S2) and the heaviest container's gross
 mass, 6,472.8 kg against the 20,000 kg of Clause 4.9 (S3), are *partial* because the A-frame stillages of Clause
@@ -79,7 +88,8 @@ Linked facade_itt_doc.md and facade_panels_mixed.xlsx: 5 logistics clauses, 7 st
 read from row 4; 1 total/subtotal row not packed (row 15 'TOTAL'). ...
 ```
 
-with 34 → 34 pieces and 14,600 → 14,600 kg in the conservation check. The bracket crate is 4 m long because it
+The following describes that historical run, not current preview output. Its conservation check
+reported 34 → 34 pieces and 14,600 → 14,600 kg. The bracket crate is 4 m long because it
 carries the anchor channels. A short crate (1200 × 1000 × 800 mm) beside the 4.35 m panel crates is where the loader
 is weak today: it then puts 2 crates in each 40HQ instead of 4 and the plan does not fit (measured the same day on
 this list with only BRK-01 resized to 1200 × 1000 × 800: 9 × 40HQ holding 19 of 33 crates). That limit is the loader's, not the reader's, and it is not hidden: the run says
@@ -110,9 +120,14 @@ folder's top level are pasted into every draft), then the two linked requests ab
 `civil exec - < inputs/daily_report_input.txt`, `civil exec - < inputs/wah_briefing_input.txt`.
 `scripts/test_facade_demo.py` checks the flows; `scripts/test_tender_packing_link.py` checks the linked run.
 
-## What it does not show yet
+## Historical limitations and current behavior
 
-The script computes these from the drafts instead of claiming them; on 2026-09-26 it printed:
+The 2026-09-26 run below is retained as a historical record. Since then, source handling requirements
+stop unsupported automatic boxing; the current script no longer removes notes as a control and
+does not produce these container or crate counts. For current numerical behavior use the separate
+[geometry-only replan fixture](../packing-replan/README.md), preserving real shipment restrictions.
+
+The earlier script computed the following from its drafts:
 
 - tender.parse.md shows 0 of the 12 façade specification clauses (PMU, VMU, heat soak, water test,
   PE endorsement, warranty, A-frame delivery, 40HQ containers, gross mass, CTU Code, delivery sequence,

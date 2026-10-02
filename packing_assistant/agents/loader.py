@@ -19,6 +19,19 @@ def agent_loader(state: PackingState) -> Dict[str, Any]:
     boxes = list(state.get("boxes") or [])
     plan = state.get("plan") or {}
     ctype = plan.get("container_type") or state.get("container_type") or "40HQ"
+    from packing_assistant.tools.cargo_conservation import physical_split_issues
+
+    physical_issues = physical_split_issues(state.get("materials") or [], boxes)
+    if physical_issues:
+        return {
+            "container_plan": {"container_type": ctype, "can_fit": False, "containers_used": 0,
+                               "layout": [], "unpacked_box_ids": [box.get("box_id") for box in boxes],
+                               "engine": "blocked_physical_split", "message": physical_issues[0]["ask"]},
+            "needs_human": physical_issues, "materials_incomplete": True, "ship_ok": False,
+            "errors": ["loader_blocked: physical_split_not_authorized"],
+            "agent_meta": {"node": "loader", "tools_used": ["loader.block_physical_split"],
+                           "artifacts": {"can_fit": False, "layout": 0, "needs_human": len(physical_issues)}},
+        }
     priority = plan.get("priority_order") or []
     booking = plan.get("booking") or state.get("booking") or {}
     packing_opts = dict(state.get("packing_options") or {})

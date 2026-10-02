@@ -16,6 +16,7 @@ containers_used=1、利用率恒为 0），因为引擎吃的是 material_api_to
 
 from __future__ import annotations
 
+from copy import deepcopy
 import math
 import re
 import time
@@ -26,6 +27,7 @@ UNSPECIFIED = "UNSPECIFIED"
 #: 缺重量的行不参与装箱。0 公斤不是"很轻"，是"不知道"——照 0 算会得到一个
 #: 建立在零质量上的方案，N0 按重、载重余量与 VGM 全部失真且没有任何告警。
 NEEDS_HUMAN_MISSING_WEIGHT = "missing_weight"
+NEEDS_HUMAN_WEIGHT_MISMATCH = "source_weight_mismatch"
 
 
 def _weight_cell(value: Any) -> Optional[float]:
@@ -86,9 +88,10 @@ def _sheet_row(rows: Optional[Sequence[Optional[int]]], index: int) -> Optional[
 
 def rows_needing_human(materials: Sequence[Dict[str, Any]], *, lang: str = "zh",
                        sheet_rows: Optional[Sequence[Optional[int]]] = None) -> List[Dict[str, Any]]:
-    """没有可用重量的行。与 adapters.material_api_to_internal 同口径：单重或总重任一为正即可
+    """没有可用重量或重量互相矛盾的行。与 adapters.material_api_to_internal 同口径：单重或总重任一为正即可
     （总重写 0 等于没写，引擎会退回 单重 × 数量）；但写了却不能用的那一格不因为另一格正常就放过——
     `单重 12.5 + 总重 'abc'` 引擎会崩，`单重 12.5 + 总重 -3` 引擎会拿 -3 当总重。
+    两项重量都为正时，总重须与单重乘数量一致；不替来源决定哪项才正确。
 
     lang="en" writes the question in English and names the sheet row (sheet_rows, one per material, from the
     parse record); the Chinese question is unchanged.
@@ -96,8 +99,9 @@ def rows_needing_human(materials: Sequence[Dict[str, Any]], *, lang: str = "zh",
     out: List[Dict[str, Any]] = []
     for index, m in enumerate(materials or []):
         meta = m.get("meta") or {}
-        cells = [c for c in (_weight_cell(_first_written(m, "weight_kg", "单重_kg")),
-                             _weight_cell(_first_written(m, "total_weight_kg", "总重_kg"))) if c is not None]
+        unit = _weight_cell(_first_written(m, "weight_kg", "单重_kg"))
+        total = _weight_cell(_first_written(m, "total_weight_kg", "总重_kg"))
+        cells = [c for c in (unit, total) if c is not None]
         unusable = any(math.isnan(c) or c < 0 for c in cells)
         has_weight = any(c > 0 for c in cells if not math.isnan(c))
         if meta.get("weight_missing") or unusable or not has_weight:
@@ -111,6 +115,25 @@ def rows_needing_human(materials: Sequence[Dict[str, Any]], *, lang: str = "zh",
                     "reason": NEEDS_HUMAN_MISSING_WEIGHT,
                     "ask": ask,
                 }, sheet_rows, index))
+            continue
+        quantity = _weight_cell(_first_written(m, "quantity", "数量", "qty"))
+        if quantity is None:
+            quantity = 1.0  # Matches the existing adapter's omitted-count default.
+        # Invalid quantities have their own gate. Never resolve two conflicting
+        # positive source weights by silently preferring the declared total.
+        # Use the same rounding tolerance as the ledger's mass comparisons.
+        if (unit is not None and total is not None and unit > 0 and total > 0
+                and math.isfinite(quantity) and quantity >= 1 and quantity.is_integer()
+                and not meta.get("quantity_invalid")
+                and not math.isclose(unit * quantity, total, rel_tol=1e-8, abs_tol=0.01)):
+            ask = ("这一行的总重与单重乘以数量不一致。请保留两项原始数值，核对重量及其口径后再成箱；未选择或覆盖任何一项。"
+                   if lang != "en" else
+                   "The declared total weight does not match unit weight multiplied by quantity. "
+                   "Preserve both source values and confirm the correct weights and their scope "
+                   "before automatic boxing; neither value has been chosen or overwritten.")
+            out.append(_located({"id": m.get("id") or "", "name": m.get("name") or "",
+                                 "reason": NEEDS_HUMAN_WEIGHT_MISMATCH,
+                                 "source_material": deepcopy(m), "ask": ask}, sheet_rows, index))
     return out
 
 
@@ -443,11 +466,17 @@ def _unknown_container(container_type: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def _not_conserved(solved: Dict[str, Any], n_rows: int) -> Optional[Dict[str, Any]]:
+def _not_conserved(solved: Dict[str, Any], n_rows: int, *, lang: str = "zh") -> Optional[Dict[str, Any]]:
     """成箱结果与装箱单对不上就不出方案：柜数、N0、VGM 都建立在箱上，箱里的货不对，后面全错。"""
-    from packing_assistant.tools.cargo_conservation import NOT_CONSERVED, violation_sentences
+    from packing_assistant.tools.cargo_conservation import NOT_CONSERVED, physical_split_issues, violation_sentences
 
     conservation = solved.get("conservation") or {}
+    physical_issues = physical_split_issues((solved.get("state") or {}).get("materials") or [],
+                                           solved.get("boxes") or [], lang=lang)
+    if physical_issues and conservation.get("ok", True):
+        return {"ok": False, "can_fit": False, "solver_connected": True, "source": "needs_human",
+                "error": physical_issues[0]["reason"], "needs_human": physical_issues,
+                "detail": needs_human_sentences(physical_issues), "conservation": conservation, "n_rows": n_rows}
     if conservation.get("ok", True):
         return None
     return {
@@ -611,7 +640,7 @@ def run_plan(
         failed["parse"] = {k: loaded[k] for k in _PARSE_KEYS}
         failed["elapsed_s"] = round(time.time() - t0, 3)
         return failed
-    lost = _not_conserved(solved, len(mats))
+    lost = _not_conserved(solved, len(mats), lang=lang)
     if lost:
         lost["parse"] = {k: loaded[k] for k in _PARSE_KEYS}
         lost["elapsed_s"] = round(time.time() - t0, 3)
