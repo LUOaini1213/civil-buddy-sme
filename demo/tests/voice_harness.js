@@ -173,6 +173,65 @@ function makePage(opts) {
 
 const READY = { available: true, state: "ready", load_error: "" };
 const scenarios = {
+  async english_prepare_error_details() {
+    const results = [];
+    for (const delayed of [false, true]) {
+      let polls = 0;
+      const p = makePage({ locale: "en", initialText: "原始资料.xlsx", fetch: (url) => {
+        if (url.endsWith("/prepare")) return [200, { state: "loading" }];
+        polls++;
+        return [200, { available: true, state: delayed && polls <= 2 ? "missing" : "failed", load_error: "本机识别子进程不可用：ModuleNotFoundError" }];
+      } });
+      await p.tap(); if (delayed) await p.advance(2500);
+      results.push({ delayed, after: p.snap(), log: p.log });
+    }
+    return { cases: results };
+  },
+  async english_transcription_error_details() {
+    const results = [];
+    for (const [status, detail] of [
+      [503, "语音识别引擎无法加载：ImportError"], [503, "语音识别模型加载失败：RuntimeError"],
+      [503, "本机识别运行失败：RuntimeError"], [503, "模型准备失败：TimeoutError"],
+      [503, "本机未安装 faster-whisper，页面会改用浏览器自带识别"],
+      [503, "本机识别子进程未返回有效结果"], [504, "本机识别超时，已停止转写进程"],
+      [400, "录音太短，请说完一句再停"], [413, "录音不能超过 8 MB"],
+      [409, "请先准备本机识别模型，再开始录音"], [409, "正在识别上一段，请稍候再试"],
+      [400, "一段录音最长 20 秒，请分段说（再点一次语音，文字会接在后面）"]
+    ]) {
+      const p = makePage({ locale: "en", initialText: "保留文件名.xlsx", fetch: (url) => url.includes("status") ? [200, READY] : [status, { detail }] });
+      await p.tap(); await p.tap(); results.push({ detail, after: p.snap(), log: p.log });
+    }
+    return { cases: results };
+  },
+  async unknown_server_error_details_are_not_translated() {
+    const results = [];
+    // "停止" exists in the UI dictionary but is not an ASR error contract.
+    for (const detail of ["停止", "本机识别子进程不可用：客户资料.xlsx", "custom 模型准备失败：请查看检查表.xlsx", "本机未安装 custom-engine，页面会改用浏览器自带识别"]) {
+      for (const prepare of [false, true]) {
+        const p = makePage({ locale: "en", initialText: "原文", fetch: (url) => url.includes("status")
+          ? [200, prepare ? { available: true, state: "failed", load_error: detail } : READY] : [503, { detail }] });
+        await p.tap(); if (!prepare) await p.tap(); results.push({ detail, after: p.snap(), log: p.log });
+      }
+    }
+    return { cases: results };
+  },
+  async chinese_server_error_details_remain_original() {
+    const detail = "本机识别子进程不可用：ModuleNotFoundError";
+    const p = makePage({ initialText: "原文", fetch: (url) => url.includes("status") ? [200, READY] : [503, { detail }] });
+    await p.tap(); await p.tap(); return { detail, after: p.snap(), log: p.log };
+  },
+  async english_ui_preserves_chinese_transcript_even_if_it_matches_an_error() {
+    const text = "没有收到录音";
+    const p = makePage({ locale: "en", initialText: "原始图纸.xlsx", fetch: (url) => url.includes("status") ? [200, READY] : [200, { text, elapsed_seconds: 1 }] });
+    await p.tap(); await p.tap(); const after = p.snap(); p.language("zh-CN");
+    return { text, after, switched: p.snap(), log: p.log };
+  },
+  async english_request_timeout_keeps_draft_and_releases_recording() {
+    const p = makePage({ locale: "en", initialText: "原始图纸.xlsx", fetch: (url, init) => url.includes("status") ? [200, READY]
+      : new Promise((resolve, reject) => init.signal.addEventListener("abort", () => { const error = new Error("aborted"); error.name = "AbortError"; reject(error); }, { once: true })) });
+    await p.tap(); await p.tap(); await p.advance(90001);
+    return { after: p.snap(), log: p.log };
+  },
   async english_server_hint_and_draft() {
     const p = makePage({ locale: "en", initialText: "Review panel", fetch: (u) => u.includes("status") ? [200, READY] : [200, { text: "A12", elapsed_seconds: 1 }] });
     await p.tap(); await p.tap();

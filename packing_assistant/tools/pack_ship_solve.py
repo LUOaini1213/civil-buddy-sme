@@ -405,6 +405,18 @@ def rows_blocking_plan(
     where = {"lang": lang, "sheet_rows": sheet_rows}
     rows = (rows_needing_human(materials, **where) + rows_missing_dimensions(materials, **where)
             + rows_invalid_quantity(materials, **where) + rows_packaging_not_cargo(materials, **where))
+    from packing_assistant.transport_constraints import legacy_handling
+    for index, material in enumerate(materials or []):
+        explicit = legacy_handling(material)
+        if explicit:
+            ask = ("自动成箱不支持这行声明的运输要求。请保留要求原文，提供已包装整体外尺寸、每包装毛重与包装数，"
+                   "在物流台账的已包装箱件模式计算；A 架另需每架净重、皮重和声明载荷上限。")
+            if lang == "en":
+                ask = ("Automatic boxing cannot enforce the stated handling requirements. Preserve their source text and use the logistics "
+                       "ledger's packaged mode with the loaded outer dimensions, gross mass per package and package count. "
+                       "A-frame/stillage loads also need net mass, tare and declared capacity per package.")
+            rows.append(_located({"id": material.get("id") or "", "name": material.get("name") or "",
+                                  "reason": "unsupported_transport_requirements", "requirements": explicit, "ask": ask}, sheet_rows, index))
     if container_type:
         rows += rows_oversize_for_container(materials, container_type, **where)
     return rows
@@ -705,7 +717,7 @@ def plan_report_md(result: Dict[str, Any], file_name: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-_RECORD_KEYS = ("ok", "source", "error", "n_rows", "can_fit", "containers_used", "container_type", "n0", "utilization",
+_RECORD_KEYS = ("ok", "source", "error", "detail", "needs_human", "n_rows", "can_fit", "containers_used", "container_type", "n0", "utilization",
                 "weight_utilization", "floor_utilization_avg", "binding_constraint", "mid50", "n_materials", "n_boxes",
                 "per_container", "conservation", "structure", "custom_section_boxes", "detail", "cargo_feasibility",
                 "container_mix_supported", "elapsed_s")
@@ -742,6 +754,9 @@ def plan_reply(result: Dict[str, Any], file_name: str) -> str:
     rows = result.get("needs_human") or []
     if rows:
         asks = "\n".join(f"- {sentence}" for sentence in needs_human_sentences(rows))
+        if any(row.get("reason") == "unsupported_transport_requirements" for row in rows):
+            return (f"{file_name} 的运输要求包含自动成箱尚不能执行的约束；引擎没有出方案，也就没有柜数可报。"
+                    f"请保留原始要求，按下面 {len(rows)} 项补充并核对资料：\n{asks}")
         return f"{file_name} 里有 {len(rows)} 行缺重量或尺寸，引擎没有出方案，也就没有柜数可报。请补齐后再算：\n{asks}"
     detail = result.get("detail")
     detail = "；".join(str(item) for item in detail) if isinstance(detail, list) else str(detail or "")

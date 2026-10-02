@@ -18,9 +18,10 @@ VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+
 STATIC = (
     "app.js", "chat-stream.js", "docpreview.js", "fixcard.js", "index.html",
     "manifest.webmanifest", "posts.js", "studio.js", "styles.css", "tickets.js", "voice.js",
-    "sw.js", "modules/auth.js", "modules/toast.js", "modules/drafts.js", "modules/uploads.js",
+    "sw.js", "modules/auth.js", "modules/agent-markdown.js", "modules/toast.js", "modules/drafts.js", "modules/uploads.js",
     "modules/turn-stream.js", "modules/deliverables.js", "modules/session-watch.js", "modules/session-nav.js",
     "agent.html", "agent.css", "agent.js", "theme.css", "theme.js", "workbench-shell.css",
+    "project-control.html", "project-control.css", "project-control.js", "i18n-project.js",
     "i18n.js", "i18n-agent.js", "i18n-home.js", "i18n-engineering.js", "i18n-logistics.js",
     "icons/cb-icon-192.png", "icons/cb-icon-512.png", "icons/cb-icon.svg",
     "vendor/marked.LICENSE.md", "vendor/marked.min.js",
@@ -37,7 +38,7 @@ STATIC = (
     "vendor/three/OrbitControls.js", "vendor/three/LICENSE.txt", "vendor/three/manifest.json",
 )
 EXPLICIT = (
-    "gateway/__init__.py", "gateway/app.py", "frontend/index.html", "frontend/workbench.html",
+    "gateway/__init__.py", "gateway/app.py", "gateway/idempotency.py", "frontend/index.html", "frontend/workbench.html",
     "gateway/web_link.py", "gateway/pages/access.html", "gateway/pages/demo.html",
     "frontend/manifest.webmanifest", "frontend/icons/cb-icon.svg",
     "frontend/icons/cb-icon-192.png", "frontend/icons/cb-icon-512.png",
@@ -52,7 +53,7 @@ EXPLICIT = (
     "contract/intents.v1.json", "contract/projects.v1.json", "contract/kb_boosts.v1.json",
     "workbench/seed.json", "workbench/yibiao-map.json",
     "scripts/start_workbench.py",
-    "scripts/start_unified_workbench.py", "requirements-documents.txt", "docs/civil-buddy/unified-workbench.md",
+    "scripts/start_unified_workbench.py", "scripts/workbench_preflight.py", "requirements-documents.txt", "docs/civil-buddy/unified-workbench.md",
     "skills/document/manifest.json", "skills/document/doc-word/SKILL.md", "skills/document/doc-spreadsheet/SKILL.md",
     "skills/document/doc-pdf/SKILL.md", "skills/document/doc-review/SKILL.md",
     # 语音输入：页面加载 voice.js；本机识别需要术语表，装依赖的说明在 requirements-asr.txt 里

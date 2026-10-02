@@ -40,6 +40,25 @@ from packing_assistant import tender_packing_link as tpl  # noqa: E402
 FIXTURES = ROOT / "examples" / "facade-demo"
 ITT = (FIXTURES / "facade_itt_doc.md").read_text(encoding="utf-8")
 PANELS = (FIXTURES / "facade_panels.xlsx").read_bytes()
+
+
+def synthetic_geometry_panels() -> bytes:
+    """A separate unrestricted geometry control, never the facade source file.
+
+    A fitted plan is necessary to test whether a dense *tender clause* prevents
+    its mass being claimed as covered. The real facade list independently stops
+    earlier on its explicit upright/A-frame/no-stack requirements.
+    """
+    from openpyxl import Workbook
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "SYNTHETIC geometry only"
+    sheet.append(["id", "name", "quantity", "length_mm", "width_mm", "height_mm", "weight_kg"])
+    sheet.append(["CONTROL-1", "Synthetic rectangular block", 2, 1000, 500, 200, 10])
+    data = io.BytesIO()
+    workbook.save(data)
+    workbook.close()
+    return data.getvalue()
 MASS_CLAUSE = ("4.9 Container gross mass: the gross mass of each loaded container, including the container tare, shall not exceed "
                "20,000 kg to suit the site hoisting and road haulage arrangements.")
 # the retry/timeout probe's clause: two mass figures per repeat, all in one run-on sentence
@@ -135,7 +154,7 @@ class Linked(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory(prefix="tender-link-bounded-")
         cls.job = Path(cls.tmp.name).resolve() / "job"
         (cls.job / "inputs").mkdir(parents=True)
-        (cls.job / "facade_panels.xlsx").write_bytes(PANELS)
+        (cls.job / "synthetic_geometry_panels.xlsx").write_bytes(synthetic_geometry_panels())
         dense = "The gross mass of each loaded container shall not exceed " + ", ".join(f"{t} t" for t in range(2, 16)) + "."
         assert MASS_CLAUSE in ITT
         (cls.job / "itt_dense_49.md").write_text(ITT.replace(MASS_CLAUSE, MASS_CLAUSE + " " + dense), encoding="utf-8")
@@ -148,7 +167,7 @@ class Linked(unittest.TestCase):
         os.chdir(cls.job)
         workspace.activate(cls.job)
         # the modules a run imports on its first call: imported here, so the deadline below meets the reader, not an import
-        tpl.run_link(str(cls.job / "itt_dense_49.md"), str(cls.job / "facade_panels.xlsx"))
+        tpl.run_link(str(cls.job / "itt_dense_49.md"), str(cls.job / "synthetic_geometry_panels.xlsx"))
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -159,7 +178,7 @@ class Linked(unittest.TestCase):
         cls.tmp.cleanup()
 
     def test_a_dense_sentence_is_one_row_for_a_person_and_the_clause_is_never_covered(self) -> None:
-        out = tpl.run_link(str(self.job / "itt_dense_49.md"), str(self.job / "facade_panels.xlsx"))
+        out = tpl.run_link(str(self.job / "itt_dense_49.md"), str(self.job / "synthetic_geometry_panels.xlsx"))
         by_key = {s["key"]: s for s in out["record"]["statements"]}
         row = by_key["unplaced@4.9"]
         self.assertEqual("human_required", row["status"])
@@ -177,7 +196,7 @@ class Linked(unittest.TestCase):
 
     def test_the_probe_tender_is_read_in_seconds(self) -> None:
         t0 = time.perf_counter()
-        out = tpl.run_link(str(self.job / "itt_probe.md"), str(self.job / "facade_panels.xlsx"))
+        out = tpl.run_link(str(self.job / "itt_probe.md"), str(self.job / "synthetic_geometry_panels.xlsx"))
         took = time.perf_counter() - t0
         counts = {s: sum(1 for x in out["statements"] if x["status"] == s) for s in ("covered", "partial", "gap")}
         self.assertEqual({"covered": 0, "partial": 0, "gap": 0}, counts)
@@ -189,7 +208,7 @@ class Linked(unittest.TestCase):
 
         engine = ToolEngine()
         engine.register("tender.packing_link", _tender_packing_link, expert_id="bid-parse", timeout_s=0.5)
-        args = {"tender_path": str(self.job / "itt_big.md"), "packing_list": str(self.job / "facade_panels.xlsx")}
+        args = {"tender_path": str(self.job / "itt_big.md"), "packing_list": str(self.job / "synthetic_geometry_panels.xlsx")}
         result = engine.execute("tender.packing_link", args, expert_id="bid-parse", intent="run", run_id="bounded")
         deadline = time.perf_counter()
         self.assertEqual("timeout", result["error_code"], result)
@@ -250,7 +269,10 @@ class Web(unittest.TestCase):
         del os.environ["CIVIL_LINK_MAX_TENDER_TEXT_KB"]
         r = self.upload(("itt.docx", docx), session="bounded-docx")
         self.assertEqual(200, r.status_code, r.text)
-        self.assertEqual({"covered": 1, "partial": 2, "gap": 0, "human_required": 4}, r.json()["counts"])
+        # Text-size handling still succeeds, but the unchanged facade source
+        # contains handling constraints that automatic boxing cannot establish.
+        self.assertEqual({"covered": 0, "partial": 0, "gap": 0, "human_required": 7}, r.json()["counts"])
+        self.assertIsNone(r.json()["plan"])
 
     def test_the_probe_upload_answers_with_a_row_for_a_person(self) -> None:
         r = self.upload(("itt.md", dense_tender(1500).encode("utf-8")))

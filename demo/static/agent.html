@@ -21,6 +21,7 @@
     <nav class="cb-app-nav" aria-label="工作台导航">
       <a href="/static/index.html">工作台</a>
       <a href="/static/agent.html" aria-current="page">Agent</a>
+      <a href="/static/project-control.html">项目资料与问题</a>
       <a href="/packing">装箱拼柜</a>
       <a href="/cad">CAD</a>
       <a href="/engineering">工程计算</a>
@@ -50,8 +51,14 @@
       <div class="section-title"><h2>会话</h2><button id="agentNewSession" type="button" class="quiet" disabled>新会话</button></div>
       <label class="sr-only" for="agentSession">当前会话</label>
       <select id="agentSession" data-i18n-skip disabled></select>
+      <div id="agentSessionHistory" hidden>
+        <button id="agentRefreshSessions" type="button" class="quiet" disabled>刷新会话</button>
+        <button id="agentMoreSessions" type="button" class="quiet" hidden>加载更早会话</button>
+        <p id="agentSessionHistoryStatus" class="muted small" role="status" data-i18n-skip></p>
+      </div>
       <div class="section-title"><h2>执行记录</h2><button id="agentRefreshTurns" type="button" class="quiet" disabled>刷新</button></div>
       <div id="agentTurns" data-i18n-skip class="turn-list"><p class="muted">本会话暂无执行记录。</p></div>
+      <button id="agentMoreTurns" type="button" class="quiet" hidden>加载更早任务</button>
     </aside>
     <section class="main-panel" aria-label="任务执行">
       <div id="agentCapability" class="notice" role="status">正在检测 Agent 能力…</div>
@@ -80,6 +87,12 @@
           <button id="agentCancel" type="button" class="danger" hidden>停止当前任务</button>
         </div>
         <p id="agentExpertNote" class="muted small">正在读取可用岗位。</p>
+        <div id="agentPackingControl" hidden>
+          <label for="agentPackingSource">箱单重排核对（可选）</label>
+          <select id="agentPackingSource" data-i18n-skip aria-describedby="agentPackingHelp"><option value="">本轮不重排</option></select>
+          <p id="agentPackingHelp" class="muted small">先勾选含柜型、柜数上限和运输要求的结构化箱单 JSON 文件，再在此选择。最多两轮复算，保留原件；结果供核对，不作装运放行。检查资料模式无需模型。</p>
+        </div>
+        <p id="agentWriteGateNote" data-i18n-skip class="notice warning small" role="status" hidden></p>
         <label id="agentRiskWrap" class="risk-confirmation" hidden>高风险岗位写入前，请完整输入：我明白，将由持证人员签认
           <input id="agentRiskConfirmation" data-i18n-skip autocomplete="off" placeholder="我明白，将由持证人员签认" />
         </label>
@@ -94,8 +107,14 @@
       <section class="panel" aria-labelledby="agentResultTitle">
         <div class="section-title"><h2 id="agentResultTitle">任务结果</h2><span id="agentTurnStatus" class="status-tag">尚未开始</span></div>
         <p id="agentTurnActor" class="muted small">尚无任务发起者记录。</p>
-        <p id="agentPartial" class="notice warning" hidden>本轮只完成了部分工作，已保存的产物仍可下载。</p>
+        <p id="agentPartial" class="notice warning" hidden>本轮只完成了部分工作，请查看结果和执行记录中的未完成项。</p>
+        <p id="agentReplyProvenance" class="muted small" data-i18n-skip hidden></p>
         <div id="agentReply" data-i18n-skip class="reply">结果将显示在这里。</div>
+        <details id="agentModelInterpretation" data-i18n-skip hidden>
+          <summary id="agentModelInterpretationTitle"></summary>
+          <div id="agentModelInterpretationText" class="reply"></div>
+        </details>
+        <section id="agentSourceEvidence" data-i18n-skip aria-live="polite" hidden></section>
         <div id="agentArtifacts" data-i18n-skip class="artifact-list"></div>
         <details id="agentUsage" hidden><summary>实际调用用量</summary><pre id="agentUsageText"></pre></details>
       </section>
@@ -106,6 +125,7 @@
       <p class="muted small footer-note">文档产物为内部草稿。工程数字依据原始资料和计算工具，签认由相应专业人员完成。</p>
     </section>
   </main>
+  <script src="/static/vendor/marked.min.js"></script>
   <script type="module" src="/static/agent.js"></script>
   <script src="/static/voice.js?v=unified1"></script>
 </body>

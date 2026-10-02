@@ -21,6 +21,14 @@ PathLike = Union[str, Path]
 class TableCellError(ValueError):
     """A written numeric cell cannot safely be read; never replace it with a default."""
 
+
+class TableSheetError(ValueError):
+    """Automatic sheet selection needs an explicit choice, not a guessed table."""
+
+    def __init__(self, message: str, candidates: Sequence[str], reason: str = "ambiguous_sheets"):
+        super().__init__(message)
+        self.candidates, self.reason = list(candidates), reason
+
 # 标准字段 → 同义词（小写匹配）
 COLUMN_SYNONYMS: Dict[str, Tuple[str, ...]] = {
     "id": ("id", "编号", "行号", "line_id", "row_id", "line_no", "no", "序号"),
@@ -162,6 +170,16 @@ COLUMN_SYNONYMS: Dict[str, Tuple[str, ...]] = {
     "category": ("category", "类别", "类型", "品类", "type", "class", "分类"),
     "spec": ("spec", "规格", "型号", "model", "规格型号"),
     "note": ("note", "备注", "说明", "remark", "remarks", "comments", "comment"),
+    "orientation": ("orientation", "transport orientation", "运输姿态"),
+    "upright": ("upright", "保持直立", "竖放"),
+    "this_side_up": ("this_side_up", "this side up", "此面向上"),
+    "stacking": ("stacking", "stacking requirement", "堆叠要求"),
+    "no_stack": ("no_stack", "no stack", "no stacking", "禁止堆叠", "禁止叠放", "不可堆叠"),
+    "stackable": ("stackable", "可堆叠", "允许堆叠"),
+    "fragile": ("fragile", "易碎"),
+    "a_frame": ("a_frame", "A-frame", "stillage", "A架"),
+    "package_type": ("package_type", "package type", "包装类型", "包装形式"),
+    "handling_requirements": ("handling_requirements", "handling", "handling requirements", "handling instructions", "special handling", "transport requirements", "shipping instructions", "运输要求", "运输要求原文", "装卸要求", "特殊要求"),
 }
 
 CATEGORY_ALIASES: Dict[str, str] = {
@@ -699,6 +717,8 @@ def rows_to_ir(
                 if k not in seen:
                     seen.append(str(k))
         headers = seen
+    handling_fields = {"orientation", "upright", "this_side_up", "stacking", "no_stack", "stackable", "fragile", "a_frame", "package_type", "handling_requirements"}
+    handling_columns = {raw: field for header in headers for raw, field in build_column_map([header]).items() if field in handling_fields}
 
     colmap = build_column_map(list(headers))
     # reverse: std -> original header
@@ -953,6 +973,16 @@ def rows_to_ir(
                 "profile_hint": profile_hint,
             },
         }
+        # Preserve exact requirement cells. Do not cast string "false" to True,
+        # or let automatic boxing silently lose unsupported transport rules.
+        for field in handling_fields:
+            if got.get(field) not in (None, ""):
+                item[field] = got[field]
+        handling_source = [
+            {"header": header, "raw": r.get(header), "field": field, "row": row_no}
+            for header, field in handling_columns.items() if r.get(header) not in (None, "")]
+        if handling_source:
+            item["meta"]["handling_source"] = handling_source
         if quantity_invalid:
             # quantity 留 0 而不是 1：meta 被下游丢掉时，数值本身仍过不了 rows_invalid_quantity
             item["meta"]["quantity_invalid"] = True
@@ -1017,6 +1047,8 @@ def _guess_category(L: float, W: float, H: float, weight: float, name: str) -> s
 
 #: header detection looks this far down the sheet, and only when row 1 is not a header (see _choose_header_row)
 HEADER_SCAN_ROWS = 15
+SHEET_SCAN_LIMIT = 40
+SHEET_SCAN_COLUMNS = 256
 
 
 def _required_groups(cells: Sequence[Any]) -> set:
@@ -1046,6 +1078,76 @@ def _choose_header_row(data: Sequence[Sequence[Any]]) -> int:
         if n > best_n:
             best, best_n = idx, n
     return best
+
+
+def _xlsx_sheet(wb: Any, requested: Optional[str]) -> Tuple[Any, Dict[str, Any]]:
+    """Keep an explicit/established table; discover one visible table behind a cover.
+
+    Discovery reads only a bounded header prefix. Two plausible tables are not
+    concatenated, ranked by row count, or resolved by workbook order.
+    """
+    from packing_assistant.runtime.cancel import check as cancel_check
+
+    if requested:
+        if requested not in wb.sheetnames:
+            raise TableSheetError("Requested worksheet does not exist. Select an existing worksheet or upload it as a separate file.",
+                                  [ws.title for ws in wb.worksheets if ws.sheet_state == "visible"], "sheet_not_found")
+        return wb[requested], {}
+    visible = [ws for ws in wb.worksheets if ws.sheet_state == "visible"]
+    if not visible:
+        raise TableSheetError("No visible worksheets are available; select or provide the intended material worksheet.", [], "no_visible_sheets")
+    preferred = next((ws for ws in visible if ws.title == "materials"), None)
+    if preferred is None:
+        preferred = wb.active if wb.active in visible else visible[0]
+
+    def prefix(ws):
+        out = []
+        for values in ws.iter_rows(min_row=1, max_row=HEADER_SCAN_ROWS,
+                                  max_col=min(ws.max_column or SHEET_SCAN_COLUMNS, SHEET_SCAN_COLUMNS), values_only=True):
+            cancel_check()
+            out.append(values)
+        return out
+
+    active = wb.active if wb.active in visible else visible[0]
+    if active != preferred:
+        active_data = prefix(active)
+        active_header = active_data[_choose_header_row(active_data)] if active_data else ()
+        # A sheet merely named "materials" is not an explicit selection when
+        # the workbook opens on a cover: other visible tables may be revisions.
+        if len(_required_groups(active_header)) < 2:
+            preferred = active
+    data = prefix(preferred)
+    header = data[_choose_header_row(data)] if data else ()
+    # Retain the existing reader's two-field test for its established default.
+    if len(_required_groups(header)) >= 2 or len(visible) == 1:
+        return preferred, {}
+    if len(visible) > SHEET_SCAN_LIMIT:
+        raise TableSheetError("Too many visible worksheets to choose safely. Select a worksheet explicitly or upload it as a separate file.",
+                              [], "sheet_scan_limit")
+    candidates = []
+    for ws in visible:
+        cancel_check()
+        if ws == preferred:
+            continue
+        if (ws.max_column or 0) > SHEET_SCAN_COLUMNS:
+            raise TableSheetError("A worksheet exceeds the automatic header scan limit. Select a worksheet explicitly or upload it as a separate file.",
+                                  [ws.title], "sheet_scan_limit")
+        data = prefix(ws)
+        header = data[_choose_header_row(data)] if data else ()
+        groups = _required_groups(header)
+        mapped = set(build_column_map([str(cell or "").strip() for cell in header]).values())
+        identity = bool(mapped & {"id", "name", "part_no"})
+        measured = bool(groups & {"weight", "length_mm", "width_mm", "height_mm"})
+        if identity and "quantity" in groups and measured:
+            candidates.append(ws)
+    if len(candidates) > 1:
+        names = [ws.title for ws in candidates]
+        raise TableSheetError("Multiple material worksheets found: " + ", ".join(names)
+                              + ". Select one worksheet explicitly or upload the intended sheet as a separate file.", names)
+    if candidates:
+        return candidates[0], {"sheet_selection": "unique_material_header", "sheet_candidates": [candidates[0].title],
+                               "scanned_visible_sheets": [ws.title for ws in visible]}
+    return preferred, {}
 
 
 def _is_number_cell(v: Any) -> bool:
@@ -1221,12 +1323,7 @@ def load_xlsx(path: PathLike, sheet: Optional[str] = None) -> List[Dict[str, Any
     from packing_assistant.runtime.cancel import check as cancel_check
 
     try:
-        if sheet and sheet in wb.sheetnames:
-            ws = wb[sheet]
-        elif "materials" in wb.sheetnames:
-            ws = wb["materials"]
-        else:
-            ws = wb.active
+        ws, selection = _xlsx_sheet(wb, sheet)
         data = []
         # openpyxl pads the gap before a far row number with empty rows: a run the tool engine timed out stops here
         # (the check does nothing outside a timed-out or cancelled run)
@@ -1264,7 +1361,7 @@ def load_xlsx(path: PathLike, sheet: Optional[str] = None) -> List[Dict[str, Any
         errors.append(formula_errors[k])
     out = rows_to_ir(rows, headers=headers, source="xlsx", source_path=str(path), row_numbers=numbers, cell_errors=errors)
     _update_reading({"sheet": title, "header_row": first_row + h, "header_detected": h > 0,
-                          "header_rows": [first_row + h, first_row + h + 1] if composed is not None else [first_row + h]})
+                          "header_rows": [first_row + h, first_row + h + 1] if composed is not None else [first_row + h], **selection})
     return out
 
 
@@ -1375,6 +1472,7 @@ def ir_to_materials(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "category": m.get("category") or "generic",
                 "note": m.get("note") or "",
                 "meta": m.get("meta") or {},
+                **{key: m[key] for key in ("orientation", "upright", "this_side_up", "stacking", "no_stack", "stackable", "fragile", "a_frame", "package_type", "handling_requirements") if key in m},
             }
         )
     return mats
@@ -1403,6 +1501,12 @@ def parse_table_file(path: PathLike, **kwargs: Any) -> Dict[str, Any]:
     path = Path(path)
     try:
         ir = load_table(path, **kwargs)
+    except TableSheetError as exc:
+        _LAST_READING.set({})
+        _LAST_CLEAN_STATS.set({})
+        return {"ok": False, "path": str(path), "materials": [], "ir": [], "column_map": {},
+                "stats": {"n_rows": 0}, "errors": [str(exc)],
+                "reading": {"sheet_selection": exc.reason, "sheet_candidates": exc.candidates}}
     except TableCellError as exc:
         return _cell_failure(str(path), exc)
     mats = ir_to_materials(ir)

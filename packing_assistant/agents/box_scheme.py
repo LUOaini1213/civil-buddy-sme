@@ -169,6 +169,9 @@ def materials_to_passthrough_boxes(materials: List[Dict[str, Any]]) -> List[Dict
     """
     boxes: List[Dict[str, Any]] = []
     for i, m in enumerate(materials, 1):
+        from packing_assistant.transport_constraints import legacy_handling
+        if legacy_handling(m):
+            raise ValueError("自动当量成箱不能验证声明的运输要求；请提供已包装整体数据并使用物流台账。")
         qty = max(material_quantity(m), 1)
         row_net = float(m.get("total_weight_kg") or 0) or float(m.get("weight_kg") or 0) * qty
         for unit_no in range(1, qty + 1):
@@ -320,7 +323,7 @@ def agent_box_scheme(state: PackingState) -> Dict[str, Any]:
                 "fail": len(materials),
                 "packing_mode": "blocked_needs_human",
             },
-            "structure_notes": ["材料有行缺重量或数量读不出件数，成箱阻断"],
+            "structure_notes": ["材料有行缺重量、数量不明确或存在未支持的运输要求，成箱阻断"],
             "errors": ["box_scheme_blocked: materials_need_human"],
             "agent_meta": {
                 "node": "box_scheme",
@@ -332,7 +335,7 @@ def agent_box_scheme(state: PackingState) -> Dict[str, Any]:
                 {
                     "role": "assistant",
                     "content": (
-                        f"装箱阻断：{len(beyond_dims)} 行需要人工处理，拒绝按猜出来的件数或零重量成箱。"
+                        f"装箱阻断：{len(beyond_dims)} 行需要人工处理；不猜件数、重量或运输要求。"
                         + "；".join(asks)
                         + "｜tools=box_scheme.block_needs_human"
                     ),

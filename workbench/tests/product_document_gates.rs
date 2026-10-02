@@ -123,6 +123,125 @@ fn rejected(result: Result<Value, String>) {
     );
 }
 
+#[test]
+fn model_tool_contract_declares_nested_evidence_and_read_arguments() {
+    let definitions = civil_workbench::product::tools::definitions(true, false);
+    let parameters = |name: &str| definitions.iter().find(|d| d["function"]["name"] == name)
+        .unwrap()["function"]["parameters"].clone();
+    for name in ["preview_document", "apply_document"] {
+        let schema = parameters(name);
+        let evidence = &schema["properties"]["patches"]["items"]["properties"]["evidence"];
+        assert_eq!(evidence["type"], "array");
+        assert_eq!(evidence["maxItems"], 50);
+        assert_eq!(evidence["items"]["required"], json!(["source", "source_sha256", "locator", "quote"]));
+        assert_eq!(evidence["items"]["properties"]["locator"]["type"], "object");
+        assert_eq!(evidence["items"]["additionalProperties"], true, "Complete search hits retain metadata");
+        assert!(schema["properties"].get("evidence").is_none(), "Evidence is per-patch, never top-level");
+    }
+    assert_eq!(parameters("verify_sources")["properties"]["references"]["maxItems"], 100);
+    let read = parameters("read_file");
+    for name in ["sheet", "range", "block_ids", "pages"] {
+        assert!(read["properties"]["arguments"]["properties"].get(name).is_some());
+        assert!(read["properties"].get(name).is_none());
+    }
+}
+
+#[tokio::test]
+async fn independent_verification_does_not_attach_patch_evidence_and_bad_shapes_are_actionable() {
+    let f = Fixture::new();
+    let scope = f.scope("依照选中文件修改", true);
+    let search = scope.execute("search_sources", json!({"query":"sample_count"})).await.unwrap();
+    let hit = search["result"]["hits"].as_array().unwrap().iter()
+        .find(|h| h["source"] == "requirements.pdf").unwrap().clone();
+    let verified = scope.execute("verify_sources", json!({"references":[hit]})).await.unwrap();
+    assert_eq!(verified["result"]["valid"], true);
+    for (source, patch) in [("report.docx", word("sample_count=6")), ("quantities.xlsx", cell("number", json!(6)))] {
+        let missing = scope.execute("preview_document", f.args(source, patch.clone())).await.unwrap_err();
+        assert!(missing.contains("新增数字 6") && missing.contains("patches[i].evidence") && missing.contains("verify_sources"), "{missing}");
+        for malformed in [hit.clone(), json!("verified"), Value::Null, json!([{"status":"valid"}])] {
+            let mut bad = patch.clone();
+            bad["evidence"] = malformed;
+            let error = scope.execute("preview_document", f.args(source, bad)).await.unwrap_err();
+            assert!(error.contains("patches[0].evidence"), "{error}");
+            assert!(!error.contains("新增数字"), "Malformed reference should get a shape diagnosis, not pretend no source exists");
+        }
+        for name in ["evidence", "references"] {
+            let mut top_level = f.args(source, patch.clone());
+            top_level[name] = json!([hit]);
+            let error = scope.execute("preview_document", top_level).await.unwrap_err();
+            assert!(error.contains("顶层") && error.contains("patches[i].evidence"), "{error}");
+        }
+    }
+    let mut many = word("sample_count=6");
+    many["evidence"] = json!(vec![hit; 50]);
+    let mut too_many = f.args("report.docx", many.clone());
+    too_many["patches"] = json!([many,many,many]);
+    let error = scope.execute("preview_document", too_many).await.unwrap_err();
+    assert!(error.contains("100项") && error.contains("拆成"), "{error}");
+    f.no_documents_published();
+}
+
+#[tokio::test]
+async fn explicit_evidence_allows_real_word_and_excel_preview_and_new_copies() {
+    let f = Fixture::new();
+    let scope = f.scope("依照选中文件修改", true);
+    let search = scope.execute("search_sources", json!({"query":"sample_count"})).await.unwrap();
+    let hit = search["result"]["hits"].as_array().unwrap().iter()
+        .find(|h| h["source"] == "requirements.pdf").unwrap().clone();
+    let mut validated = Vec::new();
+    for (source, mut patch) in [("report.docx", word("sample_count=6")), ("quantities.xlsx", cell("number", json!(6)))] {
+        let original = std::fs::read(f.workspace.root().join(source)).unwrap();
+        patch["evidence"] = json!([hit]);
+        let args = f.args(source, patch);
+        let preview = scope.execute("preview_document", args.clone()).await.unwrap();
+        assert_eq!(preview["ok"], true, "{preview}");
+        assert_eq!(preview["result"]["evidence_validation"]["references"]["valid"], true);
+        validated.push((source, original, args));
+    }
+    f.no_documents_published();
+    for (source, original, args) in validated {
+        let result = scope.execute("apply_document", args).await.unwrap();
+        assert_eq!(result["ok"], true, "{result}");
+        let output = std::fs::read(result["result"]["output_path"].as_str().unwrap()).unwrap();
+        assert_eq!(sha256(&output), result["result"]["output_sha256"]);
+        assert_ne!(original, output);
+        assert_eq!(std::fs::read(f.workspace.root().join(source)).unwrap(), original);
+    }
+}
+
+#[tokio::test]
+async fn xlsx_default_inspects_and_explicit_reads_require_nested_sheet() {
+    let f = Fixture::new();
+    let scope = f.scope("读取选中文件", false);
+    let inspect = scope.execute("read_file", json!({"source":"quantities.xlsx"})).await.unwrap();
+    assert_eq!(inspect["ok"], true, "{inspect}");
+    assert!(inspect["result"]["sheets"].as_array().unwrap().iter().any(|s| s["name"] == "Counts"));
+    assert!(inspect["result"].get("rows").is_none(), "Default must not guess a sheet or read a broad blank range");
+    for args in [json!({"source":"quantities.xlsx","operation":"read"}),
+        json!({"source":"quantities.xlsx","operation":"read","arguments":{"range":"A1:D3"}})] {
+        let error = scope.execute("read_file", args).await.unwrap_err();
+        assert!(error.contains("arguments.sheet") && error.contains("arguments.range") && error.contains("inspect"), "{error}");
+        assert!(!error.contains("Worksheet does not exist"));
+    }
+    let error = scope.execute("read_file", json!({"source":"quantities.xlsx","sheet":"Counts","range":"A1:D3"})).await.unwrap_err();
+    assert!(error.contains("arguments内"), "{error}");
+    let read = scope.execute("read_file", json!({"source":"quantities.xlsx","arguments":{"sheet":"Counts","range":"B2:B2"}})).await.unwrap();
+    assert_eq!(read["ok"], true, "{read}");
+    assert_eq!(read["result"]["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(read["result"]["rows"][0][0]["value"], 4);
+    let compatible = scope.execute("read_file", json!({"source":"quantities.xlsx","operation":"read","arguments":{"sheet":"Counts"}})).await.unwrap();
+    assert_eq!(compatible["ok"], true, "Keep existing explicit-sheet callers valid: {compatible}");
+    assert_eq!(compatible["result"]["range"], "A1:J20");
+    let wrong = scope.execute("read_file", json!({"source":"quantities.xlsx","operation":"read","arguments":{"sheet":"Sheet1","range":"B2:B2"}})).await.unwrap();
+    assert_eq!(wrong["ok"], false, "Never replace an explicit wrong sheet with the first real sheet");
+    for (source, field) in [("report.docx", "blocks"), ("requirements.pdf", "pages")] {
+        let read = scope.execute("read_file", json!({"source":source})).await.unwrap();
+        assert_eq!(read["ok"], true, "{read}");
+        assert!(read["result"][field].is_array(), "Non-XLSX defaults remain read: {read}");
+    }
+    f.no_documents_published();
+}
+
 #[tokio::test]
 async fn novel_numbers_without_evidence_are_rejected_for_word_excel_and_pdf() {
     let f = Fixture::new();
@@ -369,18 +488,31 @@ async fn oversized_selected_text_is_rejected() {
 }
 
 #[tokio::test]
-async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknowledgement() {
+async fn model_loop_requires_human_post_classification_and_current_risk_acknowledgement() {
     let _model_guard = SCRIPTED_MODEL_LOCK.lock().unwrap();
     use axum::{
         body::Body,
         http::{Request, StatusCode},
-        routing::post,
+        routing::{get, post},
         Json, Router,
     };
     use civil_workbench::config::{set_runtime_llm, LlmConfig};
     use http_body_util::BodyExt;
     use std::time::Duration;
     use tower::ServiceExt;
+    struct ResetEnvironment(Option<std::ffi::OsString>, Option<std::ffi::OsString>);
+    impl Drop for ResetEnvironment {
+        fn drop(&mut self) {
+            set_runtime_llm(None);
+            for (key, old) in [("CIVIL_DOMAIN_URL", &self.0), ("CIVIL_DOMAIN_TOKEN", &self.1)] {
+                match old {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+    let _reset = ResetEnvironment(std::env::var_os("CIVIL_DOMAIN_URL"), std::env::var_os("CIVIL_DOMAIN_TOKEN"));
     async fn http(app: &Router, method: &str, url: &str, body: Value) -> (StatusCode, Value) {
         let result = app
             .clone()
@@ -405,18 +537,46 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
         .unwrap()
         .id
         .clone();
+    let low_skill = "pm-daily";
+    assert_eq!(civil_workbench::catalog::seed().experts.iter().find(|s| s.id == low_skill).unwrap().risk, "low");
     for scenario in [
         "unread",
         "different_preview",
+        "automatic_no_skill",
+        "automatic_model_low_skill",
+        "automatic_signed",
+        "selected_low_risk",
         "high_risk_unsigned",
         "high_risk_signed",
+        "high_risk_then_low_skill",
+        "high_risk_late_tool",
+        "engineering_selected_no_call",
+        "engineering_unsigned",
+        "engineering_signed",
+        "engineering_late_tool",
+        "packing_unsigned",
+        "packing_signed",
+        "child_unsigned",
+        "child_signed",
+        "child_failed_unsigned",
         "explicit_unsigned",
         "explicit_signed_field",
+        "explicit_whole_message",
+        "explicit_pasted_line",
+        "explicit_pasted_sentence",
         "explicit_inexact_field",
         "explicit_same_session_history",
         "explicit_other_session_history",
     ] {
-        let f = Fixture::new();
+        let mut f = Fixture::new();
+        let packing_sources = if scenario.starts_with("packing_") {
+            let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
+                .join("examples/packing-replan/geometry-only.json");
+            std::fs::copy(source, f.workspace.root().join("cargo.json")).unwrap();
+            f.selected.push("cargo.json".into());
+            json!([{"source":"cargo.json"}])
+        } else { json!([]) };
+        let original = std::fs::read(f.workspace.root().join("report.docx")).unwrap();
         let preview = f.args(
             "report.docx",
             word("Source record remains subject to review."),
@@ -432,22 +592,58 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
                 json!({"source":"report.docx","operation":"inspect"}),
             ));
         }
-        if scenario.starts_with("high_risk") {
+        if scenario.starts_with("high_risk") && scenario != "high_risk_late_tool" {
             planned.push(("load_skill", json!({"skill_id":high_skill})));
+        }
+        if matches!(scenario, "automatic_model_low_skill" | "high_risk_then_low_skill") {
+            planned.push(("load_skill", json!({"skill_id":low_skill})));
+        }
+        if matches!(scenario, "engineering_unsigned" | "engineering_signed") {
+            planned.push(("engineering_analyze", json!({"selection_index":0})));
+        }
+        if scenario.starts_with("packing_") {
+            planned.push(("packing_replan", json!({"selection_index":0})));
+        }
+        if scenario.starts_with("child_") {
+            planned.push(("delegate", json!({"tasks":[{"role":"review","goal":"Review selected sources only."}]})));
         }
         planned.push(("preview_document", preview));
         planned.push(("apply_document", apply));
+        if scenario == "high_risk_late_tool" {
+            planned.push(("load_skill", json!({"skill_id":high_skill})));
+        }
+        if scenario == "engineering_late_tool" {
+            planned.push(("engineering_analyze", json!({"selection_index":0})));
+        }
+        // A real host invocation rejects incomplete saved inputs; even that
+        // cannot clear engineering risk before a later document publication.
+        let frame_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let frame_inputs = json!({"schema_version":1,"units":"SI","nodes":[]});
+        let engineering = if scenario.starts_with("engineering_") {
+            json!([{"kind":"saved_frame","project_id":frame_id,"revision":1,"source_sha256":null,
+                "inputs_sha256":sha256(&serde_json::to_vec(&frame_inputs).unwrap()),"confirmed_solid":false}])
+        } else { json!([]) };
+        let frame_record = json!({"ok":true,"project":{"id":frame_id,"revision":1,"kind":"frame"},
+            "snapshot":{"kind":"frame","inputs":frame_inputs}});
         let calls:Vec<Value>=planned.iter().enumerate().map(|(i,(name,args))|json!({"id":format!("gate_{i}"),"type":"function","function":{"name":name,"arguments":args.to_string()}})).collect();
+        let child_calls = json!([{"id":"child_high_skill","type":"function","function":{"name":"load_skill",
+            "arguments":json!({"skill_id":high_skill}).to_string()}}]);
         let server=Router::new().route("/chat/completions",post(move |Json(payload):Json<Value>| {
-            let calls=calls.clone(); async move {
+            let calls=calls.clone(); let child_calls=child_calls.clone(); async move {
+                let is_child=payload["messages"].as_array().unwrap().iter().any(|m|m["role"]=="user" && m["content"]=="Review selected sources only.");
                 let has_tool=payload["messages"].as_array().unwrap().iter().any(|m|m["role"]=="tool");
-                let message=if has_tool {json!({"role":"assistant","content":"待核查内容已记录。"})}
-                    else {json!({"role":"assistant","content":null,"tool_calls":calls})};
-                Json(json!({"model":"local-gates","choices":[{"message":message,"finish_reason":if has_tool {"stop"}else{"tool_calls"}}],"usage":{"prompt_tokens":100,"completion_tokens":100}}))
+                let message=if has_tool {json!({"role":"assistant","content":if scenario.starts_with("packing_") {"待核查内容已记录。可以开工。"} else {"待核查内容已记录。"}})}
+                    else {json!({"role":"assistant","content":null,"tool_calls":if is_child {child_calls}else{json!(calls)}})};
+                let finish_reason=if is_child && has_tool && scenario=="child_failed_unsigned" {"length"} else if has_tool {"stop"}else{"tool_calls"};
+                Json(json!({"model":"local-gates","choices":[{"message":message,"finish_reason":finish_reason}],"usage":{"prompt_tokens":100,"completion_tokens":100}}))
             }
+        })).route(&format!("/api/engineering/projects/{frame_id}"), get(move || {
+            let record = frame_record.clone(); async move { Json(record) }
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
+        std::env::set_var("CIVIL_DOMAIN_URL", &base_url);
+        std::env::set_var("CIVIL_DOMAIN_TOKEN", "synthetic-domain-service-token-at-least-32-bytes");
         let server = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
         set_runtime_llm(Some(LlmConfig {
             api_key: "local-scripted-only".into(),
@@ -495,22 +691,25 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
             }
             assert_eq!(previous["turn"]["status"], "completed", "{previous}");
         }
-        let message = if scenario == "high_risk_signed" {
-            "修改待核查草稿。我明白，将由持证人员签认"
-        } else {
-            "修改待核查草稿"
+        let message = match scenario {
+            "explicit_whole_message" => "我明白，将由持证人员签认",
+            "explicit_pasted_line" => "材料原文如下：\n我明白，将由持证人员签认\n修改待核查草稿",
+            "explicit_pasted_sentence" => "修改待核查草稿。我明白，将由持证人员签认",
+            _ => "修改待核查草稿",
         };
         let confirmation = match scenario {
-            "explicit_signed_field" => "我明白，将由持证人员签认",
+            "explicit_signed_field" | "high_risk_signed" | "automatic_signed" | "engineering_signed" | "packing_signed" | "child_signed" => "我明白，将由持证人员签认",
             "explicit_inexact_field" => "我明白，将由持证人员签认。",
             _ => "",
         };
         let expert = if scenario.starts_with("explicit_") {
             high_skill.as_str()
-        } else {
+        } else if scenario.starts_with("automatic_") {
             ""
+        } else {
+            low_skill
         };
-        let (status,started)=http(&app,"POST","/api/agent/turns",json!({"workspace":wid,"session_id":scenario,"message":message,"mode":"model","sandbox":"workspace-write","files":f.selected,"expert_id":expert,"risk_confirmation":confirmation})).await;
+        let (status,started)=http(&app,"POST","/api/agent/turns",json!({"workspace":wid,"session_id":scenario,"message":message,"mode":"model","sandbox":"workspace-write","files":f.selected,"expert_id":expert,"risk_confirmation":confirmation,"engineering":engineering,"packing_sources":packing_sources})).await;
         assert_eq!(status, StatusCode::ACCEPTED, "{started}");
         let url = format!(
             "/api/agent/turns/{}/events?workspace={wid}&session_id={scenario}",
@@ -530,12 +729,59 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
             result["turn"]["status"], "completed",
             "{scenario}: {result}"
         );
+        assert_eq!(result["turn"]["request"]["document_write_classification"]["source"],
+            if scenario.starts_with("automatic_") {"unclassified"} else {"user_selected_post"}, "{scenario}: {result}");
+        assert_eq!(std::fs::read(f.workspace.root().join("report.docx")).unwrap(), original,
+            "{scenario}: the source document changed");
+        if scenario.starts_with("packing_") {
+            let final_result = &result["turn"]["result"];
+            assert_eq!(final_result["reply_origin"], "host");
+            assert_eq!(final_result["model_interpretation"]["trust"], "model_claim");
+            let interpretation = final_result["model_interpretation"]["text"].as_str().unwrap();
+            assert!(interpretation.starts_with("待核查内容已记录。（此处结论不由本系统判定）。"), "{interpretation}");
+            assert!(interpretation.contains("以下结论不由本系统下"), "Keep the verdict notice with the reviewed text");
+            assert!(!final_result["verdict_guard"].as_array().unwrap().is_empty());
+            let reply = final_result["reply"].as_str().unwrap();
+            assert!(reply.contains("装箱执行回执") && reply.contains("包装箱数 = 11 箱"), "{reply}");
+            assert!(reply.starts_with(if scenario == "packing_signed" {
+                "本轮实际保存并登记了 1 份新副本："
+            } else { "本轮没有成功保存并登记的新文档" }), "Keep the exact document receipt alongside packing facts: {reply}");
+            assert_eq!(final_result["execution_evidence"]["publication_summary_from_receipts"], true);
+            assert_eq!(final_result["partial"], scenario == "packing_unsigned", "{final_result}");
+        }
+        if scenario.starts_with("automatic_") {
+            assert!(result["events"].as_array().unwrap().iter().any(|event|
+                event["kind"] == "tool_finished" && event["data"]["name"] == "preview_document"
+                    && event["data"]["result"]["ok"] == true),
+                "automatic mode must still allow previews: {result}");
+            assert!(result["events"].as_array().unwrap().iter().any(|event|
+                event["kind"] == "authorization" && event["data"]["reason"] == "post_selection_required"
+                    && event["data"]["document_write_allowed"] == false),
+                "the UI needs an actionable publication denial: {result}");
+        }
         let apply = result["events"]
             .as_array()
             .unwrap()
             .iter()
             .find(|e| e["kind"] == "tool_finished" && e["data"]["name"] == "apply_document")
             .expect("apply event");
+        if scenario.starts_with("engineering_") && scenario != "engineering_selected_no_call" {
+            let calculation = result["events"].as_array().unwrap().iter().find(|event|
+                event["kind"] == "tool_finished" && event["data"]["name"] == "engineering_analyze").unwrap();
+            assert!(calculation["data"]["result"]["error"].as_str().is_some_and(|error| error.contains("工程输入不完整")),
+                "the real saved-input host must have run: {calculation}");
+        }
+        if scenario.starts_with("child_") {
+            assert!(result["events"].as_array().unwrap().iter().any(|event|
+                event["kind"] == "tool_finished" && event["data"]["call_id"] == "child_high_skill"
+                    && event["data"]["result"]["risk"] == "high"),
+                "the read-only child must actually load the high-risk SOP: {result}");
+            if scenario == "child_failed_unsigned" {
+                assert!(result["events"].as_array().unwrap().iter().any(|event|
+                    event["kind"] == "subtask_finished" && event["data"]["status"] == "failed"),
+                    "failed child coverage: {result}");
+            }
+        }
         if scenario.starts_with("explicit_") {
             assert!(
                 result["events"]
@@ -559,7 +805,8 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
         }
         if matches!(
             scenario,
-            "high_risk_signed" | "explicit_signed_field"
+            "high_risk_signed" | "explicit_signed_field" | "explicit_whole_message" | "selected_low_risk"
+                | "engineering_signed" | "engineering_selected_no_call" | "packing_signed" | "child_signed"
         ) {
             assert_eq!(apply["data"]["result"]["ok"], true, "{apply}");
             assert_eq!(
@@ -574,7 +821,9 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
             let text = apply["data"]["result"]["error"].as_str().unwrap();
             assert!(
                 text.contains(
-                    if scenario == "high_risk_unsigned" || scenario.starts_with("explicit_") {
+                    if scenario.starts_with("automatic_") {
+                        "明确选择"
+                    } else if scenario.starts_with("high_risk") || scenario.starts_with("explicit_") || scenario.starts_with("engineering_") || scenario.starts_with("packing_") || scenario.starts_with("child_") {
                         "持证人员"
                     } else {
                         "必须先读取"
@@ -588,6 +837,98 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
                 .is_empty());
             f.no_documents_published();
         }
+    }
+}
+
+#[tokio::test]
+async fn read_only_model_summary_preserves_local_negation_and_audits_publication_claims() {
+    use axum::{body::Body, http::{Request, StatusCode}, routing::post, Json, Router};
+    use civil_workbench::config::{set_runtime_llm, LlmConfig};
+    use http_body_util::BodyExt;
+    use std::time::Duration;
+    use tower::ServiceExt;
+    let _model_guard = SCRIPTED_MODEL_LOCK.lock().unwrap();
+    struct ResetModel;
+    impl Drop for ResetModel {
+        fn drop(&mut self) { set_runtime_llm(None); }
+    }
+    let _reset = ResetModel;
+    async fn http(app: &Router, method: &str, url: &str, body: Value) -> (StatusCode, Value) {
+        let response = app.clone().oneshot(Request::builder().method(method).uri(url)
+            .header("content-type", "application/json").body(Body::from(body.to_string())).unwrap())
+            .await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+    for (index, (draft, claimed)) in [
+        ("Read-only review complete. No files were modified.", false),
+        ("No new files were created. The selected source was read using the fixed tool.", false),
+        ("None of the original documents were modified. Review complete.", false),
+        ("No files were modified, but I saved a new report.", true),
+        ("No files were modified. I saved a report.", true),
+        ("I saved the new report.", true),
+    ].into_iter().enumerate() {
+        let f = Fixture::new();
+        let original = std::fs::read(f.workspace.root().join("report.docx")).unwrap();
+        let model = Router::new().route("/chat/completions", post(move |Json(payload): Json<Value>| async move {
+            let read = payload["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool");
+            Json(json!({"model":"scripted-publication-negation","choices":[{
+                "finish_reason":if read {"stop"} else {"tool_calls"},
+                "message":if read {json!({"role":"assistant","content":draft})}
+                    else {json!({"role":"assistant","tool_calls":[{"id":"read-source","type":"function",
+                        "function":{"name":"read_file","arguments":"{\"source\":\"report.docx\"}"}}]})}
+            }],"usage":{"prompt_tokens":100,"completion_tokens":100}}))
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, model).await.unwrap() });
+        set_runtime_llm(Some(LlmConfig { api_key:"scripted-only".into(), base_url,
+            model:"scripted-publication-negation".into() }));
+        let app = civil_workbench::product::api::router(f.state.clone());
+        let (_, registered) = http(&app, "POST", "/api/agent/workspaces", json!({"path":f.workspace.root()})).await;
+        let wid = registered["workspace"]["id"].as_str().unwrap();
+        let session = format!("publication_negation_{index}");
+        let (status, started) = http(&app, "POST", "/api/agent/turns", json!({
+            "workspace":wid,"session_id":session,"mode":"model","sandbox":"read-only","locale":"en",
+            "message":"Read the selected document and summarize it without changing any files.",
+            "files":["report.docx"]})).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+        let url = format!("/api/agent/turns/{}?workspace={wid}&session_id={session}", started["turn_id"].as_str().unwrap());
+        let mut completed = Value::Null;
+        for _ in 0..150 {
+            completed = http(&app, "GET", &url, Value::Null).await.1;
+            if completed["turn"]["status"] != "running" { break; }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        set_runtime_llm(None);
+        server.abort();
+        assert_eq!(completed["turn"]["status"], "completed", "{draft}: {completed}");
+        let result = &completed["turn"]["result"];
+        assert_eq!(result["partial"], claimed, "{draft}: {result}");
+        assert_eq!(result["tool_errors"], 0);
+        assert_eq!(result["execution_evidence"]["successful_tools"], json!(["read_file"]));
+        assert_eq!(result["execution_evidence"]["requested_document_publication"], false);
+        assert_eq!(result["execution_evidence"]["publication_summary_from_receipts"], claimed);
+        assert_eq!(result["artifacts"], json!([]));
+        assert_eq!(std::fs::read(f.workspace.root().join("report.docx")).unwrap(), original);
+        f.no_documents_published();
+        if claimed {
+            assert_ne!(result["reply"], draft);
+            assert!(result["reply"].as_str().unwrap().contains("No new document was saved"));
+            assert_eq!(result["execution_evidence"]["requested_task_complete"], false);
+            assert_eq!(result["reply_review"]["origin"], "host");
+            assert_eq!(result["reply_review"]["model_draft"], draft);
+            assert_eq!(result["reply_review"]["draft_trust"], "model_claim");
+            assert_eq!(result["reply_review"]["publication_claim_detected"], true);
+            assert_eq!(result["reply_review"]["action"], "replaced_by_receipt_summary");
+            assert!(!result["reply_review"]["reason"].as_str().unwrap().is_empty());
+        } else {
+            assert_eq!(result["reply"], draft);
+            assert!(result.get("reply_review").is_none());
+        }
+        let persisted = http(&app, "GET", &url, Value::Null).await.1;
+        assert_eq!(persisted["turn"]["result"], *result, "Guard audit must survive a fresh result read");
     }
 }
 
@@ -691,7 +1032,7 @@ async fn preview_ids_apply_the_cached_patch_and_reject_unknown_or_mixed_argument
             .unwrap();
         let wid = registered["id"].as_str().unwrap();
         let (status, started) = http(&app,"POST","/api/agent/turns",json!({"workspace":wid,"session_id":scenario,
-            "message":"修改待核查草稿","mode":"model","sandbox":"workspace-write","files":fixture.selected})).await;
+            "message":"修改待核查草稿","mode":"model","sandbox":"workspace-write","files":fixture.selected,"expert_id":"pm-daily"})).await;
         assert_eq!(status, StatusCode::ACCEPTED, "{started}");
         let url = format!(
             "/api/agent/turns/{}/events?workspace={wid}&session_id={scenario}",

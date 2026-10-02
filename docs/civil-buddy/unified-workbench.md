@@ -11,6 +11,12 @@ cargo build --release --manifest-path workbench/Cargo.toml
 python scripts/start_unified_workbench.py --python .venv/Scripts/python.exe --env-file demo/.env --open
 ```
 
+Add `--check` before first launch to inspect the selected Python version, required package metadata,
+Rust executable, port and directory configuration. It does not start the product, load provider configuration
+or create project/state files. Optional package discovery reports unavailable capabilities without blocking
+base startup; it does not prove native libraries or speech models can run. Both services and document workers
+use the same resolved interpreter, including when `--python python` is found through PATH.
+
 The launcher binds both services to loopback, starts `/static/agent.html`, and stops both on Ctrl+C. `--state-root` isolates task history/domain records. `--binary` selects an already built executable. It refuses a second launcher using the same state directory. Source workspaces are opened explicitly in the page; only selected files enter a model task. New copies are saved beneath that workspace's `.civil-buddy/out`.
 
 The default view offers a model-free structural check and a model task. Configure the model in the page or through environment variables. A model task with `read-only` cannot apply a document patch. `workspace-write` permits new draft copies; original files cannot be replaced.
@@ -36,7 +42,7 @@ The target model is **DeepSeek V4.1 Flash**, requested as `deepseek-flash`. The 
 
 DeepSeek Chat Completions requests explicitly disable thinking for the initial tool-loop baseline, bound output tokens, preserve complete tool interactions, and record provider usage. See the [official DeepSeek API](https://api-docs.deepseek.com/api/create-chat-completion/). An explicit existing model setting is preserved.
 
-Jev uses the [TypeSafe System One API](https://docs.typesafe.ai/introduction/quickstart). The host defines candidates/questions from selected evidence. Off makes no Jev calls; shadow records validated proposals; assist may schedule an additional read-only review when the fixed candidate and confidence gate pass. The initial 0.9 confidence threshold is an unevaluated product setting, not a claimed accuracy guarantee. Jev cannot permit a write, change solver numbers or approve an engineering conclusion. Engineering replan adapters beyond document review remain on the implementation checklist.
+Jev uses the [TypeSafe System One API](https://docs.typesafe.ai/introduction/quickstart). The host defines candidates/questions from selected evidence. Off makes no Jev calls; shadow records validated proposals. For document evidence, assist may schedule an additional read-only review when the fixed candidate and confidence gate pass. The initial 0.9 confidence threshold is an unevaluated product setting, not a claimed accuracy guarantee. Jev cannot permit a write, change solver numbers or approve an engineering conclusion. The packing replan adapter below records engineering proposals in shadow mode even when assist is configured; changing a packing strategy based on Jev remains disabled pending calibration.
 
 ## Execution guarantees and limits
 
@@ -52,10 +58,21 @@ provenance verification. The legacy Python reply guard is a separate implementat
 - Fixed Python workers establish the requested OS sandbox before reading their request. The default `CIVIL_WORKER_SANDBOX=os` fails closed. Explicit `app` is a diagnostic/application-policy mode and must never be reported as OS isolation.
 - On Windows, the existing Low Integrity/Job backend restricts writes/spawn. It does not claim kernel read or network confinement; the UI records the actual process probe.
 - RAG uses selected-source SQLite FTS5/BM25 with original hashes and exact locators. Verification re-extracts the current original, not the derived index. This proves quotation identity, not engineering truth.
+- Ordinary model tasks collect source quotes from this turn's actual main/child tool calls. Before completion,
+  the host rechecks up to 12 quotes against the selected originals and displays their locator, original/current
+  hash and check time. Changed, unavailable, invalid and timed-out sources remain visible. These are source
+  identity receipts at the stated time, not proof that every model sentence is supported; model-written prose
+  cannot create a verified card. Original quotations are preserved when switching the interface language.
 - Document patches require matching original hashes, expected old values and a successful identical preview. The returned preview_id can apply the cached patch without asking the model to reproduce it. Added numbers need preserved original values, explicit user input or verified source quotations. Saved files remain model proposals.
 - PDF body rewriting/OCR, Office visual rendering and spreadsheet formula recalculation are not provided by this worker. Results report these limitations explicitly.
 
-The product's ordinary tests use scripted local models. `scripts/unified_acceptance.py --live` is separate opt-in acceptance against an already configured local server; it never reads or writes API keys.
+The product's ordinary tests use scripted local models. `scripts/unified_acceptance.py --live` is separate
+opt-in acceptance against an already configured local server. It requires `--expected-model` and
+`--expected-provider-host`, matching safe host-only capabilities and refusing scripted model names.
+`--token-file` reads a local workbench login token kept outside the fixture/report directories; it does not
+read provider keys. It refuses HTTP redirects, verifies originals even after failure, and waits a bounded
+grace period after cancellation. If shutdown cannot be observed, it reports that uncertainty. Usage and
+response-model receipts are product reports, not independent provider attestation or a monetary spending cap.
 
 ## Engineering, speech and distribution
 
@@ -63,7 +80,19 @@ The Agent page lists saved CAD section and explicit frame projects from the doma
 
 The fixed domain service also mounts the existing CAD, analysis, schedule, planning and routing pages. Planning/schedule records in the unified launcher use its state directory. These extra pages retain their deterministic services; they are not all registered as arbitrary model tools. IFC and planning remain on their own pages.
 
-Speech uses a cancellable fixed process with an explicit prepare step for model download. Audio transcription produces editable text and never auto-submits. Missing faster-whisper/model assets are reported as unavailable. Browser speech fallback requires the existing explicit consent flow. The current acceptance environment did not exercise a real microphone or download a speech model.
+Speech uses a cancellable fixed process with an explicit prepare step for model download. Audio transcription produces editable text and never auto-submits. Missing faster-whisper/model assets are reported as unavailable. Browser speech fallback requires the existing explicit consent flow.
+
+On 2026-09-30, actual Windows HTTP acceptance used a dedicated ASR environment and the **working-tree ASR launcher patch on top of `e199ab7`**, not that clean commit alone. The launcher forwarded the selected local model/cache settings without forwarding provider credentials. An explicit prepare request downloaded the public faster-whisper `small` model and reached `ready` in 48.594 seconds; transcription before preparation returned HTTP 409. The runtime used faster-whisper 1.2.1, CTranslate2 4.8.2 and PyAV 18.1.0. Model download required network access; transcription ran locally without a cloud LLM call.
+
+| Synthetic clip | Actual HTTP result | Observed transcript boundary |
+|---|---|---|
+| `L01_huihui.webm`, Chinese, 6.37 s | 200; 5.140 s end to end | Returned `请帮我核对这份相单,看看能不能装进一个40尺高柜。`; **箱单 was incorrectly recognised as 相单** |
+| `L19_yaoyao.webm`, Chinese, 4.24 s | 200; 4.782 s end to end | Returned `哪些属于危大工程,需要编专项方案。` |
+| `english-synthetic.wav`, English, 4.77 s | 200; 4.078 s end to end | Returned `Please compare the tender requirements and prepare an editable draft for review.` |
+
+A separate in-flight request was cancelled: the cancellation endpoint reported `process_reaped=true`, the transcription returned HTTP 409, and the service reported no active request afterwards. Source audio hashes and the workspace file list were unchanged, no audio files were found in the state directory, and the Agent task list stayed empty. These observations establish three functioning synthetic-audio HTTP transcriptions and cancellation, not a speech-accuracy score, real microphone acceptance or field/noise/accent performance. Transcripts still require human review. The local report is `work/practical-asr-acceptance-20260930/report.json` outside the repository; its bounded summary is recorded in the [2026-09-30 acceptance record](acceptance/2026-09-30-practical.json).
+
+The same working-tree follow-up passed launcher tests 12/12, voice UI tests 23/23 and i18n tests 4/4, including known English error details, original Chinese transcripts, timeout and cancellation. Separately, clean commit `e199ab7` passed all four [CI jobs in run 36691392773](https://github.com/LUOaini1213/civil-buddy-sme/actions/runs/36691392773), with smoke 187/187. That CI run predates the ASR working-tree follow-up and does not certify these later changes.
 
 Build a Windows source-plus-executable package after committing distribution sources:
 
@@ -87,3 +116,74 @@ All seven workbench pages share `demo/static/theme.css`, the persisted appearanc
 The navigation and home card expose `/packing`. The unified domain service reuses the existing packing UI and an explicit subset of gateway endpoints for uploads, deterministic packing, human confirmation, SSE progress, run recovery and Excel exports. The Rust bridge streams SSE immediately and uploads validated material-file bytes rather than forwarding a filesystem path. Packing state, exports and checkpoint databases live under the selected state root. Generic gateway agents and MCP dispatch are not exposed by this adapter; model credentials remain in the Rust host.
 
 The standalone gateway continues to support its original routes. In unified mode the page uses SSE and HTTP reload recovery; the supplemental standalone WebSocket observer is not proxied. The default packing engine is the local Python engine; Java is optional. Model-free parser → confirmation → solve → Excel checks and bounded Rust proxy/upload regressions pass. A browser check of the built-in synthetic full-load example produced 15 boxes and stopped at the confirmation gate.
+
+## Source-bound packing replan
+
+In the Agent page, select a `packing_replan.v1` JSON file in the source list and explicitly choose it under **Packing replan review**. **Check sources** mode runs the fixed calculation without a language model; model mode exposes `packing_replan` with only a selection index. Ordinary selected JSON documents do not automatically become packing inputs. The optional selection is cleared when submitting a task or switching its context.
+
+The [synthetic example and field guide](../../examples/packing-replan/README.md) are included in the Windows package. Copy the example to a test workspace before opening it; its dimensions and limits are examples, not defaults for a real shipment.
+
+This first adapter requires an explicit container type, maximum container count, clearance, box net-mass limit and complete material dimensions, quantities and weights. It does not infer those constraints from an arbitrary spreadsheet or free-form request. Unsupported transport conditions and missing inputs stop for human clarification. The original source is immutable; its SHA-256 is captured before task creation and checked around computation and any Jev wait.
+
+The fixed worker reuses the existing boxing/loading tools, computes the original baseline, and tries no more than two distinct fixed-order search candidates. Physical constraints cannot be relaxed by a model, Jev or the old critic's option deltas. A candidate must pass layout and conservation checks and improve the actual comparison objective before it replaces the baseline. The UI shows baseline and retained values separately; a layout fit never constitutes shipment release or a structural safety verdict. Repeated calls for the same source in one turn reuse the recorded calculation rather than repeating the search.
+
+Jev sees only host-constructed, already-calculated candidate choices. Off performs no Jev request. Shadow records a validated suggestion without changing the result; missing credentials, invalid responses, timeouts and unavailable decision budget leave the deterministic path unchanged. The source hash and phase identify the decision independently of document-evidence review. This integration does not establish live Jev service reliability or confidence calibration.
+
+Explicitly selected packing sources must each produce a successful calculation receipt before the model turn can report completion. Missing calls, failed inputs and infeasible results keep the task partial even if the model claims success. Unsupported transport-field aliases are rejected with instructions to preserve their requirements for human review; they are never silently discarded. Packaging structure issues are reported separately from geometric fit.
+
+The [2026-10-03 acceptance record](acceptance/2026-10-03-packing-replan.json) records the bounded synthetic example, independent geometry checks and current validation limits. Its unchanged five-container result is not an efficiency improvement or a shipping authorization.
+
+The separate [live packing follow-up](acceptance/2026-10-03-live-packing.json) preserves real DeepSeek receipts, independent numerical checks and failed attempts. Model response tokens are provider-reported usage, not billing proof. Raw tool arguments are not retained; the strict index-only schema, single selected source and full source/hash result bind the demonstrated calculation.
+
+Final-reply review distinguishes local English negations such as “No files were modified” from an actual publication claim. A positive claim is still replaced with the registered-artifact summary, and its reviewed draft is retained under `reply_review` with `draft_trust=model_claim`; this draft is audit material, never evidence that a file was saved. Completed executions with `result.partial=true` display “Partially completed” in the result and in history entries for which detailed result evidence is available. The partial notice does not imply that downloads exist.
+
+Saved model replies carry an “AI interpretation” label, translated with the interface while preserving the original reply. Fixed tool result cards and the execution timeline remain separate evidence. The repaired English run retained the correct core calculation but still confused ten boxes with ten box types and incompletely described its tools; neither the label nor a completed workflow certifies full prose accuracy.
+
+New model tasks with explicitly selected packing inputs return a host-generated packing execution receipt as the main reply (`reply_origin=host`). Source hashes, baseline/final container and box counts, recorded replan rounds, structure counts in boxes, and successful main-agent tools come from fixed-worker and host records. Missing counts stay “not returned”; skipped sources, calculation failures, required clarification and infeasible layouts stay distinct. Existing document-publication receipts are preserved when the task includes both documents and packing.
+
+The complete verdict-reviewed model interpretation is retained separately as `model_interpretation` with `trust=model_claim`, behind “AI interpretation (review required)” in the interface. This preserves additional analysis without presenting its claims as the calculation receipt. Later turns retain that interpretation as explicitly unverified assistant history within the existing context budget. Original stored tasks are not rewritten. The receipt does not certify all requested work, structural suitability or shipment release, and it does not make the retained model interpretation accurate.
+
+The [packing receipt acceptance record](acceptance/2026-10-03-packing-receipts.json) replays the earlier incorrect model text through a localhost scripted provider and the actual Windows host/calculation worker. The main receipt contains the tool values, the original interpretation remains available, and independent numerical checks pass 46/46. This is an offline regression of the new reporting behavior, not an additional live DeepSeek acceptance.
+
+## Deliverable checks
+
+The Agent page checks registered DOCX, XLSX and PDF outputs against their registered SHA-256 and reports whether the original source is current, changed, unavailable or unrecorded. A changed source requires a new copy generated from the updated material. Inspection records identify who requested the check; they are not a reviewer's acceptance or professional sign-off.
+
+Office checks inspect package structure, macros, embedded objects and external relationships without opening links or executing content. XLSX reports formula/cache/error counts: missing or invalid caches and error cells block delivery; existing caches remain unverified. `calcMode=auto`, `fullCalcOnLoad` and `forceFullCalc` on a generated copy request future calculation but do not prove it happened. No Office renderer or spreadsheet calculation engine runs in this check, so page layout and formula results still need review in the appropriate application.
+
+A structurally inspected PDF with no detected active-content markers can open in the browser's native PDF viewer. The preview endpoint rechecks the registered output hash and rejects changed bytes. This is an actual view of that PDF, not a converted DOCX preview or evidence that every page has been visually reviewed. Checks neither validate engineering conclusions nor authorize tender submission, construction or shipment.
+
+
+## Live document workflow follow-up (2026-09-30)
+
+A selected local project credential resolved an inherited-key HTTP 401. The first authenticated synthetic workflow reached the real provider but repeatedly failed numeric evidence checks and then stopped at the unchanged budget gate. Tool schemas now describe nested Word/Excel patch fields and complete `patches[i].evidence` references; invalid shapes have actionable errors. A separate `verify_sources` success never grants later writes. XLSX calls without an operation or worksheet inspect available sheets first; explicitly requested reads still need an actual sheet name. Existing bounded default ranges remain supported.
+
+With the same fixture generator, task, validation oracle and budget, the next real `deepseek-flash` workflow completed in about 15.6 seconds with five provider responses. Both actual new copies contained the PDF-required value; original hashes, untouched document parts, styles and the unmodified worksheet were preserved. These are structural/content checks on synthetic files, not Word pagination, Excel calculation, engineering sign-off or a field reliability score. The model key stays outside the repository and release archive.
+
+## Persisted Agent history recovery (2026-09-30)
+
+The Agent page now discovers saved sessions from the server when a registered workspace opens, including sessions created through the API before this browser was used. It merges these summaries with local unsent drafts and preserves an existing browser selection. Session summaries contain only the session ID, latest task ID, timestamp, status and task count. Both session discovery and task history are restricted to the current authenticated actor and workspace; task pages additionally respect the selected session. Cursors are bound to that scope, and task boundaries are checked against the stored records again.
+
+`GET /api/agent/sessions` supports `limit` and `cursor` with a default of 50 and a maximum of 100. The existing `/api/agent/turns` endpoint adds the same pagination parameters while retaining its default of 100 and the existing `turns` field. Both return `next_cursor`; the frontend requests 50 records at a time and provides controls to refresh sessions, load more sessions and load older tasks. Late responses are checked against the current workspace and selection. Reloading an older task preserves the loaded history position. Event recovery continues past the first 200-event page, even for a terminal task, until the recorded last sequence is reached; a no-progress guard prevents endless polling. Discovery and recovery do not start a model, replay tools or restore prior write permissions.
+
+Offline validation on the working tree based on `9a6fd62` passed 35 Rust tests: `product_sessions` 5/5, `product_identity` 17/17 and `runtime_core` 13/13. Coverage includes reopening persisted state, 105-session and 105-task pagination with tied timestamps, actor/workspace/session isolation, invalid cursors and unchanged events during history reads. The final Agent UI suite passed 50/50, including terminal event draining and history-position preservation; the separate i18n suite had previously passed 4/4.
+
+A same-machine browser check used a fresh origin with no previous browser history and the existing state directory. It discovered the saved synthetic acceptance session, opened its one task and restored 43 events, four source quotations and the two DOCX/XLSX download cards. Chinese/English switching preserved original filenames and quotations. The task IDs and task count were unchanged before and after; the existing five-call usage record was unchanged, and both downloaded files matched their registered SHA-256. No new model request was made. This validates recovery of that existing task in a fresh browser origin, not a second-computer installation or a browser run with more than 200 events; those larger history cases are covered by the offline tests. The local report is `work/practical-history-recovery-20260930/report.json` outside the repository, with its bounded summary in the [acceptance record](acceptance/2026-09-30-practical.json).
+
+## Upgrade, restore and Office follow-up (2026-09-30)
+
+A same-machine upgrade and restore check made a complete offline backup, verified its hashes, retained the prior directories and copied the backup back to the original paths. The newly extracted `0.5.0-practical-preview.20260930.8` program used the same absolute workspace and state roots. Restored hashes matched; identity, the existing task and usage record, source originals and downloaded artifact bytes were preserved, and the saved session remained discoverable. No model request was made. This verifies that particular same-path restore and program-directory upgrade on one computer; it does not establish relocation to a different workspace path or a second-computer installation. Evidence is recorded in `work/practical-upgrade-restore-20260930/report.json` outside the repository.
+
+Separate Office quality checks then used the existing synthetic live-model artifacts. Microsoft Word 16.0 opened the DOCX read-only, repaginated it and exported a one-page PDF. Poppler rendered the PDF at 150 dpi; the page was visually reviewed with no clipping, overlap, missing text or text errors observed, and extracted PDF text matched the source paragraphs. Microsoft Excel 16.0 ran `CalculateFullRebuild` and saved a separate XLSX copy. Reading that saved copy with `openpyxl` in `data_only` mode confirmed the cached value `D2 = 12`; the formula remained `=B2*2` with `B2 = 6`. The original source files and registered artifacts retained their hashes, and no new model request was made.
+
+These are actual application-level rendering and recalculation checks on simple synthetic files. Word and Excel automation remain outside the product's deliverable-inspection tools; the existing tool limitations above still apply. Complex real-project pagination and formula recalculation, and cross-computer installation and restore, still require acceptance. The Office report, exported PDF and recalculated copy are under `work/practical-office-acceptance-20260930/` outside the repository; the [acceptance record](acceptance/2026-09-30-practical.json) includes their bounded results and output hashes.
+
+## Live read-only delegation follow-up (2026-09-30)
+
+A separate, explicitly live acceptance used the configured `deepseek-flash` model at `api.deepseek.com` and a fresh synthetic workspace. The main agent delegated one evidence and one review child, both constrained to read-only access to a single selected PDF. Each child independently searched, read and verified the source quotation; both completed before the parent produced its final summary. Nine model responses were recorded across three tasks, taking 15.905 seconds. The existing shared budget was not changed or exhausted, and completion released all reservations. There were no tool errors, document previews or artifacts; original hashes stayed unchanged. Independent PDF extraction matched the requirement in each child's search receipt and the final host-verified quotations.
+
+This proves that particular two-child workflow on the recorded Windows binary, not general engineering correctness or real-project coverage. The event log preserves child search hits and verification results but not the `verify_sources` arguments, and final host quotations are deduplicated without child attribution; it does not establish an argument-level audit trail for each child's verification. Provider-reported usage is not independent billing proof. No Jev event occurred. The local report is `work/practical-live-subagents-20260930/report.json` outside the repository, with the source commit, binary hash and bounded checks recorded in the [acceptance record](acceptance/2026-09-30-practical.json).
+
+The Agent page renders saved Markdown with DOM-created headings, tables, lists, quotations and code. HTML remains literal text, images do not load, and only validated HTTP(S) links become active. Unsupported or oversized input falls back to unchanged plain text. Source quotations and stored replies remain unchanged. Subtask events show the role and child ID separately from the initiating identity, and findings remain explicitly labelled as model claims. Language switching during paged recovery retains the latest server task status. A successful manual workspace choice clears a stale workspace query so reloading cannot silently return to the previous linked project; invalid and failed selections preserve the link.
+
+The existing live task was opened and reloaded in the browser without another model request: one comparison table, five headings, both completed child roles and the original PDF quotations were visible. Chinese/English switching preserved the reply and source text, inline JSON retained real quote characters, and the 390-pixel viewport had no document-level horizontal overflow. Agent UI tests passed 60/60, i18n 4/4 and release tests 9/9; the new renderer is included in the release allowlist. Browser proof is recorded separately in `work/practical-live-subagents-20260930/browser-review.json` outside the repository.

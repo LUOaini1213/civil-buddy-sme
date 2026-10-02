@@ -41,6 +41,71 @@ def _clean(result: dict) -> None:
     assert all(e == "input:input" for e in log["events"]), log["events"]
 
 
+def test_english_prepare_errors_localize_known_details_before_or_during_polling(runs):
+    for r in runs["english_prepare_error_details"]["cases"]:
+        _clean(r)
+        assert "Local speech worker unavailable: ModuleNotFoundError" in r["after"]["status"]
+        assert "本机识别子进程不可用" not in r["after"]["status"]
+        assert "browser recognition" in r["after"]["status"]
+        assert r["after"]["input"] == "原始资料.xlsx"
+        assert r["log"]["gum"] == 0
+
+
+def test_english_transcription_errors_localize_known_contract_without_changing_draft(runs):
+    expected = ["Could not load the speech recognition engine: ImportError",
+                "Could not load the speech recognition model: RuntimeError",
+                "Local transcription failed: RuntimeError", "Speech model preparation failed: TimeoutError",
+                "faster-whisper is not installed locally; the page will switch to browser speech recognition",
+                "The local speech worker returned an invalid result",
+                "Local transcription timed out; the transcription process was stopped",
+                "The recording is too short", "The recording must not exceed 8 MB",
+                "Prepare the local speech model before recording", "The previous recording is still being transcribed",
+                "Each recording can last up to 20 seconds"]
+    cases = runs["english_transcription_error_details"]["cases"]
+    assert len(cases) == len(expected)
+    for r, message in zip(cases, expected):
+        _clean(r)
+        assert message in r["after"]["status"]
+        assert r["detail"] not in r["after"]["status"]
+        assert r["after"]["input"] == "保留文件名.xlsx"
+        assert r["log"]["events"] == []
+        assert r["log"]["trackStops"] == 1
+
+
+def test_unknown_backend_details_are_preserved_even_with_known_words_or_prefixes(runs):
+    for r in runs["unknown_server_error_details_are_not_translated"]["cases"]:
+        _clean(r)
+        assert r["detail"] in r["after"]["status"]
+        assert r["after"]["input"] == "原文"
+
+
+def test_chinese_backend_error_and_exception_type_remain_original(runs):
+    r = runs["chinese_server_error_details_remain_original"]
+    _clean(r)
+    assert r["after"]["status"] == "识别失败：" + r["detail"]
+    assert r["after"]["input"] == "原文"
+
+
+def test_english_ui_never_translates_chinese_transcripts_as_error_messages(runs):
+    r = runs["english_ui_preserves_chinese_transcript_even_if_it_matches_an_error"]
+    _clean(r)
+    assert r["after"]["input"] == "原始图纸.xlsx 没有收到录音"
+    assert r["switched"]["input"] == r["after"]["input"]
+    assert "never sends automatically" in r["after"]["status"]
+    assert r["log"]["events"] == ["input:input"]
+
+
+def test_english_timeout_keeps_draft_and_aborts_without_sending(runs):
+    r = runs["english_request_timeout_keeps_draft_and_releases_recording"]
+    _clean(r)
+    uploads = [request for request in r["log"]["requests"] if request["url"] == "/api/asr"]
+    assert len(uploads) == 1 and uploads[0]["aborted"]
+    assert r["after"]["status"] == "Transcription failed: Transcription timed out"
+    assert r["after"]["input"] == "原始图纸.xlsx"
+    assert r["after"]["label"] == "Voice input"
+    assert r["log"]["trackStops"] == 1 and r["log"]["events"] == []
+
+
 def test_english_locale_sets_local_decoder_hint_and_keeps_transcript_as_draft(runs):
     r = runs["english_server_hint_and_draft"]
     _clean(r)

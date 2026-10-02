@@ -20,6 +20,13 @@ import time
 import urllib.request
 import webbrowser
 
+# Diagnostics must not create even a helper-module bytecode cache.
+sys.dont_write_bytecode = True
+if __package__:
+    from . import workbench_preflight as preflight
+else:
+    import workbench_preflight as preflight
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -115,7 +122,7 @@ class ProcessFamily:
                     pass
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--binary", type=Path)
@@ -128,14 +135,10 @@ def main():
     parser.add_argument("--public-origin", help="Optional HTTPS origin of your configured reverse proxy")
     parser.add_argument("--stop-file", type=Path, help="Optional local shutdown sentinel for supervised runs")
     parser.add_argument("--open", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument("--check", action="store_true", help="Offline prerequisites only; do not start services or write product state")
+    args = parser.parse_args(argv)
     binary = args.binary or ROOT / "workbench/target/release" / ("civil-workbench.exe" if os.name == "nt" else "civil-workbench")
-    if not binary.is_file():
-        parser.error("Rust executable missing; run cargo build --release --manifest-path workbench/Cargo.toml or specify --binary")
     environment = dict(os.environ)
-    if args.env_file:
-        from dotenv import dotenv_values
-        environment.update({k: v for k, v in dotenv_values(args.env_file).items() if v is not None})
     named = any((args.user_id, args.workspace, args.token_file, args.public_origin))
     token = None
     workspace = None
@@ -152,7 +155,10 @@ def main():
             parser.error("State storage and the workspace must be separate, non-nested directories")
         if args.token_file.resolve().is_relative_to(workspace):
             parser.error("Keep --token-file outside the workspace so it cannot become project material")
-        token = args.token_file.read_text(encoding="utf-8-sig").strip()
+        try:
+            token = args.token_file.read_text(encoding="utf-8-sig").strip()
+        except (OSError, UnicodeError):
+            parser.error("Cannot read --token-file; choose an accessible UTF-8 login token file outside the workspace")
         if len(token) < 32 or len(token) > 4096 or not token.isascii() or any(c.isspace() for c in token):
             parser.error("Login token must be 32-4096 ASCII characters without whitespace")
         digest = hashlib.sha256(os.path.normcase(str(workspace)).encode("utf-8")).hexdigest()
@@ -166,6 +172,18 @@ def main():
             validate_owned_directory(args.state_root, state=True)
         except (OSError, ValueError) as exc:
             parser.error(f"Cannot safely separate workspace and state: {exc}")
+    report = preflight.run(python=args.python, binary=binary, port=args.port, root=ROOT, env_file=args.env_file)
+    print(preflight.format_report(report, ROOT), flush=True)
+    if args.check or not report.ok:
+        return 0 if report.ok else 2
+    python = report.python
+    if args.env_file:
+        try:
+            environment.update(preflight.load_environment_file(python, args.env_file, environment, ROOT))
+        except ValueError as exc:
+            parser.error(str(exc))
+        if not named and any(environment.get(k) for k in ("CIVIL_INSTANCE_USER", "CIVIL_TOKEN", "CIVIL_TOKEN_SHA256", "CIVIL_PUBLIC_ORIGIN", "CIVIL_ALLOWED_WORKSPACES")):
+            parser.error("Identity environment is configured; use explicit --user-id, --workspace and --token-file")
     args.state_root.mkdir(parents=True, exist_ok=True)
     # OS lock prevents a second host from recovering a live host's active turns.
     lock = (args.state_root / "host.lock").open("a+b")
@@ -187,6 +205,11 @@ def main():
         domain_port = reserved.getsockname()[1]
     domain_env = {k: v for k, v in os.environ.items() if k.upper() in
                   {"PATH", "SYSTEMROOT", "WINDIR", "PATHEXT", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "LANG"}}
+    # These are local model/cache preferences, not provider credentials. Use the
+    # merged configuration so an explicitly selected env file behaves like the host.
+    for key in ("CB_ASR_MODEL", "HF_HOME", "HUGGINGFACE_HUB_CACHE", "XDG_CACHE_HOME"):
+        if key in environment:
+            domain_env[key] = environment[key]
     domain_token = secrets.token_urlsafe(48)
     domain_env.update(PYTHONUTF8="1", PYTHON_DOTENV_DISABLED="1", CIVIL_OUT_ROOT=str(args.state_root / "domains"),
                       CIVIL_DOMAIN_TOKEN=domain_token, CIVIL_DATA_ROOT=str(args.state_root / "legacy/data"),
@@ -204,7 +227,7 @@ def main():
                        CIVIL_DOMAIN_TOKEN=domain_token, CIVIL_DOTENV_DISABLED="1", PYTHON_DOTENV_DISABLED="1",
                        CIVIL_JOB_ROOT=str(workspace or args.state_root / "jobs"),
                        CIVIL_STATE_ROOT=str(args.state_root), CIVIL_DEMO_ROOT=str(ROOT / "demo"),
-                       CIVIL_PYTHON=str(Path(args.python).resolve()), CIVIL_UNIFIED_HOME="1",
+                       CIVIL_PYTHON=python, CIVIL_UNIFIED_HOME="1",
                        PACKING_AGENT_URL=f"http://127.0.0.1:{domain_port}/packing")
     if named:
         environment.update(CIVIL_INSTANCE_USER=args.user_id,
@@ -217,7 +240,7 @@ def main():
     family = ProcessFamily()
     logs = [(args.state_root / name).open("ab") for name in ("domains.log", "rust.log")]
     try:
-        processes.append(subprocess.Popen([args.python, "-m", "uvicorn", "demo.domain_service:app", "--host", "127.0.0.1", "--port", str(domain_port)],
+        processes.append(subprocess.Popen([python, "-m", "uvicorn", "demo.domain_service:app", "--host", "127.0.0.1", "--port", str(domain_port)],
                                           cwd=ROOT, env=domain_env, creationflags=flags, start_new_session=os.name != "nt", stdout=logs[0], stderr=subprocess.STDOUT))
         family.add(processes[-1])
         processes.append(subprocess.Popen([str(binary.resolve())], cwd=ROOT, env=environment, creationflags=flags, start_new_session=os.name != "nt", stdout=logs[1], stderr=subprocess.STDOUT))
@@ -267,4 +290,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -4,6 +4,7 @@
   const KEY = "cb_locale_v1";
   const catalog = Object.assign(Object.create(null), {
     "工作台": "Workbench", "工作台导航": "Workbench navigation", "Agent 工作台": "Agent workbench",
+    "项目资料与问题": "Project records & issues",
     "装箱拼柜": "Packing", "工程计算": "Engineering", "施工计划": "Construction plan",
     "日期计划": "Schedule", "现场路线": "Site routes", "箱单与装运": "Materials & shipping",
     "切换主题": "Change theme", "浅色": "Light", "深色": "Dark",

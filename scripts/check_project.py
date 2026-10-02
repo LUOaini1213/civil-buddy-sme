@@ -51,16 +51,20 @@ CHECKS = (
     Check("engineering-api", ("scripts/test_engineering_api.py",), timeout=300),
     Check("ui-modules", ("scripts/test_modules.cjs",), "node"),  # demo/static/modules/*.js on their own
     Check("agent-ui", ("scripts/test_agent_ui.cjs",), "node"),
+    Check("project-control-ui", ("scripts/test_project_control_ui.cjs",), "node"),
     Check("product-i18n", ("scripts/test_i18n.cjs",), "node"),
     Check("product-language", ("scripts/test_product_language.py",)),
     Check("engineering-i18n", ("scripts/test_engineering_i18n.cjs",), "node"),
     Check("logistics-language", ("scripts/test_logistics_language.py",)),
     Check("logistics-i18n", ("scripts/test_logistics_language.cjs",), "node"),
     Check("document-worker", ("scripts/test_document_worker.py",)),
+    Check("document-readiness", ("scripts/test_document_readiness.py",)),
     Check("source-retrieval", ("scripts/test_source_retrieval.py",)),
     Check("host-worker", ("scripts/test_host_worker.py",)),
+    Check("packing-replan-worker", ("scripts/test_packing_replan_worker.py",), timeout=300),
     Check("unified-acceptance-oracle", ("scripts/test_unified_acceptance.py",)),
     Check("unified-launcher", ("scripts/test_unified_launcher.py",)),
+    Check("workbench-preflight", ("scripts/test_workbench_preflight.py",)),
     Check("domain-service", ("scripts/test_domain_service.py",), timeout=300),
     Check("unified-packing", ("scripts/test_unified_packing.py",)),
     # Windows temporary Git fixtures and extracted-package reads exceeded 180s under load.
@@ -77,6 +81,7 @@ CHECKS = (
     Check("logistics-intake", ("scripts/test_logistics_intake.py",)),
     Check("logistics-groups", ("scripts/test_logistics_groups.py",)),
     Check("logistics-workbench", ("scripts/test_logistics_workbench.py",)),
+    Check("transport-constraints", ("scripts/test_transport_constraints.py",)),
     Check("logistics-chat", ("scripts/test_logistics_chat.py",)),
     Check("logistics-ui", ("scripts/test_logistics_ui.cjs",), "node"),
     Check("engineering-routing", ("scripts/test_engineering_routing.py",)),
@@ -142,6 +147,7 @@ CHECKS = (
     Check("civil-config", ("scripts/test_civil_config.py",)),
     Check("civil-workspace", ("scripts/test_civil_workspace.py",)),
     Check("model-loop", ("scripts/test_model_loop.py",)),
+    Check("model-refusal", ("scripts/test_model_refusal.py",)),
     # bounded retry of one model request (429/5xx/timeouts/resets) against a fake endpoint on 127.0.0.1
     Check("model-retry", ("scripts/test_model_retry.py",), timeout=300),
     # model mode on the link: deterministic first, the model only explains; its claims checked against the record

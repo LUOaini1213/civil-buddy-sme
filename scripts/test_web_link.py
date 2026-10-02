@@ -23,6 +23,11 @@
   landing    / and /workbench without the token: what this is and how to get access, in English, not "gateway down";
              index.html / workbench.html handle 401 and show the :8765 link only on this machine
 No model and no network.
+
+Numeric upload/merge-timeout cases use separately named geometry-only synthetic
+workbooks. They do not satisfy the original A-frame/upright/no-stack instructions.
+Original uploads and the public demo retain those instructions, return no plan,
+and have explicit refusal checks. Source examples and historical scores stay intact.
 """
 from __future__ import annotations
 
@@ -62,6 +67,23 @@ ITT = (EX / "facade_itt_doc.md").read_bytes()
 REV_A = (EX / "facade_panels.xlsx").read_bytes()
 REV_B = (EX / "facade_panels_rev_b.xlsx").read_bytes()
 DELIVERABLES = {"tender-packing-link.md", "bidbook.en.md", "tender-packing-link.json", "pack-plan.json"}
+
+
+def geometry_control(data: bytes) -> bytes:
+    """Independent synthetic transport-free input for numeric and timeout coverage."""
+    import openpyxl
+
+    wb = openpyxl.load_workbook(io.BytesIO(data))
+    ws = wb["materials"]
+    column = next(cell.column for cell in ws[1] if cell.value == "note")
+    for row in ws.iter_rows(min_row=2):
+        row[column - 1].value = "Geometry-only SYNTHETIC control; handling tested separately"
+    stream = io.BytesIO(); wb.save(stream); wb.close()
+    return stream.getvalue()
+
+
+GEOMETRY_REV_A = geometry_control(REV_A)
+GEOMETRY_REV_B = geometry_control(REV_B)
 
 
 def sha(data: bytes) -> str:
@@ -193,6 +215,19 @@ class GuardTests(Case):
 
 
 class UploadTests(Case):
+    def upload(self, tender=("facade_itt_doc.md", ITT), panel=("geometry_panels.xlsx", GEOMETRY_REV_A), headers=BEARER, **data):
+        return super().upload(tender=tender, panel=panel, headers=headers, **data)
+
+    def test_original_transport_instructions_remain_a_supplement_request(self) -> None:
+        original = self.upload(panel=("facade_panels.xlsx", REV_A), session_id="original-handling").json()
+        self.assertTrue(original["ok"])
+        self.assertIsNone(original["plan"])
+        self.assertEqual(original["plan_refusal"]["error"], "unsupported_transport_requirements")
+        self.assertEqual(original["counts"]["covered"], 0)
+        self.assertEqual(original["inputs"]["panel_list"]["sha256"], sha(REV_A))
+        self.assertTrue(all("A-frame" in row["requirements"]["note"] for row in original["plan_refusal"]["needs_human"]))
+        self.assertTrue(original["submit_blocked"])
+
     def test_upload_links_the_two_files(self) -> None:
         r = self.upload(session_id="judge-1")
         self.assertEqual(200, r.status_code, r.text[:400])
@@ -205,7 +240,7 @@ class UploadTests(Case):
         self.assertEqual({"container_type": "40HQ", "containers_used": 6}, {k: d["plan"][k] for k in ("container_type", "containers_used")})
         self.assertEqual(5, len(d["clauses"]))
         self.assertEqual(sha(ITT), d["inputs"]["tender"]["sha256"])
-        self.assertEqual(sha(REV_A), d["inputs"]["panel_list"]["sha256"])
+        self.assertEqual(sha(GEOMETRY_REV_A), d["inputs"]["panel_list"]["sha256"])
         self.assertEqual(d["inputs"]["tender"]["sha256"], d["inputs"]["tender"]["uploaded_as"])
         self.assertRegex(d["inputs"]["plan"]["sha256"], r"^[0-9a-f]{64}$")
         self.assertTrue(d["submit_blocked"])
@@ -237,7 +272,7 @@ class UploadTests(Case):
 
     def test_second_upload_names_the_stale_statements(self) -> None:
         first = self.upload(session_id="judge-2").json()
-        second = self.upload(panel=("facade_panels_rev_b.xlsx", REV_B), session_id="judge-2").json()
+        second = self.upload(panel=("geometry_panels_rev_b.xlsx", GEOMETRY_REV_B), session_id="judge-2").json()
         self.assertTrue(second["ok"], second)
         self.assertEqual(first["job_id"], second["previous_job_id"])
         self.assertEqual(["S2", "S3", "S6", "S7"], second["stale_statements"])
@@ -245,7 +280,7 @@ class UploadTests(Case):
         self.assertIn("panel list", second["changes_since_previous"]["summary"])
         self.assertEqual(first["inputs"]["tender"]["sha256"], second["inputs"]["tender"]["sha256"])
         self.assertNotEqual(first["inputs"]["panel_list"]["sha256"], second["inputs"]["panel_list"]["sha256"])
-        other = self.upload(panel=("facade_panels_rev_b.xlsx", REV_B), session_id="someone-else").json()
+        other = self.upload(panel=("geometry_panels_rev_b.xlsx", GEOMETRY_REV_B), session_id="someone-else").json()
         self.assertIsNone(other["previous_job_id"])
         self.assertEqual([], other["stale_statements"])
 
@@ -259,7 +294,7 @@ class UploadTests(Case):
         self.assertTrue(pdf["ok"], pdf)
         self.assertEqual(5, len(pdf["clauses"]))
         self.assertEqual(6, pdf["plan"]["containers_used"])
-        csv = self.upload(panel=("panels.csv", csv_bytes(REV_A)), session_id="csv").json()
+        csv = self.upload(panel=("geometry_panels.csv", csv_bytes(GEOMETRY_REV_A)), session_id="csv").json()
         self.assertTrue(csv["ok"], csv)
         self.assertEqual({"container_type": "40HQ", "containers_used": 6}, {k: csv["plan"][k] for k in ("container_type", "containers_used")})
 
@@ -378,9 +413,16 @@ class DemoTests(Case):
         self.assertTrue(d["session_id"].startswith("demo-"))
         self.assertIsNone(d["rev_a"]["previous_job_id"])
         self.assertEqual(d["rev_a"]["job_id"], d["rev_b"]["previous_job_id"])
-        self.assertEqual(6, d["rev_a"]["plan"]["containers_used"])
-        self.assertEqual(8, d["rev_b"]["plan"]["containers_used"])
-        self.assertEqual(["S2", "S3", "S6", "S7"], d["stale_statements"])
+        # Historical 6/8-container results ignored these source requirements.
+        # The current demo must retain them and ask for actual packaged inputs.
+        for revision in ("rev_a", "rev_b"):
+            self.assertIsNone(d[revision]["plan"])
+            self.assertEqual(d[revision]["plan_refusal"]["error"], "unsupported_transport_requirements")
+            self.assertEqual(d[revision]["counts"]["covered"], 0)
+            self.assertTrue(d[revision]["submit_blocked"])
+            self.assertTrue(all("A-frame" in row["requirements"]["note"] for row in d[revision]["plan_refusal"]["needs_human"]))
+        self.assertEqual(["S1", "S2", "S3", "S6"], d["stale_statements"])
+        self.assertIn("panel list", d["rev_b"]["changes_since_previous"]["summary"])
         self.assertEqual(sha(REV_B), d["rev_b"]["inputs"]["panel_list"]["sha256"])
         self.assertEqual(before, {p.name: sha(p.read_bytes()) for p in EX.iterdir() if p.is_file()})
         self.assertEqual(2, len(list((self.root / d["session_id"]).iterdir())))
@@ -648,7 +690,7 @@ class HardeningTests(Case):
         from packing_assistant.runtime import tool_engine
 
         self.assertTrue(self.upload(session_id="warm").json()["ok"])     # imports loaded, as on a running server
-        wb = openpyxl.load_workbook(io.BytesIO(REV_A))
+        wb = openpyxl.load_workbook(io.BytesIO(GEOMETRY_REV_A))
         ws = wb["materials"]
         row = [c.value for c in ws[2]]
         row[2], row[4] = 1, row[3]

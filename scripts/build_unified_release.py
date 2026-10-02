@@ -25,6 +25,7 @@ except ImportError:  # Direct invocation from scripts/.
 
 ROOT = Path(__file__).resolve().parents[1]
 EXTRA = (
+    "examples/packing-replan/README.md", "examples/packing-replan/geometry-only.json",
     "SECURITY.md", "docs/civil-buddy/release-handoff.md",
     "docs/civil-buddy/sme-integration.md", "README.zh.md",
     "docs/civil-buddy/submission-sync-20260927.md",
@@ -48,6 +49,10 @@ EXTRA = (
     "scripts/build_workbench_release.py", "scripts/build_unified_release.py",
     "docs/civil-buddy/architecture/implementation.md",
     "docs/civil-buddy/acceptance/2026-09-21.json",
+    "docs/civil-buddy/acceptance/2026-09-30-practical.json",
+    "docs/civil-buddy/acceptance/2026-10-03-packing-replan.json",
+    "docs/civil-buddy/acceptance/2026-10-03-live-packing.json",
+    "docs/civil-buddy/acceptance/2026-10-03-packing-receipts.json",
     "docs/civil-buddy/architecture/civil-buddy-rust-architecture.md",
     "docs/civil-buddy/architecture/civil-buddy-document-skills.md",
     "docs/civil-buddy/architecture/civil-buddy-agent-infra.md",
@@ -191,6 +196,15 @@ py -3.11 -m venv .venv
 
 ## 统一入口
 
+先检查解释器、必需依赖、可执行文件、端口和目录配置：
+
+```powershell
+& ".\\.venv\\Scripts\\python.exe" scripts/start_unified_workbench.py --binary bin/civil-workbench.exe --python .venv/Scripts/python.exe --state-root runtime/unified --check
+```
+
+`--check` 不启动产品、不访问模型、不创建工程或状态文件；它会运行限时的 Python 依赖探测。
+缺少 CAD、工程、语音等可选依赖只显示能力提示。普通启动也会执行相同的预检。
+
 ```powershell
 & ".\\.venv\\Scripts\\python.exe" scripts/start_unified_workbench.py --binary bin/civil-workbench.exe --python .venv/Scripts/python.exe --state-root runtime/unified --open
 ```
@@ -198,15 +212,34 @@ py -3.11 -m venv .venv
 主程序和 Python 领域服务均监听本机；浏览器打开 `http://127.0.0.1:8765/static/agent.html`。
 保留启动窗口，按 Ctrl+C 停止两个服务。端口冲突时追加 `--port 8766`。
 `--state-root` 保存产品状态与日志；新文档副本保存在所选工程目录 `.civil-buddy/out`。
-升级时另行保留自己的工程目录和状态目录，勿将旧 `.env` 或状态混入分发包。
+上面的相对状态目录用于本机演示。具名日常工程应将状态放在包外；升级时保留工程根、
+状态基础目录的两个绝对路径和 `--user-id`，勿将旧 `.env` 或状态混入分发包。
 
 无需模型 Key 可执行资料结构检查。自然语言 Agent 任务需在页面模型设置配置兼容服务，
 或显式传入自己创建的 `--env-file <路径>`；`.env.example` 仅为模板。Jev 为可选工程决策建议，默认关闭。
 岗位签认、引用哈希、先预览再保存及只读权限仍由主程序执行；模型不能把文件或自身提议变成工程事实。
 
-具名账号和独立工程启动、登录、备份及同事导入见 `docs/civil-buddy/release-handoff.md`。
+箱单受限重排示例见 `examples/packing-replan/README.md`。将示例复制到测试工程目录，
+在 Agent 页勾选 JSON 并显式选择“箱单重排核对”，使用“检查资料”可不调用模型。
+示例尺寸与约束均为合成测试输入；不能据此装运放行。普通 Excel 箱单仍使用装箱/物流页面。
+
+具名账号和独立工程启动、登录、停机备份及原路径恢复见 `docs/civil-buddy/release-handoff.md`。
 具名模式使用 `--user-id`、`--workspace`、`--token-file`；每位用户独立目录与进程，
 不是同一进程多租户平台。`examples/facade-demo` 是明确标注的合成演示资料。
+
+例如已按交接指南建立工程目录和个人口令后，可在**新版解压目录**继续启动原实例：
+
+```powershell
+& ".\\.venv\\Scripts\\python.exe" scripts/start_unified_workbench.py --binary bin/civil-workbench.exe --python .venv/Scripts/python.exe --state-root C:/CivilBuddyState/teammate-a/demo --user-id teammate-a --workspace C:/CivilJobs/demo --token-file C:/CivilBuddySecrets/teammate-a/login-token.txt --port 8765 --open
+```
+
+每次传最初的 `--state-root` 基础目录；启动器会追加 `accounts/<user>/projects/<root-hash>/`，
+不要把终端 `State:` 显示的叶目录再次传入。若旧实例最初用了 `runtime/unified`，新版必须继续
+指向旧程序目录中该基础目录的绝对路径，不能复制到新版目录后直接重新绑定。
+个人完整备份需先停止两个服务，再复制整个工程与状态基础目录到新的空备份目录；
+恢复只允许原绝对路径且目标不存在或为空，遇到非空目录拒绝覆盖。交接指南提供可执行步骤。
+完整个人备份含归属数据库，不能交给同事；同事使用支持导入的业务项目包建立新副本，
+这不会迁移 Rust Agent 的完整执行历史，也不会继承签认。
 
 ## 原入口与可选能力
 

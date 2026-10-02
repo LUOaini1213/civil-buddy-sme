@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """scripts/demo_facade.py on the SYNTHETIC façade pack: the flows run offline and say what they found.
 
-  linked     one run reads the ITT's logistics clauses, plans the panel list in the clause's 40HQ and writes the
-             statements with their clause and plan figure; the rev B list re-run names the statements that changed
+  linked     the ITT's logistics clauses remain linked to unchanged handling requirements; no plan is invented;
+             rev B changes the source hash while missing transport data continues to require a person
   tender     CR16, 420 calendar days, 90-day validity, the 10% bond and the 12-month DLP land in their rows;
              the two bid posts write from the same session's hand-off
-  packing    24 panels / 10,800 kg in the list are 24 / 10,800 kg in the crates, and the plan fits
+  packing    upright / A-frame / no-stack requirements stop automatic boxing; a source-hashed supplement checklist is written
   site docs  a daily report is written; the work-at-height briefing (high risk) writes nothing until the
              person's sentence is given, and is written once it is
   scope      nothing is written outside the job folder the demo creates; a wrong --sign or a used folder
@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import sys
 import tempfile
@@ -114,26 +115,53 @@ class FacadeDemo(unittest.TestCase):
         linked = self.result["linked"]
         first = {s["kind"]: s for s in linked["first"]["statements"]}
         self.assertEqual(linked["first"]["container"]["clause"], "4.8")
-        self.assertEqual(linked["first"]["plan"]["container_type"], "40HQ")
-        self.assertEqual((first["containers_used"]["clause"], first["containers_used"]["figures"]["containers_used"]), ("4.8", 6))
-        self.assertEqual((first["gross_mass"]["clause"], first["gross_mass"]["figures"]["max_gross_kg"]), ("4.9", 6472.8))
-        for kind in ("securing", "handling", "delivery_sequence", "crate_structure"):
-            self.assertEqual(first[kind]["status"], "human_required", kind)
-        self.assertEqual(linked["rev_b"]["plan"]["containers_used"], 8)
-        self.assertEqual(linked["changes"]["needs_reconfirmation"], ["S2", "S3", "S6", "S7"])
+        self.assertIsNone(linked["first"]["plan"])
+        self.assertIsNone(linked["rev_b"]["plan"])
+        self.assertEqual(first["containers_used"]["clause"], "4.8")
+        self.assertEqual(first["gross_mass"]["clause"], "4.9")
+        for version in ("first", "rev_b"):
+            self.assertEqual(linked[version]["plan_refusal"]["error"], "unsupported_transport_requirements")
+            self.assertIsNone(linked[version]["inputs"]["plan"]["sha256"])
+            self.assertTrue(all(s["status"] != "covered" for s in linked[version]["statements"]))
+            self.assertTrue(linked[version]["plan_refusal"]["needs_human"])
+        self.assertTrue(any(item["input"] == "panel_list" for item in linked["changes"]["inputs_changed"]))
         self.assertTrue(linked["submit_blocked"])
         self.assertTrue(Path(linked["record"]).is_file())
         self.assertIn("since the previous run: panel list (facade_panels.xlsx -> facade_panels_rev_b.xlsx) changed", self.out.getvalue())
 
-    def test_panels_are_conserved_and_fit(self):
+    def test_original_handling_requirements_produce_a_human_checklist_not_a_plan(self):
+        from hashlib import sha256
+
         packing = self.result["packing"]
-        cons = packing["conservation"]
-        self.assertTrue(cons["ok"], cons)
-        self.assertEqual((cons["pieces_in"], cons["pieces_out"]), (24, 24))
-        self.assertEqual((cons["kg_in"], cons["kg_out"]), (10800, 10800))
-        self.assertIs(packing["plan"]["can_fit"], True)
-        self.assertGreaterEqual(packing["plan"]["containers_used"], 1)
-        self.assertIn("pieces 24 -> 24 · kg 10800.0 -> 10800.0 · ok", self.out.getvalue())
+        self.assertEqual(packing["status"], "needs_human")
+        self.assertIsNone(packing["plan"])
+        self.assertTrue(packing["submit_blocked"])
+        self.assertEqual(set(packing["sources"]), set(demo.PANELS))
+        for name, review in packing["sources"].items():
+            with self.subTest(name=name):
+                self.assertEqual(review["reason"], "unsupported_transport_requirements")
+                self.assertTrue(review["needs_human"])
+                self.assertTrue(all(item["requirements"] for item in review["needs_human"]))
+                original = (demo.FIXTURES / name).read_bytes()
+                self.assertEqual((self.job / "inputs" / name).read_bytes(), original)
+                self.assertEqual(review["source_sha256"], sha256(original).hexdigest())
+                self.assertIsNone(review["containers_used"])
+                self.assertIsNone(review["can_fit"])
+                record = json.loads(Path(review["record"]).read_text(encoding="utf-8"))
+                self.assertEqual(record["needs_human"], review["needs_human"])
+                text = Path(review["checklist"]).read_text(encoding="utf-8")
+                self.assertIn("SYNTHETIC", text)
+                self.assertIn("未生成装柜方案、柜数或可装结论", text)
+                self.assertIn("每包装毛重与包装数", text)
+                self.assertIn("每架净重、皮重和声明载荷上限", text)
+                self.assertIn(review["source_sha256"], text)
+        self.assertFalse((self.job / "inputs" / "panels_no_notes.xlsx").exists())
+        for name in demo.INPUTS:
+            self.assertEqual((self.job / "inputs" / name).read_bytes(), (demo.FIXTURES / name).read_bytes(), name)
+        self.assertFalse(list(self.job.rglob("pack-plan.json")))
+        self.assertIn("No loading plan or container count", self.out.getvalue())
+        self.assertIn("运输要求包含自动成箱尚不能执行的约束", self.out.getvalue())
+        self.assertNotIn("行缺重量或尺寸", self.out.getvalue())
 
     def test_daily_report_is_written(self):
         daily = self.result["daily"]

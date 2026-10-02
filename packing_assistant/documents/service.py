@@ -14,7 +14,7 @@ from .common import DocumentError, bounded, digest, fail, validation
 from .ooxml import Word, Spreadsheet
 
 MAX_BYTES = 25_000_000
-OPERATIONS = {"capabilities", "inspect", "read", "preview", "apply", "validate"}
+OPERATIONS = {"capabilities", "inspect", "read", "preview", "apply", "validate", "inspect_readiness"}
 
 
 def _process_alive(pid):
@@ -47,12 +47,13 @@ def _process_alive(pid):
 
 def capabilities():
     return {"docx": {"available": True, "operations": ["replace_paragraph", "replace_cell"],
-                     "native_track_changes": False, "render": False},
+                     "native_track_changes": False, "render": False, "readiness_inspection": True},
             "xlsx": {"available": True, "operations": ["set_cell", "set_range"],
-                     "recalculate": False, "render": False, "macro_edit": False},
+                     "recalculate": False, "render": False, "macro_edit": False, "readiness_inspection": True},
             "pdf": {"available": importlib.util.find_spec("pypdf") is not None,
                     "operations": ["annotate", "fill_fields", "reorder_pages"],
-                    "form_fields": "text_only", "ocr": False, "render": False, "body_edit": False}}
+                    "form_fields": "text_only", "ocr": False, "render": False, "body_edit": False,
+                    "readiness_inspection": True}}
 
 
 def _document(data, suffix):
@@ -113,8 +114,8 @@ def _execute(request):
         fail("too_large", "Source document exceeds 25 MB")
     sha = digest(data)
     expected = request.get("expected_sha256")
-    if operation in ("preview", "apply") and not expected:
-        fail("invalid_request", "preview/apply require expected_sha256")
+    if operation in ("preview", "apply", "inspect_readiness") and not expected:
+        fail("invalid_request", "preview/apply/inspect_readiness require expected_sha256")
     if expected is not None and expected != sha:
         fail("conflict", "Source SHA-256 differs from expected_sha256; inspect the current version")
     document = _document(data, source.suffix.lower())
@@ -123,6 +124,12 @@ def _execute(request):
         fail("invalid_request", "arguments must be an object")
     base = {"source": str(source), "source_sha256": sha, "format": source.suffix[1:].lower(),
             "capabilities": capabilities()[source.suffix[1:].lower()]}
+    if operation == "inspect_readiness":
+        from .readiness import inspect_readiness
+        result = inspect_readiness(document, base["format"])
+        if digest(source.read_bytes()) != sha:
+            fail("conflict", "Source changed during readiness inspection")
+        return {**base, **result}
     if operation in ("inspect", "validate"):
         detail = document.inspect()
         if operation == "validate":

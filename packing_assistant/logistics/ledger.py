@@ -7,19 +7,21 @@ import math
 import re
 
 from packing_assistant.runtime.cancel import check
+from packing_assistant.transport_constraints import CHOICES, ledger_issues
 
 UNSPECIFIED = "UNSPECIFIED"
 SCHEMA = "civil.logistics.v1"
 MAX_ROWS = 5000
 MAX_JSON_BYTES = 12 * 1024 * 1024
-NUMERIC_FIELDS = ("package_count", "quantity", "units_per_package", "length_mm", "width_mm", "height_mm", "net_kg", "gross_kg")
+NUMERIC_FIELDS = ("package_count", "quantity", "units_per_package", "length_mm", "width_mm", "height_mm", "net_kg", "gross_kg", "tare_kg", "capacity_kg")
 COUNT_FIELDS = ("package_count", "quantity", "units_per_package")
-TEXT_FIELDS = ("package_id", "container_id", "package_type", "material_id", "name", "spec", "unit", "dimension_scope", "weight_scope")
+TEXT_FIELDS = ("package_id", "container_id", "package_type", "material_id", "name", "spec", "unit", "dimension_scope", "weight_scope", "orientation", "stacking", "handling_requirements")
 FIELDS = TEXT_FIELDS + NUMERIC_FIELDS
 FIELD_LABELS = {"package_count": "包装数", "quantity": "货物数量", "units_per_package": "每箱件数",
                 "length_mm": "长度", "width_mm": "宽度", "height_mm": "高度", "net_kg": "净重", "gross_kg": "毛重",
                 "name": "品名", "container_id": "集装箱号", "package_type": "包装类型",
-                "dimension_scope": "尺寸口径", "weight_scope": "重量口径"}
+                "dimension_scope": "尺寸口径", "weight_scope": "重量口径", "orientation": "运输姿态", "stacking": "堆叠要求",
+                "handling_requirements": "运输要求原文", "tare_kg": "每包装皮重", "capacity_kg": "每包装声明载荷上限"}
 
 
 def _json(value, depth=0):
@@ -100,6 +102,9 @@ def validate_document(document: dict) -> dict:
                 raise ValueError(f"{row['id']}.{field} 文字无效")
         if row["dimension_scope"] not in (UNSPECIFIED, "package", "item") or row["weight_scope"] not in (UNSPECIFIED, "package", "item", "row"):
             raise ValueError("尺寸或重量范围无效")
+        for field, values in CHOICES.items():
+            if row[field] not in values:
+                raise ValueError(f"{field} 运输约束取值无效")
         ev = row.setdefault("evidence", {})
         if not isinstance(ev, dict):
             raise ValueError("字段证据必须为对象")
@@ -285,6 +290,7 @@ def audit_document(document: dict) -> dict:
     for row in doc["rows"]:
         check()
         rid = row["id"]
+        issues.extend(ledger_issues(row))
         for field in ("name", "quantity", "package_count"):
             if row[field] == UNSPECIFIED and not row["evidence"].get(field, {}).get("group"):
                 issue("missing_" + field, f"{FIELD_LABELS[field]}未确定，未填入默认值。", rid, field, "warning")

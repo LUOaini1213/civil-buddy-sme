@@ -126,6 +126,30 @@ class BusinessReliabilityTests(unittest.TestCase):
         self.assertEqual(paths, [draft.with_suffix(".xlsx")])
         self.assertEqual((self.root / "ledger.xlsx").read_bytes(), b"not a workbook")
 
+    def test_automatic_export_never_patches_named_source_or_overwrites_previous_copy(self) -> None:
+        source = self.root / "ledger.xlsx"
+        workbook = openpyxl.Workbook()
+        workbook.active["A1"] = "=SUM(1,2)"
+        workbook.save(source)
+        workbook.close()
+        before = source.read_bytes()
+        draft = self.root / "ledger.md"
+        draft.write_text("## 用户原文\nupdate ledger.xlsx\n\n| Item |\n| --- |\n| First draft |\n", encoding="utf-8")
+        first = office_job.export_md_to_xlsx(draft, query="update ledger.xlsx")
+        self.assertEqual(source.read_bytes(), before)
+        self.assertEqual(first, [self.root / "ledger-2.xlsx"])
+        first_bytes = first[0].read_bytes()
+        draft.write_text("| Item |\n| --- |\n| Second draft |\n", encoding="utf-8")
+        second = office_job.export_md_to_xlsx(draft)
+        self.assertEqual(source.read_bytes(), before)
+        self.assertEqual(first[0].read_bytes(), first_bytes)
+        self.assertEqual(second, [self.root / "ledger-3.xlsx"])
+        book = openpyxl.load_workbook(second[0])
+        try:
+            self.assertEqual(book.active["A2"].value, "Second draft")
+        finally:
+            book.close()
+
     def test_job_files_exclude_sensitive_paths_and_reject_other_types(self) -> None:
         (self.root / "private_key_notes.txt").write_text("synthetic fixture", encoding="utf-8")
         (self.root / "valid.md").write_text("abcdef", encoding="utf-8")

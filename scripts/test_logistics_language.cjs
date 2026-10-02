@@ -82,3 +82,32 @@ test('packing Vue template compiles and language updates keep user input and sou
   assert.equal(window.document.querySelector('.agent-card .body-text').textContent,'柜型');
   vm.$destroy();dom.window.close();
 });
+
+test('handling fields and actionable calculation refusal survive a language switch verbatim',async()=>{
+  const dom=new JSDOM(read('demo/static/logistics.html'),{url:'http://localhost/logistics',runScripts:'outside-only'});
+  const {window}=dom;
+  window.eval(read('demo/static/i18n.js'));window.eval(read('demo/static/i18n-logistics.js'));
+  window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
+  globalThis.CBI18n=window.CBI18n;globalThis.CBLogisticsI18n=window.CBLogisticsI18n;
+  try{
+    const {startLogisticsApp}=await import('data:text/javascript;base64,'+Buffer.from(read('demo/static/logistics.js')).toString('base64'));
+    const failure={ok:false,revision:1,mode:'packaged',result:{ok:false,needs_human:[{row_id:'R00001',field:'handling_requirements',code:'unsupported_handling',message:'柜型'}]}};
+    const app=startLogisticsApp(window.document,{window,initialize:false,fetch:async()=>new Response(JSON.stringify(failure),{headers:{'Content-Type':'application/json'}})});
+    const row={id:'R00001',name:'原始货物',orientation:'upright',stacking:'no_stack',handling_requirements:'柜型',evidence:{handling_requirements:{raw:'柜型',header:'handling',source:{row:2,column:4}}}};
+    app.acceptProject({id:'a'.repeat(32),name:'Synthetic',revision:1,confirmed:true,versions:[],document:{source:{filename:'原件.csv'},rows:[row],totals:[]},audit:{issues:[]},summary:{}});
+    const $=id=>window.document.getElementById(id);
+    $('confirmation').value='我明白，将由持证人员签认';await app.calculate();
+    assert.equal(app.state.packing,null);assert.match($('packingResult').textContent,/R00001/);
+    window.CBI18n.setLocale('en');
+    assert.match($('packingResult').textContent,/unsupported or conflicts/);
+    assert.match($('packingResult').textContent,/柜型/);
+    assert.equal(window.document.querySelector('[data-ledger-field="handling_requirements"]').value,'柜型');
+    assert.equal(window.document.querySelector('[data-ledger-field="orientation"]').value,'upright');
+    assert.match(window.document.querySelector('[data-ledger-field="stacking"]').textContent,/Do not stack/);
+    assert.match($('handlingHelp').textContent,/Stability, securing, lifting/);
+    $('packingResult').querySelector('button').click();
+    assert.match($('sourceFacts').textContent,/柜型/);
+    window.CBI18n.setLocale('zh-CN');
+    assert.match($('packingResult').textContent,/R00001/);assert.equal(app.state.project.document.rows[0].handling_requirements,'柜型');
+  }finally{delete globalThis.CBI18n;delete globalThis.CBLogisticsI18n;dom.window.close();}
+});

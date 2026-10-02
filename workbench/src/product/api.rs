@@ -1,6 +1,7 @@
 use super::{
     agent,
     engineering::{EngineeringHost, EngineeringKind, EngineeringSelection},
+    packing::{self, PackingSelection},
     worker::WorkerHost,
 };
 use crate::{
@@ -27,7 +28,7 @@ pub struct ProductState {
     pub runtime: RuntimeCore,
     pub worker: WorkerHost,
     pub auth: Arc<super::auth::InstanceAuth>,
-    index: Mutex<Connection>,
+    pub(super) index: Mutex<Connection>,
     _owner: std::fs::File,
 }
 type HttpError = (StatusCode, Json<Value>);
@@ -63,6 +64,7 @@ impl ProductState {
         runtime.recover_interrupted().map_err(|e| e.to_string())?;
         let index = Connection::open(folder.join("index.sqlite")).map_err(|e| e.to_string())?;
         index.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS workspaces(id TEXT PRIMARY KEY,root TEXT UNIQUE NOT NULL); CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,path TEXT NOT NULL,record TEXT NOT NULL);").map_err(|e|e.to_string())?;
+        super::project_control::initialize(&index)?;
         Ok(Arc::new(Self {
             worker: WorkerHost::detect(paths.repo_root.clone()),
             paths,
@@ -140,6 +142,7 @@ pub fn router(state: Arc<ProductState>) -> Router {
     Router::new()
         .route("/api/agent/capabilities", get(capabilities))
         .route("/api/agent/workspaces", get(workspaces).post(register))
+        .route("/api/agent/sessions", get(sessions))
         .route("/api/agent/files", get(files))
         .route("/api/agent/engineering/projects", get(engineering_projects))
         .route(
@@ -152,18 +155,42 @@ pub fn router(state: Arc<ProductState>) -> Router {
         .route("/api/agent/turns/{turn}/cancel", post(cancel))
         .route("/api/agent/artifacts/{id}", get(artifact))
         .layer(DefaultBodyLimit::max(256 * 1024))
-        .with_state(state)
+        .with_state(state.clone())
+        .merge(super::project_control::router(state))
+}
+
+/// Expose only the configured provider's host, never URL credentials or parameters.
+fn provider_host(base_url: &str) -> Option<String> {
+    let url = reqwest::Url::parse(base_url).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    url.host_str().map(str::to_owned)
 }
 
 async fn capabilities(State(st): State<Arc<ProductState>>) -> Json<Value> {
     let cfg = crate::config::llm_config();
     Json(
-        json!({"available":true,"models":{"configured":!cfg.api_key.is_empty(),"model":cfg.model},
+        json!({"available":true,"models":{"configured":!cfg.api_key.is_empty(),"model":cfg.model,"provider_host":provider_host(&cfg.base_url)},
         "modes":["steps","model"],"sandbox":["read-only","workspace-write"],
         "sandbox_controls":{"policy":true,"os_enforced":null,"network_confined":null,"reads_confined":null,"probe":"workspace_required"},
-        "features":{"context":true,"subagents":true,"cancel":true,"documents":true,"retrieval":true,"voice":false},
+        "features":{"context":true,"subagents":true,"cancel":true,"documents":true,"retrieval":true,"voice":false,"session_discovery":true,"packing_replan":true},
         "identity":st.auth.capabilities(),"unavailability_reason":null}),
     )
+}
+
+#[cfg(test)]
+mod provider_metadata_tests {
+    use super::provider_host;
+
+    #[test]
+    fn provider_host_never_returns_url_secrets() {
+        assert_eq!(provider_host("https://user:secret@api.example.test:8443/v1?api_key=private#secret"), Some("api.example.test".into()));
+        assert_eq!(provider_host("http://127.0.0.1:18081/v1"), Some("127.0.0.1".into()));
+        for invalid in ["not a url", "file:///private/key", "javascript:secret", ""] {
+            assert_eq!(provider_host(invalid), None);
+        }
+    }
 }
 #[derive(Deserialize)]
 struct Register {
@@ -214,6 +241,85 @@ async fn workspaces(State(st): State<Arc<ProductState>>) -> Result<Json<Value>, 
         .filter(|row| row["root"].as_str().is_some_and(|root| st.auth.authorize_workspace(std::path::Path::new(root)).is_ok())).collect();
     Ok(Json(json!({"workspaces":workspaces})))
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionListQuery {
+    workspace: String,
+    limit: Option<usize>,
+    cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TurnListQuery {
+    workspace: String,
+    session_id: Option<String>,
+    limit: Option<usize>,
+    cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", deny_unknown_fields)]
+enum HistoryCursor {
+    Sessions {scope: String, updated_at: String, session_id: SessionId},
+    Turns {scope: String, turn_id: TurnId},
+}
+impl HistoryCursor {
+    fn decode(value: &str) -> Result<Self, HttpError> {
+        if value.is_empty() || value.len() > 1024 || value.len() % 2 != 0
+            || !value.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(bad("invalid history cursor"));
+        }
+        let bytes: Vec<u8> = (0..value.len()).step_by(2)
+            .map(|i| u8::from_str_radix(&value[i..i+2], 16))
+            .collect::<Result<_, _>>().map_err(|_| bad("invalid history cursor"))?;
+        serde_json::from_slice(&bytes).map_err(|_| bad("invalid history cursor"))
+    }
+    fn encode(&self) -> Result<String, HttpError> {
+        Ok(serde_json::to_vec(self).map_err(bad)?.iter().map(|b| format!("{b:02x}")).collect())
+    }
+}
+fn page_limit(limit: Option<usize>, default: usize) -> Result<usize, HttpError> {
+    let limit = limit.unwrap_or(default);
+    if !(1..=100).contains(&limit) {
+        return Err(bad("history limit must be between 1 and 100"));
+    }
+    Ok(limit)
+}
+
+async fn sessions(
+    State(st): State<Arc<ProductState>>,
+    Query(q): Query<SessionListQuery>,
+) -> Result<Json<Value>, HttpError> {
+    let ws = st.workspace(&q.workspace).map_err(bad)?;
+    let limit = page_limit(q.limit, 50)?;
+    // Pagination context is not a credential or an authority grant. Every
+    // request independently reauthorizes the workspace and current actor.
+    let scope = super::tools::sha256(format!("sessions\0{}\0{}", st.auth.owner(), q.workspace).as_bytes());
+    let cursor = q.cursor.as_deref().map(HistoryCursor::decode).transpose()?;
+    let before = match cursor {
+        None => None,
+        Some(HistoryCursor::Sessions {scope:cursor_scope,updated_at,session_id}) if cursor_scope == scope => {
+            let timestamp = chrono::DateTime::parse_from_rfc3339(&updated_at).map_err(|_| bad("invalid history cursor"))?;
+            if timestamp.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Millis, true) != updated_at {
+                return Err(bad("invalid history cursor"));
+            }
+            Some((updated_at,session_id))
+        },
+        _ => return Err(bad("invalid history cursor for this actor/workspace")),
+    };
+    let mut rows = st.runtime.list_sessions(&ws, st.auth.owner(),
+        before.as_ref().map(|(updated,session)| (updated.as_str(),session)), limit+1).map_err(bad)?;
+    let has_more = rows.len() > limit;
+    rows.truncate(limit);
+    let next_cursor = if has_more {
+        let last = rows.last().expect("positive page limit");
+        Some(HistoryCursor::Sessions {scope, updated_at:last.updated_at.clone(), session_id:last.session_id.clone()}.encode()?)
+    } else { None };
+    Ok(Json(json!({"workspace":q.workspace,"sessions":rows,"next_cursor":next_cursor})))
+}
+
 #[derive(Deserialize)]
 pub struct Scope {
     pub workspace: String,
@@ -294,6 +400,8 @@ pub struct TurnRequest {
     #[serde(default)]
     pub engineering: Vec<EngineeringSelection>,
     #[serde(default)]
+    pub packing_sources: Vec<PackingSelection>,
+    #[serde(default)]
     pub expert_id: String,
     #[serde(default)]
     pub risk_confirmation: String,
@@ -345,6 +453,7 @@ async fn start(
         || req.message.len() > 48_000
         || req.files.len() > 24
         || req.engineering.len() > 4
+        || req.packing_sources.len() > packing::MAX_SOURCES
         || req.risk_confirmation.chars().count() > 80
         || !matches!(req.mode.as_str(), "model" | "steps")
         || !matches!(req.locale.as_str(), "zh-CN" | "en")
@@ -370,6 +479,7 @@ async fn start(
     for file in &req.files {
         ws.resolve_read(file).map_err(bad)?;
     }
+    packing::bind_selections(&ws, &req.files, &mut req.packing_sources).map_err(bad)?;
     if req.mode == "model" && crate::config::llm_config().api_key.is_empty() {
         return Err(bad("请先配置模型 API Key，或使用资料检查模式"));
     }
@@ -378,6 +488,7 @@ async fn start(
     stored_request["actor_id"] = json!(st.auth.owner());
     stored_request["identity_mode"] = st.auth.capabilities()["mode"].clone();
     stored_request["risk_confirmation_present"] = json!(agent::current_turn_confirmation(&req));
+    stored_request["document_write_classification"] = agent::document_write_classification(&req);
     let begun = match &key {
         Some(key) => st
             .runtime
@@ -406,6 +517,8 @@ async fn start(
     };
     lease.emit("authorization", json!({"actor_id":st.auth.owner(),"sandbox":req.sandbox,
         "risk_confirmation_present":agent::current_turn_confirmation(&req),"confirmation_scope":"current_turn",
+        "document_write_classification":agent::document_write_classification(&req),
+        "unclassified_document_writes":"blocked","model_risk_clearance":false,
         "professional_signoff":false})).map_err(bad)?;
     let response = json!({"turn_id":lease.turn_id(),"session_id":session});
     tokio::spawn(agent::run(st, ws, req, lease));
@@ -413,7 +526,7 @@ async fn start(
 }
 async fn turns(
     State(st): State<Arc<ProductState>>,
-    Query(q): Query<Scope>,
+    Query(q): Query<TurnListQuery>,
 ) -> Result<Json<Value>, HttpError> {
     let ws = st.workspace(&q.workspace).map_err(bad)?;
     let session = q
@@ -422,9 +535,22 @@ async fn turns(
         .map(SessionId::parse)
         .transpose()
         .map_err(bad)?;
-    Ok(Json(
-        json!({"turns":st.runtime.list_turns(&ws,session.as_ref(),100).map_err(bad)?}),
-    ))
+    let limit = page_limit(q.limit, 100)?;
+    let scope = super::tools::sha256(format!("turns\0{}\0{}\0{}", st.auth.owner(), q.workspace,
+        session.as_ref().map(SessionId::as_str).unwrap_or("*")).as_bytes());
+    let cursor = q.cursor.as_deref().map(HistoryCursor::decode).transpose()?;
+    let before = match cursor {
+        None => None,
+        Some(HistoryCursor::Turns {scope:cursor_scope,turn_id}) if cursor_scope == scope => Some(turn_id),
+        _ => return Err(bad("invalid history cursor for this actor/workspace/session")),
+    };
+    let mut rows = st.runtime.list_turns_page(&ws, st.auth.owner(), session.as_ref(), before.as_ref(), limit+1).map_err(bad)?;
+    let has_more = rows.len() > limit;
+    rows.truncate(limit);
+    let next_cursor = if has_more {
+        Some(HistoryCursor::Turns {scope, turn_id:rows.last().expect("positive page limit").turn_id.clone()}.encode()?)
+    } else { None };
+    Ok(Json(json!({"workspace":q.workspace,"session_id":session,"turns":rows,"next_cursor":next_cursor})))
 }
 async fn turn(
     State(st): State<Arc<ProductState>>,

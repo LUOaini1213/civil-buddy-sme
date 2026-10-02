@@ -1,0 +1,156 @@
+{
+  "schema": "civil-buddy-packing-acceptance.v1",
+  "date": "2026-10-03",
+  "timezone": "Asia/Shanghai",
+  "scope": "Synthetic Windows local trial; no real project or shipping release",
+  "model_requests": 0,
+  "live_jev_accepted": false,
+  "binary_sha256": "4d4a686d3086f63f8ee6ca108c1a4bcd783046f608015f99df5d8ecbac417bdc",
+  "source": {
+    "file": "examples/packing-replan/geometry-only.json",
+    "sha256": "c8ced5c16b00463c45b7f8452d3b496f5bf097a1f3655136912fcd02462b5fa1"
+  },
+  "compiled_host_http": {
+    "passed": true,
+    "turn_id": "0698424554b94ad3b7134c9d5c40bd44",
+    "created_at_utc": "2026-10-02T16:55:50.015Z",
+    "checks": {
+      "completed": true,
+      "not_partial": true,
+      "no_model_events": true,
+      "source_unchanged": true,
+      "zero_artifacts": true,
+      "actual_two_recalculations": true,
+      "jev_off": true,
+      "source_binding": true
+    },
+    "events": 7,
+    "evidence": {
+      "local_file": "work/practical-packing-replan-20260930/http-final/report.json",
+      "sha256": "a28003f7d082d643b735e65c35aec2f75f5d76122d7fba9581740816f9f27607"
+    },
+    "independent_geometry": {
+      "passed": true,
+      "checks_passed": 46,
+      "checks_total": 46,
+      "selected_candidate": "baseline"
+    },
+    "result": {
+      "outcome": "unchanged",
+      "rounds": 2,
+      "baseline_containers": 5,
+      "final_containers": 5,
+      "boxes": 11,
+      "can_fit": true,
+      "layout_verified": true,
+      "structure": {
+        "fail": 1,
+        "failing": [
+          {
+            "box_type": "4米铁架",
+            "boxes": 1,
+            "reason": "加大底板纵梁截面或增加纵梁根数"
+          }
+        ],
+        "n_boxes": 11,
+        "needs_reinforcement": 0,
+        "pass": 0,
+        "pending_design": 10
+      },
+      "requires_human_review": true,
+      "shipping_release": false,
+      "professional_signoff": false,
+      "jev": {
+        "applied": false,
+        "context_hash": "83480639ae69377498f86ca8f1df87f607f01b2f6bd65ffe1131dc8b2921a16a",
+        "engineering_assist_calibrated": false,
+        "fallback": "original_deterministic_path",
+        "mode": "off",
+        "phase": "packing_replan_shadow_v1",
+        "reason": "mode_off",
+        "requested_mode": "off",
+        "status": "deterministic_fallback"
+      }
+    }
+  },
+  "upgrade": {
+    "prior_task_count": 7,
+    "prior_task_rows_sha256": "408f5b8104c58a5ed538a5f566250f2fb403780d4dac14f74068e4c2086e852c",
+    "preserved_after_first_restart": true,
+    "scope": "Same machine, same state path, prior tasks; not cross-computer restore"
+  },
+  "browser": {
+    "actual_browser_review": true,
+    "checks": [
+      "Explicit selection only from checked JSON sources",
+      "Selection preserved on language change",
+      "Historical result and seven events restored after reload without new execution",
+      "Baseline and two recalculations both remain five containers",
+      "One failed structure check and ten detailed-design items remain visible in both languages",
+      "No-model context placeholder switches to English",
+      "Original saved reply remains unchanged"
+    ],
+    "screenshots": [
+      {
+        "local_file": "deliverables/practical-workbench-20261003/packing-review-zh.png",
+        "sha256": "5905a060f312f316208d66c5faa4f1e99feea5da60fc22d4e0d62ff173fc2416"
+      },
+      {
+        "local_file": "deliverables/practical-workbench-20261003/packing-review-en.png",
+        "sha256": "3cc53284c7a171e11cfe750a55521ef731abbef0fd02dfcc84a71b16ea2604e9"
+      }
+    ]
+  },
+  "validation": {
+    "default_gate": {
+      "passed": 188,
+      "total": 188,
+      "scope": "Ordered coverage across three interrupted/continued runs, not one uninterrupted npm run; final fixes covered by supplemental tests and subsequent CI",
+      "evidence": {
+        "local_file": "work/practical-packing-replan-20260930/default-gate-coverage-20261003.json",
+        "sha256": "1ace743b34f17def95a29f3c24afd0fe14702f962610b972dfba7fe0dcb46436"
+      }
+    },
+    "python_worker": {
+      "passed": 14,
+      "total": 14,
+      "evidence": {
+        "local_file": "work/practical-packing-replan-20260930/worker-final-20261003.log",
+        "sha256": "2f067fe3ed84ce87af8ef8cc56a357b7b1637ec4c5820b6fde5647793277280b"
+      }
+    },
+    "agent_ui_and_i18n": {
+      "passed": 68,
+      "total": 68,
+      "evidence": {
+        "local_file": "work/practical-packing-replan-20260930/ui-final-20261003.log",
+        "sha256": "5a808361abfadd8a56405c06b96e04b965d98150ed5c8ec63d058ccd9376fecd"
+      }
+    },
+    "rust_selection_coverage": {
+      "passed": 10,
+      "total": 10,
+      "evidence": {
+        "local_file": "work/practical-packing-replan-20260930/rust-selection-coverage-20261003.log",
+        "sha256": "f9d4621acf83c07b70760eca2cfe304f275df20aa62c22f5ee68fc75e5f0785e"
+      }
+    },
+    "rust_document_and_engineering": {
+      "passed": 19,
+      "total": 19,
+      "evidence": {
+        "local_file": "work/practical-packing-replan-20260930/rust-finalization-regressions-20261003-corrected.log",
+        "sha256": "e015d70a4facd3d9bd09164125a6cb857c4e90851b3c8eba6946e1f2f6e900da"
+      }
+    }
+  },
+  "limits": [
+    "Only fixed box orientation and floor-only placement; at most two fixed priority-order recalculations.",
+    "Synthetic example did not improve container count; no optimality claim.",
+    "Internal packaging, structural strength, securing, lifting and field conditions require engineering review.",
+    "Jev assist remains shadow only; actual Jev service and confidence calibration remain unaccepted.",
+    "Current acceptance uses deterministic steps and scripted offline model cases, not live model packing acceptance.",
+    "Real project, second Windows computer, field microphone and complex real Office documents remain unaccepted.",
+    "Windows write isolation does not confine reads or network access."
+  ]
+}

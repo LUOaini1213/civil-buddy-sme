@@ -636,6 +636,30 @@ def _guarded(reply: str, turn: _Turn, messages: List[Dict[str, Any]], complete: 
     from packing_assistant.tools import claim_check, number_provenance, record_guard, verdict_guard
     from packing_assistant.runtime.model_client import ModelCancelled
 
+    if turn.facts.get("packing_refusal"):
+        # There is no accepted plan to explain. Return a host-owned outcome,
+        # rather than retain invented counts/masses beside a warning. Original
+        # constraints and row locations remain in the deterministic tool report.
+        outcome = ("No usable packing plan was produced. Review the tool report and resolve missing or unsupported inputs before recalculating. "
+                   "No container count is available. No loaded-container mass is available.") if turn.english else (
+                   "未生成可用装柜方案。请查看工具报告，补齐或核对缺失及未支持的输入后重新计算。当前没有可报告的柜数或已装货柜重量。")
+        if link_record is not None:
+            outcome += "\n\n" + claim_check.record_sentence(link_record, "en" if turn.english else "zh")
+        # Keep source questions useful even when there is no packing result.
+        # Quote only requested clauses (or the gross-mass clause), as literal
+        # evidence, never as instructions or a substitute for a computed plan.
+        asked = set(re.findall(r"(?i)clause\s+(\d+(?:\.\d+)*)|第\s*(\d+(?:\.\d+)*)\s*条", turn.user_text))
+        asked_ids = {value for pair in asked for value in pair if value}
+        for clause, text in (turn.facts.get("clauses") or {}).items():
+            if clause in asked_ids or (re.search(r"(?i)gross\s+mass|毛重", turn.user_text) and re.search(r"(?i)gross\s+mass|毛重", text)):
+                # HTML escaping prevents raw source markup in Markdown viewers.
+                import html
+                quoted = html.escape(str(text)).replace("\n", "\n> ")
+                label = f"Source clause {clause}" if turn.english else f"来源条款 {clause}"
+                outcome += f"\n\n{label}:\n> {quoted}"
+        turn.emit("guard", {"action": "packing_refusal", "reason": turn.facts["packing_refusal"]["error"]})
+        return outcome, {"checked": True, "rewrites": 0, "untraced": [], "verdicts": [], "packing_refusal": True}
+
     reply, repeats = collapse_repeats(reply)
     # A deterministic-first explanation already has the trusted record, including
     # when the host returned it in memory or renamed an exported file. Never take
@@ -833,9 +857,15 @@ def explain_link(text: str, steps_out: Dict[str, Any], *, session_id: str = "", 
     provenance: Dict[str, Any] = {"checked": False, "rewrites": 0, "untraced": [], "verdicts": []}
     calls, explanation = 0, ""
     try:
-        explanation = str(complete(messages, None).get("content") or "").strip()
-        calls = 1
-        if explanation:
+        if view.get("plan_available") is False:
+            # A missing/rejected plan is already a deterministic outcome. The
+            # original reply retains clause statuses and source constraints;
+            # there are no valid shipping figures for a model to explain.
+            explanation, provenance = _guarded("", turn, messages, complete, link_record=record)
+        else:
+            explanation = str(complete(messages, None).get("content") or "").strip()
+            calls = 1
+        if explanation and view.get("plan_available") is not False:
             explanation, provenance = _guarded(explanation, turn, messages, complete, link_record=record)
             calls += provenance.pop("model_calls", 0)
     except ModelCancelled:

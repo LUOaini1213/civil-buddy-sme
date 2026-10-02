@@ -102,11 +102,20 @@ class LauncherTests(unittest.TestCase):
                      "DEEPSEEK_API_KEY": "fake-parent-key", "OPENAI_API_KEY": "fake-openai-key",
                      "ANTHROPIC_API_KEY": "fake-other-key", "JEV_API_KEY": "fake-jev-key",
                      "CIVIL_TEST_PRIVATE_SECRET": "fake-unknown-secret",
+                     "CB_ASR_MODEL": "small", "HF_HOME": str(self.root / "ambient models"),
+                     "HUGGINGFACE_HUB_CACHE": str(self.root / "ambient hub"),
+                     "XDG_CACHE_HOME": str(self.root / "ambient cache"),
                      "PYTHONPATH": "untrusted-import-path", "CIVIL_DOMAIN_WORKSPACE": "old-ambient-folder"}
-        config = {"DEEPSEEK_API_KEY": "fake-config-key", "JEV_API_KEY": "fake-config-jev"}
+        config = {"DEEPSEEK_API_KEY": "fake-config-key", "JEV_API_KEY": "fake-config-jev",
+                  "CB_ASR_MODEL": "tiny", "HF_HOME": str(self.root / "selected models"),
+                  "HUGGINGFACE_HUB_CACHE": str(self.root / "selected hub"),
+                  "XDG_CACHE_HOME": str(self.root / "selected cache"),
+                  "HF_TOKEN": "fake-config-hf-token", "PYTHONPATH": "config-untrusted-import-path"}
         output = io.StringIO()
+        selected_python = str(self.root / "environment with spaces" / "python.exe")
         with patch.dict(os.environ, inherited, clear=True), \
-             patch.dict(sys.modules, {"dotenv": SimpleNamespace(dotenv_values=lambda _: config)}), \
+             patch.object(launcher.preflight, "run", return_value=launcher.preflight.Report(python=selected_python, version="3.11.0")), \
+             patch.object(launcher.preflight, "load_environment_file", return_value=config) as load_config, \
              patch.object(launcher, "ROOT", self.root), \
              patch.object(sys, "argv", ["launcher", "--binary", str(binary), "--state-root", str(state), "--env-file", str(self.root / "selected.env")]), \
              patch.object(launcher.subprocess, "Popen", side_effect=popen), \
@@ -118,10 +127,13 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(len(spawned), 2)
         argv, options, domain = spawned[0]
         self.assertIn("demo.domain_service:app", argv)
+        self.assertEqual(argv[0], selected_python)
         env = options["env"]
         self.assertFalse(any(("KEY" in key.upper() or "TOKEN" in key.upper() or "SECRET" in key.upper()) and key != "CIVIL_DOMAIN_TOKEN" for key in env), sorted(env))
         self.assertGreaterEqual(len(env["CIVIL_DOMAIN_TOKEN"]), 32)
         self.assertNotIn("PYTHONPATH", env)
+        for key in ("CB_ASR_MODEL", "HF_HOME", "HUGGINGFACE_HUB_CACHE", "XDG_CACHE_HOME"):
+            self.assertEqual(env[key], config[key])
         self.assertEqual(env["PYTHON_DOTENV_DISABLED"], "1")
         self.assertEqual(Path(env["CIVIL_DOMAIN_WORKSPACE"]), state / "domains")
         self.assertEqual(Path(env["CIVIL_OUT_ROOT"]), state / "domains")
@@ -132,6 +144,8 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(Path(env["PACKING_LG_CHECKPOINT_PATH"]), state / "packing" / "checkpoints.db")
         self.assertEqual(env["PACKING_LLM_AGENT"], "0")
         host_env = spawned[1][1]["env"]
+        self.assertEqual(host_env["CIVIL_PYTHON"], selected_python)
+        self.assertEqual(load_config.call_args.args[0], selected_python)
         self.assertEqual(host_env["DEEPSEEK_API_KEY"], "fake-config-key")
         self.assertEqual(host_env["JEV_API_KEY"], "fake-config-jev")
         self.assertEqual(Path(host_env["CIVIL_STATE_ROOT"]), state)
@@ -142,6 +156,33 @@ class LauncherTests(unittest.TestCase):
         self.assertTrue(all(process.terminated and process.waited for _, _, process in spawned))
         self.assertNotIn("fake-config-key", output.getvalue())
         self.assertNotIn("fake-parent-key", output.getvalue())
+
+    def test_ambient_asr_preferences_reach_sidecar_without_loading_env_file(self):
+        binary = self.root / "host.exe"
+        binary.touch()
+        preferences = {"CB_ASR_MODEL": "small", "HF_HOME": str(self.root / "models with spaces"),
+                       "HUGGINGFACE_HUB_CACHE": str(self.root / "hub with spaces"),
+                       "XDG_CACHE_HOME": str(self.root / "cache with spaces")}
+        spawned = []
+        def popen(argv, **kwargs):
+            spawned.append(kwargs["env"])
+            return FakeProcess()
+        inherited = {**preferences, "HF_TOKEN": "fake-hub-token", "OPENAI_API_KEY": "fake-provider-key",
+                     "PYTHONPATH": "untrusted-import-path"}
+        with patch.dict(os.environ, inherited, clear=True), \
+             patch.object(launcher.preflight, "run", return_value=launcher.preflight.Report(python=sys.executable, version="3.11.0")), \
+             patch.object(launcher.preflight, "load_environment_file") as load_config, \
+             patch.object(launcher, "ROOT", self.root), \
+             patch.object(launcher.subprocess, "Popen", side_effect=popen), \
+             patch.object(launcher, "ProcessFamily"), \
+             patch.object(launcher.urllib.request, "urlopen", side_effect=lambda *_a, **_kw: contextlib.nullcontext(SimpleNamespace(status=200))), \
+             patch.object(launcher.time, "sleep", side_effect=KeyboardInterrupt), contextlib.redirect_stdout(io.StringIO()):
+            launcher.main(["--binary", str(binary), "--state-root", str(self.root / "state")])
+        load_config.assert_not_called()
+        self.assertEqual(len(spawned), 2)
+        self.assertEqual({key: spawned[0][key] for key in preferences}, preferences)
+        for key in ("HF_TOKEN", "OPENAI_API_KEY", "PYTHONPATH"):
+            self.assertNotIn(key, spawned[0])
 
     def test_named_launch_separates_workspace_state_and_never_passes_login_token_to_domain(self):
         binary = self.root / "host.exe"
@@ -160,6 +201,7 @@ class LauncherTests(unittest.TestCase):
             probes.append(request)
             return contextlib.nullcontext(SimpleNamespace(status=200))
         with patch.dict(os.environ, {}, clear=True), patch.object(launcher, "ROOT", self.root), \
+             patch.object(launcher.preflight, "run", return_value=launcher.preflight.Report(python=sys.executable, version="3.11.0")), \
              patch.object(sys, "argv", ["launcher", "--binary", str(binary), "--state-root", str(self.root / "state"),
                     "--user-id", "colleague-a", "--workspace", str(workspace), "--token-file", str(token_file)]), \
              patch.object(launcher.subprocess, "Popen", side_effect=popen), \

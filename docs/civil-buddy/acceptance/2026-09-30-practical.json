@@ -1,0 +1,675 @@
+{
+  "date": "2026-09-30",
+  "scope": "Windows local practical workbench preview",
+  "synthetic": true,
+  "real_provider_calls": true,
+  "cross_computer": false,
+  "production_acceptance": false,
+  "research_sources": [
+    "https://www1.bca.gov.sg/growth-and-transformation/productivity/idd-integrated-digital-delivery/",
+    "https://www.imo.org/en/ourwork/safety/pages/ctu-code.aspx"
+  ],
+  "checks": {
+    "initial_default_gate": {
+      "passed": 176,
+      "total": 185,
+      "subsequent_failed_checks_retested": true,
+      "entire_default_gate_repeated": false
+    },
+    "changed_workflows": {
+      "passed": 16,
+      "total": 16
+    },
+    "additional_full_and_model_checks": {
+      "passed": 7,
+      "total": 7
+    },
+    "transport_and_spreadsheet_checks": {
+      "passed": 5,
+      "total": 5
+    },
+    "release_archive_tests": {
+      "passed": 9,
+      "total": 9
+    },
+    "rust_full_suite_before_final_review_fixes": "passed; final affected API regressions recorded separately",
+    "compiled_host_http_restart_isolation": "passed",
+    "browser": "registered source and issue, persisted after host restart, switched en/zh, opened scoped Agent, completed read-only task, downloaded real ZIP",
+    "downloaded_project_zip": "CRC passed; source snapshot, manifest and audit present; unresolved issue remains draft",
+    "model_mode_dev_v2": {
+      "passed": 12,
+      "total": 12,
+      "comparable_to_20260926": false
+    },
+    "sealed_panel_lists": {
+      "exact": 5,
+      "total": 6,
+      "safe": 6,
+      "wrong_plan": 0,
+      "floor_passed": true,
+      "fixtures_or_floor_modified": false,
+      "remaining_case": "pl01 requires upright-only handling; preserved original success oracle does not match safe refusal. No usable plan is claimed."
+    },
+    "final_project_api_regressions": {
+      "passed": 12,
+      "total": 12
+    },
+    "final_project_ui_regressions": {
+      "passed": 14,
+      "total": 14
+    },
+    "packaged_same_machine_http": "passed after adding missing gateway/idempotency.py to release allowlist; existing local Python environment reused",
+    "docker_assertion_contract": "updated against actual local HTTP JSON and bash -n; full Linux container run delegated to CI",
+    "fresh_venv_package_http": {
+      "passed": true,
+      "python": "3.11.5",
+      "requirements": [
+        "requirements.txt",
+        "requirements-documents.txt"
+      ],
+      "optional_packages_installed": false,
+      "cross_computer": false,
+      "scope": "Extracted preview .2 package; real startup/login/restart/isolation/session handoff/document copies; original hashes preserved"
+    },
+    "integrated_runtime_http": {
+      "passed": true,
+      "environment": "fresh core/document venv",
+      "synthetic": true,
+      "real_provider_calls": false,
+      "source_quotes_receipt": "verified"
+    },
+    "running_crash_recovery": {
+      "passed": true,
+      "platform": "Windows",
+      "before": "running",
+      "after": "interrupted",
+      "model_calls": 1,
+      "automatic_replay": false,
+      "originals_and_published_copies_unchanged": true,
+      "scope": "Forced termination of owned process tree while a read-only model request is pending; not a power-loss or mid-write test"
+    },
+    "rust_integrated_suite": {
+      "passed": 276,
+      "failed": 0,
+      "suites": 34
+    },
+    "preflight": {
+      "passed": 11,
+      "total": 12,
+      "missing_optional_nonblocking": true,
+      "check_writes_state": false,
+      "skipped": 1,
+      "platform": "Windows; POSIX TIME_WAIT test skipped here"
+    },
+    "launcher": {
+      "passed": 12,
+      "total": 12,
+      "source_base_commit": "e199ab77b890cd8fc91f31e9a4cb1c3f97a07eeb",
+      "source_state": "working-tree ASR launcher patch; not clean e199ab7"
+    },
+    "acceptance_http_client": {
+      "passed": 27,
+      "total": 27,
+      "live_provider_calls": false
+    },
+    "source_quote_receipts": {
+      "integration_passed": 5,
+      "unit_passed": 3,
+      "source_hash_changes_detected": true,
+      "all_model_claims_verified": false
+    },
+    "human_approval_current_contract": {
+      "passed": 21,
+      "total": 21,
+      "original_transport_instructions_preserved": true
+    },
+    "office_visual_attempt": {
+      "passed": false,
+      "reason": "Bundled rendering environment has no LibreOffice executable; structural checks are not visual or recalculation acceptance"
+    },
+    "final_source_ui_and_i18n": {
+      "passed": 46,
+      "total": 46,
+      "agent_ui": 42,
+      "i18n": 4
+    },
+    "source_receipt_browser": {
+      "passed": true,
+      "synthetic": true,
+      "real_provider_calls": false,
+      "actions": [
+        "submitted task in browser",
+        "received two actual new copies",
+        "four source quotation cards",
+        "switched en/zh without changing source text",
+        "reloaded and replayed persisted task",
+        "human-readable page/paragraph/cell locations"
+      ],
+      "screenshot": "source-receipt-en.png",
+      "task_id_prefix": "4765405fffd3"
+    },
+    "final_release_helper_inclusion": {
+      "passed": 9,
+      "total": 9,
+      "shared_legacy_and_unified_allowlists": true
+    },
+    "live_provider_attempt": {
+      "passed": false,
+      "provider_host": "api.deepseek.com",
+      "configured_model": "deepseek-flash",
+      "http_status": 401,
+      "attempts": 1,
+      "model_responses": 0,
+      "artifacts": 0,
+      "original_hashes_unchanged": true,
+      "billing_verified": false,
+      "usage_measurement": "estimated input only; no provider usage receipt",
+      "reason": "authentication failed; update user-managed API credentials before repeating live acceptance"
+    },
+    "integrated_default_gate": {
+      "passed": 186,
+      "total": 187,
+      "failed_group": "agent-ui",
+      "cause": "Full run reached new source-card reset regression while that test was still being corrected",
+      "final_affected_group_retested": true,
+      "final_agent_ui_passed": 42,
+      "entire_default_gate_repeated_again": false
+    },
+    "final_integrated_targeted_gate": {
+      "passed": 6,
+      "total": 6,
+      "checks": [
+        "agent-ui",
+        "product-i18n",
+        "unified-acceptance-oracle",
+        "unified-launcher",
+        "workbench-preflight",
+        "human-approval"
+      ]
+    },
+    "github_default_gate": {
+      "passed": 187,
+      "total": 187,
+      "source_commit": "f3352818f35e9183d821a7a5dd574e7499c44d25",
+      "scope": "smoke job and full default registry passed; separate Linux runtime restart preflight false-positive was still failing at this commit",
+      "job_api": "https://api.github.com/repos/LUOaini1213/civil-buddy-sme/actions/jobs/109802284407"
+    },
+    "posix_restart_regression": {
+      "platform": "WSL Ubuntu 24.04",
+      "passed": 3,
+      "total": 3,
+      "old_implementation_reproduced_failure": true,
+      "scope": "real accepted TCP connection leaves TIME_WAIT; restart allowed, active listeners refused; Windows exclusive bind retained"
+    },
+    "github_ci_e199ab7": {
+      "passed": true,
+      "source_commit": "e199ab77b890cd8fc91f31e9a4cb1c3f97a07eeb",
+      "run_id": 36691392773,
+      "url": "https://github.com/LUOaini1213/civil-buddy-sme/actions/runs/36691392773",
+      "jobs_passed": 4,
+      "jobs_total": 4,
+      "smoke_passed": 187,
+      "smoke_total": 187,
+      "scope": "Clean e199ab7; predates and does not validate the subsequent working-tree ASR follow-up"
+    },
+    "local_asr_http": {
+      "passed": true,
+      "report": "work/practical-asr-acceptance-20260930/report.json (local evidence outside repository)",
+      "source_base_commit": "e199ab77b890cd8fc91f31e9a4cb1c3f97a07eeb",
+      "source_state": "working-tree ASR launcher patch atop e199ab7; not clean e199ab7 or an already updated release package",
+      "binary_sha256": "9ea59abe85ece661425ba75d3c8eb24578cc5c1828d4f019fbf679427cc63351",
+      "platform": "Windows",
+      "synthetic_audio": true,
+      "real_microphone": false,
+      "field_accuracy_validated": false,
+      "real_provider_calls": false,
+      "model": "faster-whisper small",
+      "packages": {
+        "faster-whisper": "1.2.1",
+        "ctranslate2": "4.8.2",
+        "av": "18.1.0"
+      },
+      "model_preparation": {
+        "initial_state": "missing",
+        "before_prepare_http_status": 409,
+        "explicit_prepare": true,
+        "downloaded_public_model": true,
+        "download_used_network": true,
+        "ready_seconds": 48.594
+      },
+      "successful_http_transcriptions": 3,
+      "clips": [
+        {
+          "file": "L01_huihui.webm",
+          "source_sha256": "f5a1444076b61ee7e92c9f0e413bd0a1df9697fcb799ea2018fafe17a6ceb8c7",
+          "language": "zh",
+          "audio_seconds": 6.37,
+          "http_status": 200,
+          "http_seconds": 5.14,
+          "transcript": "请帮我核对这份相单,看看能不能装进一个40尺高柜。",
+          "observed_error": {
+            "expected_term": "箱单",
+            "transcribed_term": "相单"
+          }
+        },
+        {
+          "file": "L19_yaoyao.webm",
+          "source_sha256": "1e22ad53e50e53a008eeb3925eb68d95cfcdee472bb7ba4754802744f808b4f4",
+          "language": "zh",
+          "audio_seconds": 4.24,
+          "http_status": 200,
+          "http_seconds": 4.782,
+          "transcript": "哪些属于危大工程,需要编专项方案。"
+        },
+        {
+          "file": "english-synthetic.wav",
+          "source_sha256": "1635f115ac1104fc682451a2851ac957d3719f509bb94b4933c1bb589faeac74",
+          "language": "en",
+          "audio_seconds": 4.77,
+          "http_status": 200,
+          "http_seconds": 4.078,
+          "transcript": "Please compare the tender requirements and prepare an editable draft for review."
+        }
+      ],
+      "cancellation": {
+        "status": "cancelled",
+        "process_reaped": true,
+        "transcription_http_status": 409,
+        "active_after": false
+      },
+      "source_preservation": {
+        "audio_hashes_unchanged": true,
+        "workspace_files_unchanged": true,
+        "agent_turns_before": 0,
+        "agent_turns_after": 0,
+        "state_audio_files": []
+      },
+      "launcher_exit_code": 0,
+      "scope": "Actual local HTTP decoding/transcription/cancellation with three synthetic clips; not a speech-accuracy benchmark, field recording, browser microphone test or cloud LLM acceptance"
+    },
+    "voice_error_i18n_followup": {
+      "source_base_commit": "e199ab77b890cd8fc91f31e9a4cb1c3f97a07eeb",
+      "source_state": "working-tree voice UI localization follow-up; not clean e199ab7",
+      "voice_ui_passed": 23,
+      "voice_ui_total": 23,
+      "i18n_passed": 4,
+      "i18n_total": 4,
+      "scope": "Known English error details, unknown backend text and original Chinese transcript preservation, timeout and cancellation"
+    },
+    "local_provider_configuration": {
+      "provider_host": "api.deepseek.com",
+      "official_models_http_status": 200,
+      "available_models": [
+        "deepseek-flash",
+        "deepseek-v4-pro"
+      ],
+      "configured_model": "deepseek-flash",
+      "credentials_source": "existing user-selected local project configuration; no secret copied into repository or package",
+      "cause_of_previous_401": "startup inherited a different key from the existing local project configuration"
+    },
+    "first_authenticated_live_workflow": {
+      "passed": false,
+      "live_provider_verified": true,
+      "synthetic": true,
+      "provider_host": "api.deepseek.com",
+      "model": "deepseek-flash",
+      "model_calls": 9,
+      "provider_reported_input_tokens": 82496,
+      "provider_reported_output_tokens": 2512,
+      "billing_verified": false,
+      "artifacts": 0,
+      "originals_unchanged": true,
+      "failure": "repeated document preview provenance refusals, then shared budget refusal",
+      "diagnostic_boundary": "events confirm repeated missing numeric evidence; raw model arguments were not persisted, so their exact malformed shape is unknown",
+      "report": "work/practical-live-localkey-20260930/report/report.json outside the repository"
+    },
+    "isolated_full_preview_environment": {
+      "requirements": [
+        "requirements.txt",
+        "requirements-documents.txt",
+        "requirements-asr.txt",
+        "requirements-cad.txt",
+        "requirements-engineering.txt"
+      ],
+      "import_groups_passed": 7,
+      "pip_check": "No broken requirements found",
+      "asr_cached_model": "small",
+      "original_environment_modified": false,
+      "java_runtime_available": false,
+      "unsupported_without_java": [
+        "mpp",
+        "xer",
+        "pmxml"
+      ],
+      "scope": "Package/native import and cache checks; does not establish engineering correctness or field speech quality"
+    },
+    "document_tool_contract_regressions": {
+      "product_document_gates": 17,
+      "source_receipts": 5,
+      "passed": 22,
+      "total": 22,
+      "source_fixture_oracle_and_budget_unchanged": true
+    },
+    "authenticated_live_workflow_after_contract_fix": {
+      "passed": true,
+      "live_provider_verified": true,
+      "synthetic": true,
+      "provider_host": "api.deepseek.com",
+      "model": "deepseek-flash",
+      "model_calls": 5,
+      "provider_reported_tokens": {
+        "input_tokens": 46294,
+        "output_tokens": 1760,
+        "model_calls": 5
+      },
+      "elapsed_ms": 15623,
+      "billing_verified": false,
+      "artifacts": 2,
+      "originals_unchanged": true,
+      "output_checks": {
+        "originals_unchanged": true,
+        "docx_artifact_exists": true,
+        "docx_changed_and_preserved": true,
+        "xlsx_artifact_exists": true,
+        "xlsx_changed_and_preserved": true
+      },
+      "untouched_parts_and_target_styles_preserved": true,
+      "rendering": "not_performed",
+      "formula_recalculation": "not_performed",
+      "binary_sha256": "f42c7a1318fa75332c6b5fc82397b11e681c95b45d43fae989846f6f98247df0",
+      "report": "work/practical-live-contractfix-20260930/report/report.json outside repository",
+      "scope": "One synthetic cross-document workflow, not general reliability or real project acceptance"
+    },
+    "restarted_user_preview": {
+      "port": 18789,
+      "model": "deepseek-flash",
+      "credential_source": "existing selected local file read only at startup",
+      "asr_ready": true,
+      "asr_synthetic_http": 200,
+      "python_environment": "task-owned isolated full preview environment",
+      "microphone_used": false
+    },
+    "agent_history_recovery": {
+      "source_base_commit": "9a6fd62",
+      "source_state": "working-tree persisted Agent history recovery follow-up; not clean 9a6fd62",
+      "implementation": {
+        "server_session_discovery": true,
+        "local_unsent_drafts_preserved": true,
+        "session_pagination": {
+          "default_limit": 50,
+          "maximum_limit": 100,
+          "cursor": "scope-bound keyset"
+        },
+        "task_pagination": {
+          "default_limit": 100,
+          "maximum_limit": 100,
+          "frontend_limit": 50,
+          "cursor": "scope-bound keyset with stored boundary validation",
+          "existing_turns_field_preserved": true
+        },
+        "actor_workspace_and_session_scope_checked": true,
+        "late_response_scope_checked": true,
+        "terminal_events_drained_through_last_sequence": true,
+        "event_no_progress_guard": true,
+        "older_task_history_position_preserved": true,
+        "model_autostart": false,
+        "tool_replay": false,
+        "saved_write_permissions_restored": false
+      },
+      "offline_backend": {
+        "command": "cargo test --manifest-path workbench/Cargo.toml --test product_sessions --test product_identity --test runtime_core",
+        "product_sessions": 5,
+        "product_identity": 17,
+        "runtime_core": 13,
+        "passed": 35,
+        "total": 35,
+        "pagination_fixture_sessions": 105,
+        "pagination_fixture_tasks": 105,
+        "scope": "Persisted state reopen, tied-timestamp pagination, actor/workspace/session isolation, invalid cursors and no event replay during history reads"
+      },
+      "offline_frontend": {
+        "agent_ui_passed": 50,
+        "agent_ui_total": 50,
+        "i18n_previously_passed": 4,
+        "i18n_previous_total": 4,
+        "scope": "Server session and task pagination, response scope checks, terminal history beyond 200 events, no-progress handling and older-task history position preservation"
+      },
+      "same_machine_fresh_origin_browser": {
+        "passed": true,
+        "browser_origin": "http://127.0.0.1:18794",
+        "fresh_origin_no_previous_browser_history": true,
+        "browser_discovered_saved_session": true,
+        "browser_opened_saved_task": true,
+        "browser_bilingual_verified": true,
+        "original_filenames_and_quotations_preserved": true,
+        "turn_count_before": 1,
+        "turn_count_after": 1,
+        "same_turn_ids": true,
+        "restored_events": 43,
+        "restored_source_quotations": 4,
+        "downloaded_artifacts": 2,
+        "downloaded_artifact_hashes_match": true,
+        "existing_model_calls_before": 5,
+        "existing_model_calls_after": 5,
+        "new_model_requests": 0,
+        "cross_computer": false,
+        "browser_history_over_200_events_tested": false,
+        "report": "work/practical-history-recovery-20260930/report.json outside the repository",
+        "scope": "Same machine and existing state, fresh browser origin; reuse of one persisted synthetic live-model task without a new model request"
+      }
+    },
+    "same_machine_upgrade_restore": {
+      "passed": true,
+      "same_machine": true,
+      "cross_computer": false,
+      "new_program_version": "0.5.0-practical-preview.20260930.8",
+      "new_program_directory": true,
+      "complete_offline_backup": true,
+      "offline_backup_hashes_match": true,
+      "same_path_restore_hashes_match": true,
+      "prior_directories_retained": true,
+      "original_absolute_workspace_and_state_roots_reused": true,
+      "identity_preserved": true,
+      "turn_and_usage_unchanged": true,
+      "session_discovered": true,
+      "artifact_downloads_byte_identical": true,
+      "artifacts": [
+        "report-draft-ae4ebe12ca5d.docx",
+        "quantities-draft-bf1c35023039.xlsx"
+      ],
+      "originals_unchanged": true,
+      "new_model_requests": 0,
+      "host_listener_stopped": true,
+      "report": "work/practical-upgrade-restore-20260930/report.json outside the repository",
+      "scope": "Complete offline backup and restore to the same absolute workspace and state paths, followed by a new program-directory launch on the same computer; not workspace relocation or cross-computer acceptance"
+    },
+    "office_application_followup": {
+      "synthetic": true,
+      "existing_live_model_artifacts_reused": true,
+      "product_tool_integration": false,
+      "new_model_requests": 0,
+      "word": {
+        "version": "16.0",
+        "passed": true,
+        "source_opened_readonly": true,
+        "repaginated": true,
+        "pdf": "word-rendered.pdf",
+        "pages": 1,
+        "pdf_renderer": "Microsoft Word 16.0 ExportAsFixedFormat",
+        "png_renderer": "Poppler pdftoppm 150 dpi",
+        "visually_reviewed_pages": [
+          1
+        ],
+        "visual_review_passed": true,
+        "pdf_text_verified_against_source_paragraphs": true,
+        "visual_scope": "Simple synthetic one-page fixture; no clipping, overlap, missing text or text errors observed. Not complex real-project layout coverage."
+      },
+      "excel": {
+        "version": "16.0",
+        "passed": true,
+        "recalculation_method": "CalculateFullRebuild",
+        "save_method": "SaveAs to a separate copy",
+        "output": "excel-recalculated.xlsx",
+        "formula": "=B2*2",
+        "B2": 6,
+        "D2": 12.0,
+        "saved_formula_cache_verified": true,
+        "cache_verification": "openpyxl data_only"
+      },
+      "registered_artifact_hashes_unchanged": true,
+      "source_originals_unchanged": true,
+      "outputs": {
+        "word-rendered.pdf": "8c6ef60fd6d4187659b9285347fba382e07856e8d3e489b70486cedd587d1632",
+        "excel-recalculated.xlsx": "d87b7dabce5ea7aac18de44f57d2b467f104a7e8ee1460a55c2cdedcf5f8ca61"
+      },
+      "report": "work/practical-office-acceptance-20260930/report.json outside the repository",
+      "scope": "Actual Microsoft Word/Excel checks on separate QA copies of existing simple synthetic live-model outputs; not product Office integration or complex real-project document acceptance"
+    },
+    "live_readonly_subagents": {
+      "passed": true,
+      "synthetic": true,
+      "real_provider_calls": true,
+      "source_commit": "324ca3d81f06c3734167913f181eb6131d20ea37",
+      "binary_sha256": "d8003abe5df1fc3f97d0dd3519ebb41fad8acddfd9ef5622de0416fa6dd16ed9",
+      "model": "deepseek-flash",
+      "provider_host": "api.deepseek.com",
+      "sandbox": "read-only",
+      "selected_files": [
+        "requirements.pdf"
+      ],
+      "children": [
+        {
+          "role": "evidence",
+          "model_calls": 3,
+          "tools": [
+            "search_sources",
+            "list_files",
+            "read_file",
+            "verify_sources"
+          ],
+          "checks": {
+            "completed": true,
+            "real_model_receipts": true,
+            "source_read_receipts": true,
+            "retrieved_quote_matches_independent_pdf": true,
+            "quote_verification": true,
+            "findings_include_requirement": true
+          },
+          "passed": true
+        },
+        {
+          "role": "review",
+          "model_calls": 4,
+          "tools": [
+            "search_sources",
+            "list_files",
+            "read_file",
+            "verify_sources"
+          ],
+          "checks": {
+            "completed": true,
+            "real_model_receipts": true,
+            "source_read_receipts": true,
+            "retrieved_quote_matches_independent_pdf": true,
+            "quote_verification": true,
+            "findings_include_requirement": true
+          },
+          "passed": true
+        }
+      ],
+      "parent_completed_after_children": true,
+      "partial": false,
+      "tool_errors": 0,
+      "model_responses": 9,
+      "elapsed_ms": 15905,
+      "usage": {
+        "provider_reported": {
+          "input_tokens": 23944,
+          "output_tokens": 3579,
+          "model_calls": 9
+        },
+        "estimated": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "model_calls": 0
+        },
+        "unknown": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "model_calls": 0
+        }
+      },
+      "task_count": 3,
+      "shared_budget_exhausted": false,
+      "reservations_at_completion": 0,
+      "new_artifacts": 0,
+      "original_hashes_unchanged": true,
+      "independent_pdf_text_verified": true,
+      "events": 39,
+      "jev_events": 0,
+      "verification_boundary": "Events retain child search hits and verification results but not verify_sources arguments; final host receipts are deduplicated without child attribution. This single selected source is also checked by independent PDF extraction.",
+      "provider_reported_is_billing_verified": false,
+      "scope": "One selected single-page synthetic PDF; two real-model read-only evidence/review children and parent synthesis. Not broad real-project or Jev-service acceptance.",
+      "report": "work/practical-live-subagents-20260930/report.json outside the repository",
+      "independent_record_review": {
+        "passed": true,
+        "checks_passed": 39,
+        "new_model_requests": 0,
+        "recorded_evidence_sha256": {
+          "report.json": "8521a3e5d81abcb0bd6e74db6e91e8325f060519274d484b429ed1c7c3980eed",
+          "events.jsonl": "fee1840f42a88f7627362e14ea1453d09d89b0beaa43ec2c05b0eae52b450107"
+        },
+        "report": "work/practical-live-subagents-20260930/independent-audit.json outside the repository",
+        "replay_script": "work/practical-live-subagents-20260930/verify_recorded_evidence.py outside the repository"
+      }
+    },
+    "agent_readability_followup": {
+      "agent_ui_passed": 60,
+      "agent_ui_total": 60,
+      "i18n_passed": 4,
+      "i18n_total": 4,
+      "release_tests_passed": 9,
+      "release_tests_total": 9,
+      "browser": {
+        "passed": true,
+        "synthetic_existing_live_task": true,
+        "new_model_requests": 0,
+        "turn_count_before": 1,
+        "turn_count_after": 1,
+        "model_calls_before": 9,
+        "model_calls_after": 9,
+        "events": 39,
+        "table_count": 1,
+        "heading_count": 5,
+        "original_quote_preserved": true,
+        "json_code_quotes_preserved": true,
+        "both_child_roles_and_completed_states_visible": true,
+        "bilingual_ui_verified": true,
+        "language_change_preserved_original_reply_and_quotes": true,
+        "manual_workspace_switch_clears_stale_query": true,
+        "reload_stays_in_selected_workspace": true,
+        "mobile_viewport_width": 390,
+        "mobile_document_client_width": 375,
+        "mobile_document_scroll_width": 375,
+        "code_blocks_scroll_locally": true,
+        "viewport_reset": true,
+        "screenshot": "deliverables/practical-workbench-20260930/agent-subagents-readable-v10.png",
+        "source_files_sha256": {
+          "demo/static/agent.js": "662223ec0e69397bbc1a36b35ae98c7a4c0a60e5e5c13539d10d7821980e8364",
+          "demo/static/agent.css": "3ce77f39b9a9d8ec9390da0bf5c985ae4e0433fc3c0deee36148c6b7b3521dc9",
+          "demo/static/agent.html": "a872329b8467f180f9e2a6d0cb708073da1c32b1b6ee1ac156fa49901cc68b95",
+          "demo/static/modules/agent-markdown.js": "8e34ac28e42955d860b3f4a0f2d05b5043eef3a1a444470cd9696db942d33906",
+          "demo/static/i18n-agent.js": "1950e710e4741068f2fe3bd8c624f5abc0a8c15f32ed2cc1fa70f023cf10db13"
+        }
+      },
+      "report": "work/practical-live-subagents-20260930/browser-review.json outside the repository",
+      "scope": "Existing real-model synthetic task replay, safe DOM rendering and child labels; no further model requests and no real-project acceptance"
+    }
+  },
+  "remaining_acceptance": [
+    "real project revision and issue workflow",
+    "complex real-project Word pagination and Excel formula recalculation",
+    "second Windows computer install and restore",
+    "real microphone and field speech accuracy, including terminology, accents and noise"
+  ]
+}

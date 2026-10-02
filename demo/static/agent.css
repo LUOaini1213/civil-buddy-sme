@@ -97,6 +97,27 @@ summary { cursor: pointer; min-height: 28px; }
 .context-panel p { font-size: var(--cb-fs-xs); margin-bottom: 0; }
 .status-tag { font-size: var(--cb-fs-xs); border: 1px solid var(--cb-line); border-radius: var(--cb-radius-full); padding: 3px 10px; color: var(--cb-text-muted); white-space: nowrap; }
 .reply { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.85; }
+.agent-markdown { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
+.agent-markdown > :first-child { margin-top: 0; }
+.agent-markdown > :last-child { margin-bottom: 0; }
+.agent-markdown h3, .agent-markdown h4, .agent-markdown h5, .agent-markdown h6 { margin: 1.25em 0 .5em; line-height: 1.5; }
+.agent-markdown h3 { font-size: var(--cb-fs-lg); }
+.agent-markdown h4, .agent-markdown h5, .agent-markdown h6 { font-size: var(--cb-fs-md); }
+.agent-markdown p { margin: .65em 0; color: inherit; }
+.agent-markdown ul, .agent-markdown ol { padding-left: 1.6em; }
+.agent-markdown li { padding: 0; border: 0; margin: .3em 0; }
+.agent-markdown blockquote { margin: .8em 0; padding: .2em 1em; border-left: 3px solid var(--cb-line); color: var(--cb-text-muted); }
+.agent-markdown code { font-family: var(--cb-mono); font-size: .9em; background: var(--cb-panel-soft); border-radius: 4px; padding: .12em .3em; }
+.agent-markdown pre { max-height: 400px; white-space: pre; overflow: auto; padding: 14px; border: 1px solid var(--cb-line); border-radius: var(--cb-radius-md); background: var(--cb-panel-soft); }
+.agent-markdown pre code { background: transparent; padding: 0; font-size: inherit; }
+.agent-table-scroll { max-width: 100%; overflow-x: auto; margin: .8em 0; }
+.agent-markdown table { width: 100%; border-collapse: collapse; font-size: var(--cb-fs-sm); }
+.agent-markdown th, .agent-markdown td { padding: 8px 10px; border: 1px solid var(--cb-line); text-align: left; vertical-align: top; min-width: 6em; }
+.agent-markdown th { background: var(--cb-panel-soft); font-weight: 600; }
+.subtask-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: var(--cb-fs-xs); }
+.subtask-meta .status-tag { font-size: inherit; }
+.subtask-findings { margin: 8px 0; }
+.subtask-findings > .reply { margin-top: 10px; font-size: var(--cb-fs-sm); }
 .artifact-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 14px; }
 .artifact-list:empty { margin-top: 0; }
 .artifact { min-width: 0; padding: 14px; border: 1px solid var(--cb-line); border-radius: var(--cb-radius-md); background: var(--cb-panel-soft); }
