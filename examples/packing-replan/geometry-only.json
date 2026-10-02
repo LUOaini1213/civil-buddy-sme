@@ -1,0 +1,13 @@
+{
+  "schema": "packing_replan.v1",
+  "container_type": "40HQ",
+  "max_containers": 6,
+  "clearance_mm": 30,
+  "max_box_net_kg": 1500,
+  "layout_policy": {"orientation": "fixed", "stacking": "floor_only"},
+  "materials": [
+    {"id": "SYN-A", "name": "Synthetic short steel sections", "length_mm": 1200, "width_mm": 120, "height_mm": 100, "weight_kg": 100, "quantity": 18},
+    {"id": "SYN-B", "name": "Synthetic medium steel sections", "length_mm": 2200, "width_mm": 160, "height_mm": 120, "weight_kg": 180, "quantity": 15},
+    {"id": "SYN-C", "name": "Synthetic long steel sections", "length_mm": 3400, "width_mm": 180, "height_mm": 140, "weight_kg": 240, "quantity": 12}
+  ]
+}

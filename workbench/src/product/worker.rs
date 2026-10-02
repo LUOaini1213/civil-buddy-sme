@@ -64,7 +64,7 @@ impl WorkerHost {
                 "capabilities" | "inspect" | "read" | "preview" | "apply" | "validate" | "inspect_readiness"
             ),
             "packing_assistant.engineering.worker" => {
-                matches!(operation, "frame" | "section" | "ifc_check" | "ifc_diff")
+                matches!(operation, "frame" | "section" | "ifc_check" | "ifc_diff" | "packing_replan")
             }
             "packing_assistant.retrieval.worker" => {
                 matches!(operation, "index" | "search" | "verify")
@@ -91,6 +91,10 @@ impl WorkerHost {
                 let source = source.as_str().ok_or("retrieval source must be a path")?;
                 workspace.resolve_read(source).map_err(|e| e.to_string())?;
             }
+        }
+        if module == "packing_assistant.engineering.worker" && operation == "packing_replan" {
+            let source = request["payload"]["source"].as_str().ok_or("packing source is required")?;
+            workspace.resolve_read(source).map_err(|e| e.to_string())?;
         }
         workspace
             .resolve_write(".tmp/worker-scope-check")

@@ -61,6 +61,7 @@ CHECKS = (
     Check("document-readiness", ("scripts/test_document_readiness.py",)),
     Check("source-retrieval", ("scripts/test_source_retrieval.py",)),
     Check("host-worker", ("scripts/test_host_worker.py",)),
+    Check("packing-replan-worker", ("scripts/test_packing_replan_worker.py",), timeout=300),
     Check("unified-acceptance-oracle", ("scripts/test_unified_acceptance.py",)),
     Check("unified-launcher", ("scripts/test_unified_launcher.py",)),
     Check("workbench-preflight", ("scripts/test_workbench_preflight.py",)),

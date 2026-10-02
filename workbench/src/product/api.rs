@@ -1,6 +1,7 @@
 use super::{
     agent,
     engineering::{EngineeringHost, EngineeringKind, EngineeringSelection},
+    packing::{self, PackingSelection},
     worker::WorkerHost,
 };
 use crate::{
@@ -173,7 +174,7 @@ async fn capabilities(State(st): State<Arc<ProductState>>) -> Json<Value> {
         json!({"available":true,"models":{"configured":!cfg.api_key.is_empty(),"model":cfg.model,"provider_host":provider_host(&cfg.base_url)},
         "modes":["steps","model"],"sandbox":["read-only","workspace-write"],
         "sandbox_controls":{"policy":true,"os_enforced":null,"network_confined":null,"reads_confined":null,"probe":"workspace_required"},
-        "features":{"context":true,"subagents":true,"cancel":true,"documents":true,"retrieval":true,"voice":false,"session_discovery":true},
+        "features":{"context":true,"subagents":true,"cancel":true,"documents":true,"retrieval":true,"voice":false,"session_discovery":true,"packing_replan":true},
         "identity":st.auth.capabilities(),"unavailability_reason":null}),
     )
 }
@@ -399,6 +400,8 @@ pub struct TurnRequest {
     #[serde(default)]
     pub engineering: Vec<EngineeringSelection>,
     #[serde(default)]
+    pub packing_sources: Vec<PackingSelection>,
+    #[serde(default)]
     pub expert_id: String,
     #[serde(default)]
     pub risk_confirmation: String,
@@ -450,6 +453,7 @@ async fn start(
         || req.message.len() > 48_000
         || req.files.len() > 24
         || req.engineering.len() > 4
+        || req.packing_sources.len() > packing::MAX_SOURCES
         || req.risk_confirmation.chars().count() > 80
         || !matches!(req.mode.as_str(), "model" | "steps")
         || !matches!(req.locale.as_str(), "zh-CN" | "en")
@@ -475,6 +479,7 @@ async fn start(
     for file in &req.files {
         ws.resolve_read(file).map_err(bad)?;
     }
+    packing::bind_selections(&ws, &req.files, &mut req.packing_sources).map_err(bad)?;
     if req.mode == "model" && crate::config::llm_config().api_key.is_empty() {
         return Err(bad("请先配置模型 API Key，或使用资料检查模式"));
     }

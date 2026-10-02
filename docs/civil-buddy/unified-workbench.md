@@ -42,7 +42,7 @@ The target model is **DeepSeek V4.1 Flash**, requested as `deepseek-flash`. The 
 
 DeepSeek Chat Completions requests explicitly disable thinking for the initial tool-loop baseline, bound output tokens, preserve complete tool interactions, and record provider usage. See the [official DeepSeek API](https://api-docs.deepseek.com/api/create-chat-completion/). An explicit existing model setting is preserved.
 
-Jev uses the [TypeSafe System One API](https://docs.typesafe.ai/introduction/quickstart). The host defines candidates/questions from selected evidence. Off makes no Jev calls; shadow records validated proposals; assist may schedule an additional read-only review when the fixed candidate and confidence gate pass. The initial 0.9 confidence threshold is an unevaluated product setting, not a claimed accuracy guarantee. Jev cannot permit a write, change solver numbers or approve an engineering conclusion. Engineering replan adapters beyond document review remain on the implementation checklist.
+Jev uses the [TypeSafe System One API](https://docs.typesafe.ai/introduction/quickstart). The host defines candidates/questions from selected evidence. Off makes no Jev calls; shadow records validated proposals. For document evidence, assist may schedule an additional read-only review when the fixed candidate and confidence gate pass. The initial 0.9 confidence threshold is an unevaluated product setting, not a claimed accuracy guarantee. Jev cannot permit a write, change solver numbers or approve an engineering conclusion. The packing replan adapter below records engineering proposals in shadow mode even when assist is configured; changing a packing strategy based on Jev remains disabled pending calibration.
 
 ## Execution guarantees and limits
 
@@ -116,6 +116,22 @@ All seven workbench pages share `demo/static/theme.css`, the persisted appearanc
 The navigation and home card expose `/packing`. The unified domain service reuses the existing packing UI and an explicit subset of gateway endpoints for uploads, deterministic packing, human confirmation, SSE progress, run recovery and Excel exports. The Rust bridge streams SSE immediately and uploads validated material-file bytes rather than forwarding a filesystem path. Packing state, exports and checkpoint databases live under the selected state root. Generic gateway agents and MCP dispatch are not exposed by this adapter; model credentials remain in the Rust host.
 
 The standalone gateway continues to support its original routes. In unified mode the page uses SSE and HTTP reload recovery; the supplemental standalone WebSocket observer is not proxied. The default packing engine is the local Python engine; Java is optional. Model-free parser → confirmation → solve → Excel checks and bounded Rust proxy/upload regressions pass. A browser check of the built-in synthetic full-load example produced 15 boxes and stopped at the confirmation gate.
+
+## Source-bound packing replan
+
+In the Agent page, select a `packing_replan.v1` JSON file in the source list and explicitly choose it under **Packing replan review**. **Check sources** mode runs the fixed calculation without a language model; model mode exposes `packing_replan` with only a selection index. Ordinary selected JSON documents do not automatically become packing inputs. The optional selection is cleared when submitting a task or switching its context.
+
+The [synthetic example and field guide](../../examples/packing-replan/README.md) are included in the Windows package. Copy the example to a test workspace before opening it; its dimensions and limits are examples, not defaults for a real shipment.
+
+This first adapter requires an explicit container type, maximum container count, clearance, box net-mass limit and complete material dimensions, quantities and weights. It does not infer those constraints from an arbitrary spreadsheet or free-form request. Unsupported transport conditions and missing inputs stop for human clarification. The original source is immutable; its SHA-256 is captured before task creation and checked around computation and any Jev wait.
+
+The fixed worker reuses the existing boxing/loading tools, computes the original baseline, and tries no more than two distinct fixed-order search candidates. Physical constraints cannot be relaxed by a model, Jev or the old critic's option deltas. A candidate must pass layout and conservation checks and improve the actual comparison objective before it replaces the baseline. The UI shows baseline and retained values separately; a layout fit never constitutes shipment release or a structural safety verdict. Repeated calls for the same source in one turn reuse the recorded calculation rather than repeating the search.
+
+Jev sees only host-constructed, already-calculated candidate choices. Off performs no Jev request. Shadow records a validated suggestion without changing the result; missing credentials, invalid responses, timeouts and unavailable decision budget leave the deterministic path unchanged. The source hash and phase identify the decision independently of document-evidence review. This integration does not establish live Jev service reliability or confidence calibration.
+
+Explicitly selected packing sources must each produce a successful calculation receipt before the model turn can report completion. Missing calls, failed inputs and infeasible results keep the task partial even if the model claims success. Unsupported transport-field aliases are rejected with instructions to preserve their requirements for human review; they are never silently discarded. Packaging structure issues are reported separately from geometric fit.
+
+The [2026-10-03 acceptance record](acceptance/2026-10-03-packing-replan.json) records the bounded synthetic example, independent geometry checks and current validation limits. Its unchanged five-container result is not an efficiency improvement or a shipping authorization.
 
 ## Deliverable checks
 

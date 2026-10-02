@@ -95,6 +95,76 @@ function harness(route = () => undefined, saved = storage()) {
   return h;
 }
 
+test("Agent packing: only explicitly selected JSON is authorized for one turn", async (t) => {
+  const h = harness((url, init) => {
+    if (url === "/api/agent/capabilities" || url === "/api/agent/workspaces") return response(url.endsWith("workspaces")
+      ? { workspace: { id: "workspace-1", root: "C:/engineering" }, capabilities: { ...caps, features: { ...caps.features, packing_replan: true } } }
+      : { ...caps, features: { ...caps.features, packing_replan: true } });
+    if (url.startsWith("/api/agent/files?")) return response({ files: [{ path: "箱单.json" }, { path: "约束.JSON" }, { path: "资料.xlsx" }] });
+    if (url === "/api/agent/turns" && init) return response({ turn_id: "packing-turn", session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/packing-turn/events?")) return response({ events: [], turn: { status: "completed", result: { reply: "仅做核对" } } });
+  });
+  t.after(h.close); installLanguage(h); await h.ready();
+  const select = h.$("agentPackingSource");
+  assert.equal(select.options.length, 1);
+  h.selectFirst(); assert.equal(select.options.length, 2); assert.equal(select.value, "");
+  select.value = "箱单.json";
+  h.win.CBI18n.setLocale("en"); assert.equal(select.value, "箱单.json");
+  assert.equal(select.options[0].textContent, "No packing replan this turn");
+  h.$("agentMessage").value = "核对原件的装载搜索结果"; await h.app.send();
+  assert.deepEqual(h.calls.find(call => call.url === "/api/agent/turns" && call.init).body.packing_sources, [{ source: "箱单.json" }]);
+  assert.equal(select.value, "");
+  h.$("agentMessage").value = "只读原文"; await h.app.send();
+  assert.deepEqual(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).at(-1).body.packing_sources, []);
+  select.value = "箱单.json";
+  const check = h.doc.querySelector("#agentFiles input"); check.checked = false; check.dispatchEvent(new h.win.Event("change"));
+  assert.equal(select.value, ""); assert.equal(select.options.length, 1);
+  check.checked = true; check.dispatchEvent(new h.win.Event("change")); select.value = "箱单.json";
+  await h.app.changeSession("", true); assert.equal(select.value, "");
+});
+
+test("Agent packing: host results replay in both languages without converting fit into release", async (t) => {
+  const summary = { can_fit: true, layout_verified: true, containers_used: 2, n_boxes: 8, plan_sha256: "b".repeat(64), structure: { fail: 1, needs_reinforcement: 0, pending_design: 7, pass: 0 } };
+  const calculation = { ok: true, result: { schema: "packing_replan.result.v1", kind: "packing_replan", status: "completed", outcome: "unchanged",
+    source: { path: "原箱单<img>.json", sha256: "a".repeat(64) }, baseline: summary, final: summary, rounds: [{ round: 1, candidate_id: "fixed_order", accepted: false, summary }], hard_constraints: { max_rounds: 2 } },
+    provenance: { source: "原箱单<img>.json", source_sha256: "a".repeat(64), originals_unchanged: true, shipping_release: false, professional_signoff: false },
+    decision_proposal: { phase: "packing_replan_shadow_v1", mode: "off", applied: false } };
+  const h = harness(receiptRoute(undefined, "原文回复保留", [event(1, "tool_finished", { name: "packing_replan", result: calculation })]));
+  t.after(h.close); installLanguage(h); await showDelivery(h);
+  const host = h.$("agentPackingResults");
+  assert.equal(host.querySelectorAll("article").length, 1);
+  assert.equal(host.querySelector("img"), null);
+  assert.match(host.textContent, /未找到更优候选，保留基线/); assert.match(host.textContent, /不代表装运放行/);
+  assert.match(host.textContent, /实际复算 1 轮/);
+  assert.match(host.textContent, /包装结构仍有未解决项/);
+  h.win.CBI18n.setLocale("en");
+  assert.match(host.textContent, /No better candidate found/); assert.match(host.textContent, /do not authorize shipment/);
+  assert.equal(h.$("agentContextText").textContent, h.win.CBI18n.t("收到后端请求预算后显示；这不是任务完成进度。"));
+  assert.doesNotMatch(h.$("agentContextText").textContent, /收到后端/);
+  assert.match(host.textContent, /原箱单<img>.json/); assert.equal(host.querySelectorAll("article").length, 1);
+  assert.equal(h.$("agentReply").textContent, "原文回复保留");
+  await h.app.changeSession("", true); assert.equal(host.hidden, true);
+});
+
+test("Agent packing: mismatched source receipts cannot create a calculation card", async (t) => {
+  const calculation = { ok: true, result: { schema: "packing_replan.result.v1", kind: "packing_replan", source: { path: "other.json", sha256: "a".repeat(64) } },
+    provenance: { source: "selected.json", source_sha256: "a".repeat(64), originals_unchanged: true, shipping_release: false, professional_signoff: false } };
+  const h = harness(receiptRoute(undefined, JSON.stringify(calculation), [event(1, "tool_finished", { name: "packing_replan", result: calculation })]));
+  t.after(h.close); await showDelivery(h); assert.equal(h.$("agentPackingResults"), null);
+});
+
+test("Agent packing: missing inputs are bilingual while cargo names and raw requirements stay original", async (t) => {
+  const calculation = { ok: true, result: { schema: "packing_replan.result.v1", kind: "packing_replan", status: "needs_human", outcome: "needs_human",
+    source: { path: "箱单.json", sha256: "a".repeat(64) }, needs_human: [{ id: "A1", name: "铝板原名", reason: "unsupported_transport_requirements", requirements: { note: "保持原文：竖放" }, ask: "A fixed worker detail" }] },
+    provenance: { source: "箱单.json", source_sha256: "a".repeat(64), originals_unchanged: true, shipping_release: false, professional_signoff: false } };
+  const h = harness(receiptRoute(undefined, "待补资料", [event(1, "tool_finished", { name: "packing_replan", result: calculation })]));
+  t.after(h.close); installLanguage(h); await showDelivery(h);
+  const host = h.$("agentPackingResults"); assert.match(host.querySelector("li").textContent, /自动成箱无法执行/);
+  assert.match(host.textContent, /未执行重排/); assert.match(host.querySelector("pre").textContent, /保持原文：竖放/);
+  h.win.CBI18n.setLocale("en"); assert.match(host.querySelector("li").textContent, /Automatic boxing cannot enforce/);
+  assert.match(host.querySelector("li").textContent, /铝板原名/); assert.match(host.querySelector("pre").textContent, /保持原文：竖放/);
+});
+
 test("Agent bilingual UI: persisted English initializes empty states before opening a folder", async () => {
   const h = harness(); installLanguage(h, "en");
   try {

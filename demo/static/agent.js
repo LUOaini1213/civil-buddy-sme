@@ -51,7 +51,7 @@ export function createAgentWorkbench(deps) {
   const node = (tag, text, cls) => { const n = doc.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
   const state = { capabilities: null, workspace: null, session: "", files: [], selected: new Set(), turn: null,
     seq: 0, emptyEventPages: 0, nextTurnCursor: null, turnsLoading: false, sessionListEpoch: 0, sessionsLoading: false, nextSessionCursor: null, sessionHistoryMessage: null, artifacts: new Map(), artifactChecks: new Map(), engineeringResults: new Map(), epoch: 0, workspaceEpoch: 0, fileEpoch: 0, listEpoch: 0,
-    contextData: null, taskRows: [], eventRows: [], subtasks: new Map(), modelConfig: null, writeGateReason: null, sourceEvidence: null,
+    contextData: null, taskRows: [], eventRows: [], subtasks: new Map(), packingResults: new Map(), modelConfig: null, writeGateReason: null, sourceEvidence: null,
     engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, engineeringStatus: null, terminalNotice: false, experts: [],
     opening: false, submitting: false, cancelling: false, modelBusy: false, modelConfigured: false, disposed: false };
   let saved = { lastRoot: "", workspaces: {} }, timer = null, controller = null, started = false;
@@ -82,12 +82,15 @@ export function createAgentWorkbench(deps) {
   function stopPolling() { if (timer !== null) unschedule(timer); timer = null; if (controller) controller.abort(); controller = null; }
   function resetView({ keepHistory = false } = {}) {
     state.subtasks.clear();
+    state.packingResults.clear();
+    $("agentPackingSource").value = "";
     stopPolling(); state.epoch += 1; state.listEpoch += 1; state.turn = null; state.seq = 0; state.emptyEventPages = 0; state.turnsLoading = false; if (!keepHistory) { state.nextTurnCursor = null; state.taskRows = []; } state.eventRows = []; state.contextData = null; state.artifacts.clear(); state.artifactChecks.clear(); state.engineeringResults.clear();
     state.submitting = false; state.cancelling = false;
     state.writeGateReason = null; paintWriteGate();
     state.sourceEvidence = null; paintSourceEvidence(null);
     $("agentEvents").replaceChildren(); $("agentArtifacts").replaceChildren(); $("agentReply").textContent = t("结果将显示在这里。");
     if ($("agentEngineeringResults")) { $("agentEngineeringResults").replaceChildren(); $("agentEngineeringResults").hidden = true; }
+    if ($("agentPackingResults")) { $("agentPackingResults").replaceChildren(); $("agentPackingResults").hidden = true; }
     $("agentTurnStatus").textContent = t("尚未开始"); $("agentPartial").hidden = true; $("agentUsage").hidden = true;
     $("agentTurnActor").textContent = t("尚无任务发起者记录。");
     $("agentContextMeter").hidden = true; $("agentContextText").textContent = t("收到后端请求预算后显示；这不是任务完成进度。");
@@ -98,7 +101,7 @@ export function createAgentWorkbench(deps) {
     const mode = $("agentMode").value;
     const supported = caps && caps.available === true && Array.isArray(caps.modes) && caps.modes.includes(mode)
       && Array.isArray(caps.sandbox) && caps.sandbox.includes($("agentSandbox").value);
-    const highRiskWrite = state.experts.find((item) => item.id === $("agentExpert").value)?.risk === "high" && $("agentSandbox").value === "workspace-write";
+    const highRiskWrite = (state.experts.find((item) => item.id === $("agentExpert").value)?.risk === "high" || !!$("agentPackingSource").value) && $("agentSandbox").value === "workspace-write";
     const confirmationPresent = $("agentRiskConfirmation").value.trim() === RISK_PHRASE || confirmedMessage($("agentMessage").value);
     $("agentRiskWrap").hidden = !highRiskWrite;
     $("agentRiskConfirmation").disabled = state.submitting;
@@ -117,6 +120,8 @@ export function createAgentWorkbench(deps) {
     $("agentModelSave").disabled = state.modelBusy;
     $("agentRefreshEngineering").disabled = !state.workspace || state.opening || state.submitting || state.engineeringLoading;
     $("agentExpert").disabled = state.submitting;
+    $("agentPackingControl").hidden = caps?.features?.packing_replan !== true;
+    $("agentPackingSource").disabled = !state.workspace || state.opening || state.submitting || !!active() || caps?.features?.packing_replan !== true;
     expertNote();
     paintEngineering();
   }
@@ -200,15 +205,26 @@ export function createAgentWorkbench(deps) {
     }
   }
   function paintFiles() {
+    paintPackingSources();
     const host = $("agentFiles"); host.replaceChildren();
     if (!state.workspace) { host.appendChild(node("p", t("打开文件夹后显示可读资料。"), "muted")); return; }
     if (!state.files.length) { host.appendChild(node("p", t("这个文件夹暂未列出可读资料。"), "muted")); return; }
     for (const file of state.files) {
       const label = node("label", undefined, "file-row"), check = node("input"); check.type = "checkbox"; check.checked = state.selected.has(file.path);
-      check.addEventListener("change", () => { check.checked ? state.selected.add(file.path) : state.selected.delete(file.path); record().files = [...state.selected]; persist(); });
+      check.addEventListener("change", () => { check.checked ? state.selected.add(file.path) : state.selected.delete(file.path); record().files = [...state.selected]; persist(); paintPackingSources(); controls(); });
       const info = node("span", file.name || file.path); info.appendChild(node("small", file.path + (Number.isFinite(file.size) ? t(" · {size} 字节", { size: file.size.toLocaleString() }) : "")));
       label.append(check, info); host.appendChild(label);
     }
+  }
+  function paintPackingSources() {
+    const select = $("agentPackingSource"), selected = select.value;
+    select.replaceChildren();
+    const empty = node("option", t("本轮不重排")); empty.value = ""; select.appendChild(empty);
+    for (const file of state.files) {
+      if (!state.selected.has(file.path) || !/\.json$/i.test(file.path)) continue;
+      const option = node("option", file.path); option.value = file.path; select.appendChild(option);
+    }
+    select.value = [...select.options].some(option => option.value === selected) ? selected : "";
   }
   async function loadFiles() {
     if (!state.workspace) return;
@@ -620,6 +636,60 @@ export function createAgentWorkbench(deps) {
       ? t("文本第 {line} 行", { line: locator.line_start }) : t("文本第 {start}–{end} 行", { start: locator.line_start, end: locator.line_end });
     return JSON.stringify(locator);
   }
+  function paintPackingResult(value) {
+    const result = value?.result, source = value?.provenance;
+    if (value?.ok !== true || result?.schema !== "packing_replan.result.v1" || result.kind !== "packing_replan"
+      || !object(source) || typeof source.source !== "string" || !HASH.test(source.source_sha256 || "")
+      || result.source?.path !== source.source || result.source?.sha256 !== source.source_sha256
+      || source.shipping_release !== false || source.professional_signoff !== false || source.originals_unchanged !== true) return;
+    state.packingResults.set(source.source + ":" + source.source_sha256, value);
+    let host = $("agentPackingResults");
+    if (!host) { host = node("section", undefined, "engineering-results"); host.id = "agentPackingResults"; $("agentArtifacts").before(host); }
+    host.hidden = false; host.replaceChildren();
+    const booleanLabel = (answer) => answer === true ? t("是") : answer === false ? t("否") : t("未返回");
+    for (const item of state.packingResults.values()) {
+      const report = item.result, provenance = item.provenance, card = node("article", undefined, "engineering-result");
+      card.append(node("h3", t("箱单重排核对")), node("p", provenance.source, "wrap"));
+      const outcome = { improved: "复算找到更优候选", unchanged: "复算未找到更优候选，保留基线", needs_human: "输入需人工补充，未执行重排" };
+      card.appendChild(node("p", t(outcome[report.outcome] || "复算状态待核对"), report.status === "needs_human" ? "notice warning" : "notice"));
+      if (report.status === "completed") {
+        for (const [label, summary] of [["原始基线", report.baseline], ["保留结果", report.final]]) {
+          if (!object(summary)) continue;
+          card.appendChild(node("h4", t(label)));
+          const metrics = node("dl", undefined, "engineering-metrics");
+          engineeringMetric(metrics, t("计算能否装下"), booleanLabel(summary.can_fit));
+          engineeringMetric(metrics, t("布局校验通过"), booleanLabel(summary.layout_verified));
+          engineeringMetric(metrics, t("使用柜数"), engineeringNumber(summary.containers_used));
+          engineeringMetric(metrics, t("包装箱数"), engineeringNumber(summary.n_boxes));
+          card.appendChild(metrics);
+        }
+        card.appendChild(node("p", t("实际复算 {count} 轮", { count: Array.isArray(report.rounds) ? report.rounds.length : 0 }), "muted small"));
+        const structure = report.final?.structure;
+        if (object(structure)) {
+          card.appendChild(node("h4", t("包装结构检查（不包含在能否装下中）")));
+          const checks = node("dl", undefined, "engineering-metrics");
+          for (const [label, field] of [["不通过", "fail"], ["需加强", "needs_reinforcement"], ["待详设", "pending_design"], ["通过", "pass"]]) engineeringMetric(checks, t(label), engineeringNumber(structure[field]));
+          card.appendChild(checks);
+          if (structure.fail > 0 || structure.needs_reinforcement > 0 || structure.pending_design > 0) card.appendChild(node("p", t("包装结构仍有未解决项，须补充详设或加固后重新核对。"), "notice warning"));
+        } else card.appendChild(node("p", t("包装结构检查未返回，不能据此判断结构安全。"), "notice warning"));
+      }
+      if (Array.isArray(report.needs_human) && report.needs_human.length) {
+        const list = node("ul");
+        const reasons = { missing_weight: "缺少有效重量，请补充正数重量并核对单位。", missing_dimensions: "缺少有效长宽高，请补充毫米尺寸。",
+          invalid_quantity: "数量需为实际正整数件数。", oversize_for_container: "源材料尺寸超出所选柜型，请人工复核。",
+          packaging_not_cargo: "该行可能是包装器具，需区分器具和实际货物。", boxing_not_conserved: "成箱结果未通过数量或重量守恒核对。",
+          unsupported_transport_requirements: "自动成箱无法执行这行运输要求。请保留原文，转到物流台账的已包装箱件模式，补充整体外尺寸、包装毛重、数量及所需承载资料。" };
+        for (const entry of report.needs_human.slice(0, 50)) list.appendChild(node("li", typeof entry === "string" ? entry
+          : [entry.id, entry.name, reasons[entry.reason] ? t(reasons[entry.reason]) : entry.ask || entry.reason || entry.code].filter(Boolean).join(" · ")));
+        card.appendChild(list);
+        if (report.needs_human.length > 50) card.appendChild(node("p", t("共 {count} 项需核对，完整原因见执行记录。", { count: report.needs_human.length }), "muted small"));
+      }
+      card.appendChild(node("p", t("仅核对所列箱单与计算约束；不代表装运放行或专业签认。"), "notice warning"));
+      if (item.decision_proposal?.phase === "packing_replan_shadow_v1") card.appendChild(node("p", t(item.decision_proposal.mode === "off" ? "Jev 已关闭，使用确定性结果。" : "Jev 建议仅作记录，不改变本次计算结果。"), "muted small"));
+      const details = node("details"); details.append(node("summary", t("来源与验证记录")), node("pre", printable({ provenance, hard_constraints: report.hard_constraints, needs_human: report.needs_human, rounds: report.rounds, decision: item.decision_proposal })));
+      card.appendChild(details); host.appendChild(card);
+    }
+  }
   function paintSourceEvidence(receipt) {
     const host = $("agentSourceEvidence"); host.replaceChildren(); host.hidden = !receipt;
     state.sourceEvidence = receipt;
@@ -661,7 +731,7 @@ export function createAgentWorkbench(deps) {
     if (Object.prototype.hasOwnProperty.call(result, "source_evidence")) paintSourceEvidence(result.source_evidence);
     $("agentPartial").hidden = result.partial !== true;
     for (const item of Array.isArray(result.artifacts) ? result.artifacts : []) paintArtifact(item);
-    for (const item of Array.isArray(result.findings) ? result.findings : []) paintEngineeringResult(item);
+    for (const item of Array.isArray(result.findings) ? result.findings : []) { paintEngineeringResult(item); paintPackingResult(item); }
     if (object(result.usage)) { $("agentUsageText").textContent = printable(result.usage); $("agentUsage").hidden = false; }
   }
   function paintTurn(turn) {
@@ -710,6 +780,7 @@ export function createAgentWorkbench(deps) {
     if (kind === "source_evidence") paintSourceEvidence(data);
     if (kind === "artifact") paintArtifact(data);
     if (kind === "tool_finished" && (data.name === "engineering_analyze" || data.tool === "engineering_analyze")) paintEngineeringResult(data.result);
+    if (kind === "tool_finished" && (data.name === "packing_replan" || data.tool === "packing_replan")) paintPackingResult(data.result);
     if (kind === "done") paintResult(data.result || data);
     if (TURN_EVENTS[kind]) paintTurn({ status: TURN_EVENTS[kind], ...(data.result ? { result: data.result } : {}) });
     const li = node("li"), title = node("div", undefined, "event-title");
@@ -760,12 +831,14 @@ export function createAgentWorkbench(deps) {
   async function send() {
     if ($("agentSend").disabled || !$("agentMessage").value.trim()) return;
     cancelVoice();
+    const packingSource = $("agentPackingSource").value;
     const message = $("agentMessage").value.trim(); resetView({ keepHistory: true }); state.submitting = true; controls();
     const epoch = state.epoch;
     notice(t("正在提交任务…"));
     try {
       if (!(await verifyEngineering(epoch))) return;
       const payload = { workspace: state.workspace.id, session_id: state.session, message, locale: win.CBI18n?.locale || "zh-CN", mode: $("agentMode").value, sandbox: $("agentSandbox").value, files: [...state.selected],
+        ...(state.capabilities?.features?.packing_replan === true ? { packing_sources: packingSource && state.selected.has(packingSource) ? [{ source: packingSource }] : [] } : {}),
         expert_id: $("agentExpert").value, risk_confirmation: $("agentRiskConfirmation").value.trim(), engineering: state.engineeringRows.filter((row) => row.selected).map((row) => ({ ...row.snapshot, confirmed_solid: row.kind === "cad_section" && row.confirmed })) };
       const data = await request("/api/agent/turns", post(payload));
       if (!current(epoch)) return;
@@ -810,16 +883,17 @@ export function createAgentWorkbench(deps) {
     if (state.engineeringStatus) { const { key, values, detail } = state.engineeringStatus; engineeringStatus(key, values, detail); }
     if (state.terminalNotice && state.turn && TERMINAL.has(state.turn.status)) terminalNotice();
     if (state.contextData) paintContext(state.contextData);
+    else $("agentContextText").textContent = t("收到后端请求预算后显示；这不是任务完成进度。");
     if (state.sourceEvidence) paintSourceEvidence(state.sourceEvidence);
     if (state.turn) paintTurn(state.turn);
     else {
       $("agentReply").textContent = t("结果将显示在这里。");
       $("agentTurnStatus").textContent = t("尚未开始");
       $("agentTurnActor").textContent = t("尚无任务发起者记录。");
-      if (!state.contextData) $("agentContextText").textContent = t("收到后端请求预算后显示；这不是任务完成进度。");
     }
     for (const item of state.artifacts.values()) { paintArtifact(item); break; }
     for (const item of state.engineeringResults.values()) { paintEngineeringResult(item); break; }
+    for (const item of state.packingResults.values()) { paintPackingResult(item); break; }
     const events = state.eventRows.slice(); state.eventRows = []; state.seq = 0; state.subtasks.clear(); $("agentEvents").replaceChildren();
     for (const event of events) eventFrame(event);
     // A partially drained history can end with an old running event; keep the
@@ -841,6 +915,7 @@ export function createAgentWorkbench(deps) {
     $("agentTaskForm").addEventListener("submit", (event) => { event.preventDefault(); send(); });
     $("agentModelForm").addEventListener("submit", (event) => { event.preventDefault(); saveModel(); });
     $("agentMode").addEventListener("change", controls); $("agentSandbox").addEventListener("change", controls);
+    $("agentPackingSource").addEventListener("change", controls);
     $("agentExpert").addEventListener("change", () => { expertNote(); controls(); }); $("agentRefreshEngineering").addEventListener("click", loadEngineering);
     $("agentRiskConfirmation").addEventListener("input", controls); $("agentMessage").addEventListener("input", controls);
     $("agentCancel").addEventListener("click", cancel); $("agentRefreshFiles").addEventListener("click", loadFiles); $("agentRefreshTurns").addEventListener("click", () => loadTurns());

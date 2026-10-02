@@ -25,6 +25,7 @@ except ImportError:  # Direct invocation from scripts/.
 
 ROOT = Path(__file__).resolve().parents[1]
 EXTRA = (
+    "examples/packing-replan/README.md", "examples/packing-replan/geometry-only.json",
     "SECURITY.md", "docs/civil-buddy/release-handoff.md",
     "docs/civil-buddy/sme-integration.md", "README.zh.md",
     "docs/civil-buddy/submission-sync-20260927.md",
@@ -49,6 +50,7 @@ EXTRA = (
     "docs/civil-buddy/architecture/implementation.md",
     "docs/civil-buddy/acceptance/2026-09-21.json",
     "docs/civil-buddy/acceptance/2026-09-30-practical.json",
+    "docs/civil-buddy/acceptance/2026-10-03-packing-replan.json",
     "docs/civil-buddy/architecture/civil-buddy-rust-architecture.md",
     "docs/civil-buddy/architecture/civil-buddy-document-skills.md",
     "docs/civil-buddy/architecture/civil-buddy-agent-infra.md",
@@ -214,6 +216,10 @@ py -3.11 -m venv .venv
 无需模型 Key 可执行资料结构检查。自然语言 Agent 任务需在页面模型设置配置兼容服务，
 或显式传入自己创建的 `--env-file <路径>`；`.env.example` 仅为模板。Jev 为可选工程决策建议，默认关闭。
 岗位签认、引用哈希、先预览再保存及只读权限仍由主程序执行；模型不能把文件或自身提议变成工程事实。
+
+箱单受限重排示例见 `examples/packing-replan/README.md`。将示例复制到测试工程目录，
+在 Agent 页勾选 JSON 并显式选择“箱单重排核对”，使用“检查资料”可不调用模型。
+示例尺寸与约束均为合成测试输入；不能据此装运放行。普通 Excel 箱单仍使用装箱/物流页面。
 
 具名账号和独立工程启动、登录、停机备份及原路径恢复见 `docs/civil-buddy/release-handoff.md`。
 具名模式使用 `--user-id`、`--workspace`、`--token-file`；每位用户独立目录与进程，
