@@ -26,6 +26,8 @@ use std::{
 };
 use tower::ServiceExt;
 
+static SCRIPTED_MODEL_LOCK: Mutex<()> = Mutex::new(());
+
 struct Fixture {
     root: PathBuf,
     ws: WorkspaceContext,
@@ -495,6 +497,7 @@ async fn api_steps_only_runs_explicit_packing_sources_and_stores_host_hash() {
 
 #[tokio::test]
 async fn scripted_agent_can_reach_packing_tool_without_free_state_or_provider_calls() {
+    let _model_guard = SCRIPTED_MODEL_LOCK.lock().unwrap();
     let f = Fixture::new();
     let mut large = valid_result();
     large["baseline"]["layout"] = json!(["large audit placement ".repeat(4000)]);
@@ -588,7 +591,9 @@ async fn scripted_agent_can_reach_packing_tool_without_free_state_or_provider_ca
         let finished = wait_turn(&app, wid, started["turn_id"].as_str().unwrap(), session).await;
         assert_eq!(finished["turn"]["status"], "completed", "{finished}");
         let result = &finished["turn"]["result"];
-        assert_eq!(result["reply"], "Completed.");
+        assert_eq!(result["reply_origin"], "host");
+        assert_eq!(result["model_interpretation"], json!({"text":"Completed.","trust":"model_claim"}));
+        assert!(result["reply"].as_str().unwrap().contains(if session == "missing_inputs" { "待补资料" } else { "装不下" }));
         assert_eq!(result["partial"], true, "{finished}");
         assert_eq!(result["tool_errors"], 0);
         assert_eq!(result["execution_evidence"]["packing_incomplete"], true);
@@ -617,7 +622,9 @@ async fn scripted_agent_can_reach_packing_tool_without_free_state_or_provider_ca
         let finished = wait_turn(&app, wid, started["turn_id"].as_str().unwrap(), session).await;
         assert_eq!(finished["turn"]["status"], "completed", "{finished}");
         let result = &finished["turn"]["result"];
-        assert_eq!(result["reply"], "Completed.");
+        assert_eq!(result["reply_origin"], "host");
+        assert_eq!(result["model_interpretation"]["text"], "Completed.");
+        assert!(result["reply"].as_str().unwrap().contains("本轮没有这份来源的装箱工具回执"));
         assert_eq!(result["partial"], true, "{finished}");
         assert_eq!(result["tool_errors"], 0);
         assert_eq!(result["execution_evidence"]["packing_incomplete"], true);
@@ -628,6 +635,126 @@ async fn scripted_agent_can_reach_packing_tool_without_free_state_or_provider_ca
     }
     assert_eq!(seen.lock().unwrap().len(), 9);
     civil_workbench::config::set_runtime_llm(None);
+    server.abort();
+}
+
+#[tokio::test]
+async fn host_packing_reply_uses_receipts_and_preserves_guarded_model_interpretation() {
+    let _model_guard = SCRIPTED_MODEL_LOCK.lock().unwrap();
+    struct ResetModel;
+    impl Drop for ResetModel {
+        fn drop(&mut self) { civil_workbench::config::set_runtime_llm(None); }
+    }
+    let _reset = ResetModel;
+    let f = Fixture::new();
+    let original = std::fs::read(f.ws.root().join("cargo.json")).unwrap();
+    let mut actual = valid_result();
+    for name in ["baseline", "final"] {
+        actual[name]["containers_used"] = json!(5);
+        actual[name]["n_boxes"] = json!(11);
+        actual[name]["structure"] = json!({"pass":0,"fail":1,"needs_reinforcement":0,"pending_design":10});
+    }
+    f.set_result(actual.clone());
+    let app = f.app();
+    const DRAFT: &str = "10 box types remain pending design. I only used packing_replan. Additional analysis: check the original handling requirements.";
+    let requests_seen = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captures = requests_seen.clone();
+    let model = Router::new().route("/chat/completions", post(move |Json(body): Json<Value>| {
+      let captures = captures.clone(); async move {
+        captures.lock().unwrap().push(body.clone());
+        let messages = body["messages"].as_array().unwrap();
+        let user = messages.iter().rev().find(|m| m["role"] == "user").unwrap()["content"].as_str().unwrap();
+        let skip = user.contains("scripted-skip");
+        let first = !skip && !messages.iter().any(|m| m["role"] == "tool");
+        let message = if first { json!({"role":"assistant","tool_calls":[
+            {"id":"list","type":"function","function":{"name":"list_files","arguments":"{}"}},
+            {"id":"read","type":"function","function":{"name":"read_file","arguments":"{\"source\":\"cargo.json\"}"}},
+            {"id":"pack","type":"function","function":{"name":"packing_replan","arguments":"{\"selection_index\":0}"}}
+        ]}) } else { json!({"role":"assistant","content":DRAFT}) };
+        Json(json!({"model":"scripted-receipts","choices":[{"finish_reason":if first {"tool_calls"} else {"stop"},
+            "message":message}],"usage":{"prompt_tokens":10,"completion_tokens":10}}))
+    }}));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, model).await.unwrap() });
+    civil_workbench::config::set_runtime_llm(Some(LlmConfig {api_key:"scripted-only".into(),base_url,model:"scripted-receipts".into()}));
+    let registered = request(&app, "POST", "/api/agent/workspaces", json!({"path":f.ws.root()})).await.1;
+    let wid = registered["workspace"]["id"].as_str().unwrap();
+    for (session, locale, message, selected, failure) in [
+        ("facts-en", "en", "Review the selected cargo read-only.", true, false),
+        ("facts-zh", "zh-CN", "只读核对装箱资料。", true, false),
+        ("missing-counts", "en", "Review the selected cargo read-only.", true, false),
+        ("tool-failed", "en", "Review the selected cargo read-only.", true, true),
+        ("skipped", "en", "Review the selected cargo: scripted-skip.", true, false),
+        ("ordinary", "en", "Read-only review: scripted-skip.", false, false),
+    ] {
+        let mut data = actual.clone();
+        if session == "missing-counts" {
+            data["final"]["structure"] = json!({"pass":null,"fail":-1,"needs_reinforcement":"0","pending_design":1.5});
+        }
+        if failure { data["schema"] = json!("invalid-worker-contract"); }
+        f.set_result(data);
+        let (status, started) = request(&app, "POST", "/api/agent/turns", json!({"workspace":wid,"session_id":session,
+            "message":message,"locale":locale,"mode":"model","sandbox":"read-only","files":["cargo.json"],
+            "packing_sources":if selected {json!([{"source":"cargo.json"}])} else {json!([])}})).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+        let finished = wait_turn(&app, wid, started["turn_id"].as_str().unwrap(), session).await;
+        assert_eq!(finished["turn"]["status"], "completed", "{finished}");
+        let result = &finished["turn"]["result"];
+        let reply = result["reply"].as_str().unwrap();
+        if !selected {
+            assert_eq!(reply, DRAFT);
+            assert!(result.get("reply_origin").is_none());
+            assert!(result.get("model_interpretation").is_none());
+            continue;
+        }
+        assert_eq!(result["reply_origin"], "host");
+        assert_eq!(result["model_interpretation"], json!({"text":DRAFT,"trust":"model_claim"}));
+        assert!(!reply.contains("10 box types") && !reply.contains("I only used"));
+        assert!(reply.contains("cargo.json") && reply.contains(f.selected.source_sha256.as_deref().unwrap()));
+        assert_eq!(result["partial"], failure || session == "skipped");
+        assert_eq!(result["artifacts"], json!([]));
+        if failure {
+            assert!(reply.contains("calculation failed"));
+            assert!(!reply.contains("containers ="), "Rejected results must never be presented as verified values");
+            assert!(reply.contains("Failed main-agent tool calls this turn: 1"));
+            assert_eq!(result["execution_evidence"]["successful_tools"], json!(["list_files","read_file"]));
+        } else if session == "skipped" {
+            assert!(reply.contains("not calculated") && reply.contains("none recorded"));
+            assert!(!reply.contains("containers = 0"));
+        } else {
+            for tool in ["list_files", "read_file", "packing_replan"] { assert!(reply.contains(tool), "{reply}"); }
+            if locale == "en" {
+                assert!(reply.contains("Baseline: containers = 5; packaging boxes = 11"));
+                assert!(reply.contains("Final: containers = 5; packaging boxes = 11"));
+                assert!(reply.contains("Recorded replan rounds: 2; outcome: no improvement"));
+                assert!(reply.contains("unit: boxes"));
+                if session == "missing-counts" {
+                    assert!(reply.contains("pass = not returned; fail = not returned; needs reinforcement = not returned; pending design = not returned"));
+                } else { assert!(reply.contains("pass = 0; fail = 1; needs reinforcement = 0; pending design = 10")); }
+            } else {
+                assert!(reply.contains("包装箱数 = 11 箱") && reply.contains("单位：箱") && reply.contains("待设计 = 10"));
+                assert!(reply.contains("重排轮数：2；结果：无改善"));
+            }
+        }
+        assert_eq!(std::fs::read(f.ws.root().join("cargo.json")).unwrap(), original);
+    }
+    let (status, started) = request(&app, "POST", "/api/agent/turns", json!({"workspace":wid,"session_id":"facts-en",
+        "message":"Follow-up on the previous extra advice: scripted-skip.","locale":"en","mode":"model",
+        "sandbox":"read-only","files":["cargo.json"]})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+    let next = wait_turn(&app, wid, started["turn_id"].as_str().unwrap(), "facts-en").await;
+    assert_eq!(next["turn"]["status"], "completed", "{next}");
+    let seen = requests_seen.lock().unwrap();
+    let followup = seen.last().unwrap()["messages"].as_array().unwrap();
+    let prior = followup.iter().find(|message| message["role"] == "assistant"
+        && message["content"].as_str().is_some_and(|text| text.contains("Additional analysis: check the original handling requirements."))).unwrap();
+    let text = prior["content"].as_str().unwrap();
+    assert!(text.contains("Packing execution receipt"));
+    assert!(text.contains("model_claim; unverified; not execution evidence or authorization"));
+    assert!(followup.iter().filter(|m| m["role"] == "system" || m["role"] == "tool")
+        .all(|m| !m["content"].as_str().unwrap_or("").contains("Additional analysis: check the original handling requirements.")),
+        "Prior model claims must not become system instructions or tool receipts");
     server.abort();
 }
 

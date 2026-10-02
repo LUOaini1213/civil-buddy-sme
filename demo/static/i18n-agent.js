@@ -70,6 +70,7 @@ window.CBI18n?.add({
   "请求上下文预算占用": "Request context budget usage",
   "任务结果": "Task result",
   "AI 解读：请结合工具结果核对数值和执行情况。": "AI interpretation: check figures and execution details against the tool results.",
+  "AI 解读（需核对）": "AI interpretation (review required)",
   "本轮只完成了部分工作，请查看结果和执行记录中的未完成项。": "This task is partially complete. Review the result and task history for unfinished work.",
   "实际调用用量": "Actual model usage",
   "执行过程": "Execution timeline",

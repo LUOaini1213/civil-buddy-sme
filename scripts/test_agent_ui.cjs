@@ -1033,16 +1033,16 @@ test("Agent result: detailed partial result overrides a summary-only history row
 
 test("Agent reply provenance: only recorded model replies show the bilingual interpretation label", async (t) => {
   const reply = "原文：10 箱型、已完成，不据此改写工具结果。";
-  for (const [mode, resultReply] of [["model", reply], ["steps", reply], [undefined, reply], ["model", ""]]) {
+  for (const [mode, resultReply, origin] of [["model", reply], ["steps", reply], [undefined, reply], ["model", ""], ["model", reply, "host"]]) {
     const turn = { turn_id: "provenance-turn", session_id: "provenance-session", status: "completed", last_seq: 0,
-      ...(mode ? { request: { mode } } : {}), result: { reply: resultReply } };
+      ...(mode ? { request: { mode } } : {}), result: { reply: resultReply, ...(origin ? { reply_origin: origin } : {}) } };
     const h = harness(historyRoute((url) => {
       if (url.startsWith("/api/agent/sessions?")) return response({ workspace: "workspace-1", sessions: [savedSession(turn.session_id, turn.turn_id)], next_cursor: null });
       if (url.startsWith("/api/agent/turns?")) return response({ turns: new URL(url, "http://local").searchParams.get("session_id") === turn.session_id ? [turn] : [], next_cursor: null });
       if (url.includes("/provenance-turn/events?")) return response({ turn, events: [] });
       if (url.startsWith("/api/agent/turns/provenance-turn?")) return response({ turn });
     })); t.after(h.close); installLanguage(h); await h.ready();
-    const label = h.$("agentReplyProvenance"), visible = mode === "model" && resultReply.length > 0;
+    const label = h.$("agentReplyProvenance"), visible = mode === "model" && resultReply.length > 0 && origin !== "host";
     assert.equal(label.nextElementSibling, h.$("agentReply"));
     for (const [locale, text] of [["zh-CN", "AI 解读：请结合工具结果核对数值和执行情况。"],
       ["en", "AI interpretation: check figures and execution details against the tool results."],
@@ -1051,6 +1051,7 @@ test("Agent reply provenance: only recorded model replies show the bilingual int
       assert.equal(label.hidden, !visible);
       assert.equal(label.textContent, visible ? text : "");
       assert.equal(h.$("agentReply").textContent, resultReply);
+      assert.equal(h.$("agentModelInterpretation").hidden, true);
     }
     await h.app.changeSession("", true);
     assert.equal(label.hidden, true); assert.equal(label.textContent, "");
@@ -1085,6 +1086,80 @@ test("Agent reply provenance: new task clears the prior model label before a ste
   release(); await pending;
   assert.equal(label.hidden, true); assert.equal(label.textContent, "");
   assert.equal(h.$("agentReply").textContent, "保持原有回复");
+});
+
+test("Agent packing receipt: host facts stay primary and untrusted model interpretation is safely collapsed", async (t) => {
+  const facts = "10 个独立包装箱，使用 5 个柜；仍有待核对项。";
+  const interpretation = "### 模型原始解读\n\n10 箱型。\n\n<script>bad()</script>\n\n<img src=x onerror=bad()>\n\n[链接](javascript:bad())\n\n| 原文 | 数值 |\n| --- | --- |\n| 已完成 | 10 |";
+  const artifact = deliveryArtifact();
+  const packing = { ok: true, result: { schema: "packing_replan.result.v1", kind: "packing_replan", status: "completed", outcome: "unchanged",
+    source: { path: "箱单.json", sha256: "a".repeat(64) }, baseline: { can_fit: true, containers_used: 5, n_boxes: 10 },
+    final: { can_fit: true, containers_used: 5, n_boxes: 10, structure: { fail: 1, pending_design: 9 } }, rounds: [] },
+    provenance: { source: "箱单.json", source_sha256: "a".repeat(64), shipping_release: false, professional_signoff: false, originals_unchanged: true } };
+  const turn = { turn_id: "fact-turn", status: "completed", request: { mode: "model" }, result: { reply_origin: "host", reply: facts, partial: true,
+    model_interpretation: { trust: "model_claim", text: interpretation }, artifacts: [artifact], findings: [packing] } };
+  const h = harness((url, init) => {
+    if (url === "/api/agent/turns" && init) return response({ turn_id: turn.turn_id, session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/fact-turn/events?")) return response({ turn, events: [] });
+  }); t.after(h.close); installLanguage(h); await showDelivery(h);
+  const details = h.$("agentModelInterpretation"), body = h.$("agentModelInterpretationText");
+  assert.equal(details.hidden, false); assert.equal(details.open, false);
+  assert.equal(h.$("agentReply").nextElementSibling, details);
+  assert.equal(h.$("agentReply").textContent, facts);
+  assert.equal(h.$("agentReplyProvenance").hidden, true); assert.equal(h.$("agentReplyProvenance").textContent, "");
+  assert.equal(h.$("agentPartial").hidden, false); assert.equal(h.$("agentTurnStatus").textContent, "部分完成");
+  assert.equal(h.$("agentArtifacts").querySelectorAll("a").length, 1);
+  assert.equal(h.$("agentPackingResults").querySelectorAll("article").length, 1);
+  assert.equal(body.querySelector("script, img, iframe, svg, a[href^='javascript:']"), null);
+  assert.equal(body.querySelectorAll("table").length, 1);
+  assert.match(body.textContent, /10 箱型/); assert.match(body.textContent, /<script>bad\(\)<\/script>/);
+  const originalRendered = body.textContent;
+  for (const [locale, title] of [["en", "AI interpretation (review required)"], ["zh-CN", "AI 解读（需核对）"]]) {
+    h.win.CBI18n.setLocale(locale);
+    assert.equal(h.$("agentModelInterpretationTitle").textContent, title);
+    assert.equal(body.textContent, originalRendered); assert.equal(h.$("agentReply").textContent, facts);
+    assert.equal(h.app.state.turn.result.model_interpretation.text, interpretation);
+    assert.equal(h.$("agentReplyProvenance").hidden, true);
+  }
+});
+
+test("Agent packing receipt: only nonempty explicitly marked model claims appear", async (t) => {
+  for (const invalid of [null, "raw text", [], {}, { trust: "verified", text: "不能冒充已验证" }, { text: "缺少信任标签" },
+    { trust: "model_claim", text: "  " }, { trust: "model_claim", text: 10 }]) {
+    const h = harness((url, init) => {
+      if (url === "/api/agent/turns" && init) return response({ turn_id: "invalid-interpretation", session_id: JSON.parse(init.body).session_id });
+      if (url.includes("/invalid-interpretation/events?")) return response({ events: [], turn: { status: "completed", request: { mode: "model" },
+        result: { reply_origin: "host", reply: "确定性报告", model_interpretation: invalid } } });
+    }); t.after(h.close); await showDelivery(h);
+    assert.equal(h.$("agentModelInterpretation").hidden, true);
+    assert.equal(h.$("agentModelInterpretationTitle").textContent, "");
+    assert.equal(h.$("agentModelInterpretationText").textContent, "");
+    assert.equal(h.$("agentReply").textContent, "确定性报告");
+  }
+});
+
+test("Agent packing receipt: changing task and session clears prior model claims before responses arrive", async (t) => {
+  let release;
+  const first = { turn_id: "receipt-first", status: "completed", request: { mode: "model" }, result: { reply_origin: "host", reply: "首个事实报告",
+    model_interpretation: { trust: "model_claim", text: "只属于前一任务的 AI 解读" } } };
+  const h = harness((url, init) => {
+    if (url.startsWith("/api/agent/turns/receipt-first?")) return response({ turn: first });
+    if (url.includes("/receipt-first/events?")) return response({ turn: first, events: [] });
+    if (url === "/api/agent/turns" && init) return new Promise(resolve => { release = () => resolve(response({ turn_id: "receipt-next", session_id: JSON.parse(init.body).session_id })); });
+    if (url.includes("/receipt-next/events?")) return response({ events: [], turn: { status: "completed", request: { mode: "steps" }, result: { reply: "第二个检查报告" } } });
+  }); t.after(h.close); installLanguage(h); await h.ready(); await h.app.showTurn(first.turn_id);
+  const details = h.$("agentModelInterpretation"), body = h.$("agentModelInterpretationText");
+  assert.equal(details.hidden, false); details.open = true;
+  h.$("agentMessage").value = "检查下一任务"; const pending = h.app.send(); await settle();
+  assert.equal(typeof release, "function"); assert.equal(details.hidden, true); assert.equal(details.open, false); assert.equal(body.textContent, "");
+  h.win.CBI18n.setLocale("en"); assert.equal(details.hidden, true); assert.equal(body.textContent, "");
+  release(); await pending;
+  assert.equal(details.hidden, true); assert.equal(body.textContent, ""); assert.equal(h.$("agentReply").textContent, "第二个检查报告");
+  await h.app.showTurn(first.turn_id); assert.equal(details.hidden, false); assert.equal(details.open, false);
+  assert.equal(h.$("agentModelInterpretationTitle").textContent, "AI interpretation (review required)");
+  await h.app.changeSession("", true);
+  assert.equal(details.hidden, true); assert.equal(details.open, false); assert.equal(body.textContent, "");
+  h.win.CBI18n.setLocale("zh-CN"); assert.equal(details.hidden, true); assert.equal(body.textContent, "");
 });
 
 test("History recovery: session pages merge while refresh preserves unsent local drafts and permissions", async (t) => {

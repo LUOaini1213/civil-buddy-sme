@@ -51,7 +51,7 @@ export function createAgentWorkbench(deps) {
   const node = (tag, text, cls) => { const n = doc.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
   const state = { capabilities: null, workspace: null, session: "", files: [], selected: new Set(), turn: null,
     seq: 0, emptyEventPages: 0, nextTurnCursor: null, turnsLoading: false, sessionListEpoch: 0, sessionsLoading: false, nextSessionCursor: null, sessionHistoryMessage: null, artifacts: new Map(), artifactChecks: new Map(), engineeringResults: new Map(), epoch: 0, workspaceEpoch: 0, fileEpoch: 0, listEpoch: 0,
-    contextData: null, taskRows: [], eventRows: [], subtasks: new Map(), packingResults: new Map(), modelConfig: null, writeGateReason: null, sourceEvidence: null,
+    contextData: null, taskRows: [], eventRows: [], subtasks: new Map(), packingResults: new Map(), modelConfig: null, writeGateReason: null, sourceEvidence: null, modelInterpretationText: null,
     engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, engineeringStatus: null, terminalNotice: false, experts: [],
     opening: false, submitting: false, cancelling: false, modelBusy: false, modelConfigured: false, disposed: false };
   let saved = { lastRoot: "", workspaces: {} }, timer = null, controller = null, started = false;
@@ -95,6 +95,7 @@ export function createAgentWorkbench(deps) {
     state.sourceEvidence = null; paintSourceEvidence(null);
     $("agentEvents").replaceChildren(); $("agentArtifacts").replaceChildren(); $("agentReply").textContent = t("结果将显示在这里。");
     paintReplyProvenance(null);
+    paintModelInterpretation(null);
     if ($("agentEngineeringResults")) { $("agentEngineeringResults").replaceChildren(); $("agentEngineeringResults").hidden = true; }
     if ($("agentPackingResults")) { $("agentPackingResults").replaceChildren(); $("agentPackingResults").hidden = true; }
     $("agentTurnStatus").textContent = t("尚未开始"); $("agentPartial").hidden = true; $("agentUsage").hidden = true;
@@ -737,12 +738,25 @@ export function createAgentWorkbench(deps) {
   }
   function paintReplyProvenance(result) {
     const label = $("agentReplyProvenance");
-    const visible = state.turn?.request?.mode === "model" && typeof result?.reply === "string" && result.reply.trim().length > 0;
+    const visible = state.turn?.request?.mode === "model" && result?.reply_origin !== "host"
+      && typeof result?.reply === "string" && result.reply.trim().length > 0;
     label.hidden = !visible;
     label.textContent = visible ? t("AI 解读：请结合工具结果核对数值和执行情况。") : "";
   }
+  function paintModelInterpretation(result) {
+    const host = $("agentModelInterpretation"), body = $("agentModelInterpretationText"), interpretation = result?.model_interpretation;
+    const valid = object(interpretation) && interpretation.trust === "model_claim"
+      && typeof interpretation.text === "string" && interpretation.text.trim().length > 0;
+    host.hidden = !valid;
+    $("agentModelInterpretationTitle").textContent = valid ? t("AI 解读（需核对）") : "";
+    if (!valid) { host.open = false; body.replaceChildren(); state.modelInterpretationText = null; return; }
+    if (state.modelInterpretationText !== interpretation.text) host.open = false;
+    state.modelInterpretationText = interpretation.text;
+    renderReply(body, interpretation.text);
+  }
   function paintResult(result) {
     paintReplyProvenance(result);
+    paintModelInterpretation(result);
     if (!object(result)) return;
     if (typeof result.reply === "string") renderReply($("agentReply"), result.reply);
     if (Object.prototype.hasOwnProperty.call(result, "source_evidence")) paintSourceEvidence(result.source_evidence);

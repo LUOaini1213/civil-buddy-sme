@@ -139,6 +139,12 @@ Final-reply review distinguishes local English negations such as “No files wer
 
 Saved model replies carry an “AI interpretation” label, translated with the interface while preserving the original reply. Fixed tool result cards and the execution timeline remain separate evidence. The repaired English run retained the correct core calculation but still confused ten boxes with ten box types and incompletely described its tools; neither the label nor a completed workflow certifies full prose accuracy.
 
+New model tasks with explicitly selected packing inputs return a host-generated packing execution receipt as the main reply (`reply_origin=host`). Source hashes, baseline/final container and box counts, recorded replan rounds, structure counts in boxes, and successful main-agent tools come from fixed-worker and host records. Missing counts stay “not returned”; skipped sources, calculation failures, required clarification and infeasible layouts stay distinct. Existing document-publication receipts are preserved when the task includes both documents and packing.
+
+The complete verdict-reviewed model interpretation is retained separately as `model_interpretation` with `trust=model_claim`, behind “AI interpretation (review required)” in the interface. This preserves additional analysis without presenting its claims as the calculation receipt. Later turns retain that interpretation as explicitly unverified assistant history within the existing context budget. Original stored tasks are not rewritten. The receipt does not certify all requested work, structural suitability or shipment release, and it does not make the retained model interpretation accurate.
+
+The [packing receipt acceptance record](acceptance/2026-10-03-packing-receipts.json) replays the earlier incorrect model text through a localhost scripted provider and the actual Windows host/calculation worker. The main receipt contains the tool values, the original interpretation remains available, and independent numerical checks pass 46/46. This is an offline regression of the new reporting behavior, not an additional live DeepSeek acceptance.
+
 ## Deliverable checks
 
 The Agent page checks registered DOCX, XLSX and PDF outputs against their registered SHA-256 and reports whether the original source is current, changed, unavailable or unrecorded. A changed source requires a new copy generated from the updated material. Inspection records identify who requested the check; they are not a reviewer's acceptance or professional sign-off.

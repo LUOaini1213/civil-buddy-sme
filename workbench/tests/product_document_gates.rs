@@ -554,6 +554,8 @@ async fn model_loop_requires_human_post_classification_and_current_risk_acknowle
         "engineering_unsigned",
         "engineering_signed",
         "engineering_late_tool",
+        "packing_unsigned",
+        "packing_signed",
         "child_unsigned",
         "child_signed",
         "child_failed_unsigned",
@@ -566,7 +568,14 @@ async fn model_loop_requires_human_post_classification_and_current_risk_acknowle
         "explicit_same_session_history",
         "explicit_other_session_history",
     ] {
-        let f = Fixture::new();
+        let mut f = Fixture::new();
+        let packing_sources = if scenario.starts_with("packing_") {
+            let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
+                .join("examples/packing-replan/geometry-only.json");
+            std::fs::copy(source, f.workspace.root().join("cargo.json")).unwrap();
+            f.selected.push("cargo.json".into());
+            json!([{"source":"cargo.json"}])
+        } else { json!([]) };
         let original = std::fs::read(f.workspace.root().join("report.docx")).unwrap();
         let preview = f.args(
             "report.docx",
@@ -591,6 +600,9 @@ async fn model_loop_requires_human_post_classification_and_current_risk_acknowle
         }
         if matches!(scenario, "engineering_unsigned" | "engineering_signed") {
             planned.push(("engineering_analyze", json!({"selection_index":0})));
+        }
+        if scenario.starts_with("packing_") {
+            planned.push(("packing_replan", json!({"selection_index":0})));
         }
         if scenario.starts_with("child_") {
             planned.push(("delegate", json!({"tasks":[{"role":"review","goal":"Review selected sources only."}]})));
@@ -620,7 +632,7 @@ async fn model_loop_requires_human_post_classification_and_current_risk_acknowle
             let calls=calls.clone(); let child_calls=child_calls.clone(); async move {
                 let is_child=payload["messages"].as_array().unwrap().iter().any(|m|m["role"]=="user" && m["content"]=="Review selected sources only.");
                 let has_tool=payload["messages"].as_array().unwrap().iter().any(|m|m["role"]=="tool");
-                let message=if has_tool {json!({"role":"assistant","content":"待核查内容已记录。"})}
+                let message=if has_tool {json!({"role":"assistant","content":if scenario.starts_with("packing_") {"待核查内容已记录。可以开工。"} else {"待核查内容已记录。"}})}
                     else {json!({"role":"assistant","content":null,"tool_calls":if is_child {child_calls}else{json!(calls)}})};
                 let finish_reason=if is_child && has_tool && scenario=="child_failed_unsigned" {"length"} else if has_tool {"stop"}else{"tool_calls"};
                 Json(json!({"model":"local-gates","choices":[{"message":message,"finish_reason":finish_reason}],"usage":{"prompt_tokens":100,"completion_tokens":100}}))
@@ -686,7 +698,7 @@ async fn model_loop_requires_human_post_classification_and_current_risk_acknowle
             _ => "修改待核查草稿",
         };
         let confirmation = match scenario {
-            "explicit_signed_field" | "high_risk_signed" | "automatic_signed" | "engineering_signed" | "child_signed" => "我明白，将由持证人员签认",
+            "explicit_signed_field" | "high_risk_signed" | "automatic_signed" | "engineering_signed" | "packing_signed" | "child_signed" => "我明白，将由持证人员签认",
             "explicit_inexact_field" => "我明白，将由持证人员签认。",
             _ => "",
         };
@@ -697,7 +709,7 @@ async fn model_loop_requires_human_post_classification_and_current_risk_acknowle
         } else {
             low_skill
         };
-        let (status,started)=http(&app,"POST","/api/agent/turns",json!({"workspace":wid,"session_id":scenario,"message":message,"mode":"model","sandbox":"workspace-write","files":f.selected,"expert_id":expert,"risk_confirmation":confirmation,"engineering":engineering})).await;
+        let (status,started)=http(&app,"POST","/api/agent/turns",json!({"workspace":wid,"session_id":scenario,"message":message,"mode":"model","sandbox":"workspace-write","files":f.selected,"expert_id":expert,"risk_confirmation":confirmation,"engineering":engineering,"packing_sources":packing_sources})).await;
         assert_eq!(status, StatusCode::ACCEPTED, "{started}");
         let url = format!(
             "/api/agent/turns/{}/events?workspace={wid}&session_id={scenario}",
@@ -721,6 +733,22 @@ async fn model_loop_requires_human_post_classification_and_current_risk_acknowle
             if scenario.starts_with("automatic_") {"unclassified"} else {"user_selected_post"}, "{scenario}: {result}");
         assert_eq!(std::fs::read(f.workspace.root().join("report.docx")).unwrap(), original,
             "{scenario}: the source document changed");
+        if scenario.starts_with("packing_") {
+            let final_result = &result["turn"]["result"];
+            assert_eq!(final_result["reply_origin"], "host");
+            assert_eq!(final_result["model_interpretation"]["trust"], "model_claim");
+            let interpretation = final_result["model_interpretation"]["text"].as_str().unwrap();
+            assert!(interpretation.starts_with("待核查内容已记录。（此处结论不由本系统判定）。"), "{interpretation}");
+            assert!(interpretation.contains("以下结论不由本系统下"), "Keep the verdict notice with the reviewed text");
+            assert!(!final_result["verdict_guard"].as_array().unwrap().is_empty());
+            let reply = final_result["reply"].as_str().unwrap();
+            assert!(reply.contains("装箱执行回执") && reply.contains("包装箱数 = 11 箱"), "{reply}");
+            assert!(reply.starts_with(if scenario == "packing_signed" {
+                "本轮实际保存并登记了 1 份新副本："
+            } else { "本轮没有成功保存并登记的新文档" }), "Keep the exact document receipt alongside packing facts: {reply}");
+            assert_eq!(final_result["execution_evidence"]["publication_summary_from_receipts"], true);
+            assert_eq!(final_result["partial"], scenario == "packing_unsigned", "{final_result}");
+        }
         if scenario.starts_with("automatic_") {
             assert!(result["events"].as_array().unwrap().iter().any(|event|
                 event["kind"] == "tool_finished" && event["data"]["name"] == "preview_document"
@@ -778,7 +806,7 @@ async fn model_loop_requires_human_post_classification_and_current_risk_acknowle
         if matches!(
             scenario,
             "high_risk_signed" | "explicit_signed_field" | "explicit_whole_message" | "selected_low_risk"
-                | "engineering_signed" | "engineering_selected_no_call" | "child_signed"
+                | "engineering_signed" | "engineering_selected_no_call" | "packing_signed" | "child_signed"
         ) {
             assert_eq!(apply["data"]["result"]["ok"], true, "{apply}");
             assert_eq!(
@@ -795,7 +823,7 @@ async fn model_loop_requires_human_post_classification_and_current_risk_acknowle
                 text.contains(
                     if scenario.starts_with("automatic_") {
                         "明确选择"
-                    } else if scenario.starts_with("high_risk") || scenario.starts_with("explicit_") || scenario.starts_with("engineering_") || scenario.starts_with("child_") {
+                    } else if scenario.starts_with("high_risk") || scenario.starts_with("explicit_") || scenario.starts_with("engineering_") || scenario.starts_with("packing_") || scenario.starts_with("child_") {
                         "持证人员"
                     } else {
                         "必须先读取"

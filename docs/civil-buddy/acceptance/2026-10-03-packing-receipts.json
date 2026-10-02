@@ -1,0 +1,153 @@
+{
+  "schema": "civil-buddy-packing-receipt-acceptance.v1",
+  "date": "2026-10-03",
+  "scope": "Offline scripted model reproducing previously observed bad prose; real Windows host and calculation worker. Not another DeepSeek acceptance.",
+  "source_parent_commit": "2bc22da53b04700272412bc00ce1c9b662ac7bd7",
+  "source_worktree_dirty": true,
+  "agent_source_sha256": "d1b62079457e24ed2a142aa1b476fcaa3fff8d669ef2ffd267e19bf9258b1d5d",
+  "binary_sha256": "3ee01ec11c414f14d483bdde59e219c86b509849e4ce27fc762d6cff4b084756",
+  "turn_id": "3eaf9a5fe8a8418ea1c31950e596bba2",
+  "passed": true,
+  "host_flow_checks": {
+    "completed": true,
+    "not_partial": true,
+    "host_summary": true,
+    "original_model_draft_preserved": true,
+    "model_draft_untrusted": true,
+    "wrong_box_types_not_canonical": true,
+    "wrong_tool_claim_not_canonical": true,
+    "actual_successful_tools": true,
+    "tools_in_canonical": true,
+    "source_unchanged": true,
+    "no_artifacts": true,
+    "no_tool_errors": true,
+    "sole_scripted_model": true,
+    "three_scripted_responses": true,
+    "source_hash_bound": true
+  },
+  "host_flow_checks_passed": 15,
+  "host_flow_checks_total": 15,
+  "numerical_checks": {
+    "passed": true,
+    "checks_passed": 46,
+    "checks_total": 46
+  },
+  "scripted_model_responses": 3,
+  "real_provider_calls": 0,
+  "source_sha256": "c8ced5c16b00463c45b7f8452d3b496f5bf097a1f3655136912fcd02462b5fa1",
+  "canonical_reply": "## Packing execution receipt\n\n### Selected source 1\n- Source: ` geometry-only.json `\n- Selected source SHA-256: ` c8ced5c16b00463c45b7f8452d3b496f5bf097a1f3655136912fcd02462b5fa1 `\n- Status: calculation recorded; geometric fit does not establish packaging structural suitability.\n- Baseline: containers = 5; packaging boxes = 11; geometric fit = yes.\n- Final: containers = 5; packaging boxes = 11; geometric fit = yes.\n- Recorded replan rounds: 2; outcome: no improvement.\n- Packaging structure counts (unit: boxes): pass = 0; fail = 1; needs reinforcement = 0; pending design = 10.\n\n- Successful main-agent tools this turn: ` list_files `, ` read_file `, ` packing_replan `\n- Failed main-agent tool calls this turn: 0\n\nThese receipts do not grant shipping release, engineering approval or professional signoff, and do not certify that every requested action is complete. The AI interpretation is retained separately.",
+  "interpretation": {
+    "preserved_from_live_turn": "cdcf5dc1404142bb889167a6de53f061",
+    "kept_verbatim": true,
+    "trust": "model_claim",
+    "known_wrong_box_types_phrase_retained_only_as_interpretation": true
+  },
+  "regression_tests": {
+    "rust": {
+      "passed": 35,
+      "total": 35,
+      "groups": {
+        "publication_and_history": 6,
+        "document_gates": 18,
+        "packing": 11
+      }
+    },
+    "ui": {
+      "passed": 75,
+      "total": 75,
+      "groups": {
+        "agent_ui": 71,
+        "i18n": 4
+      }
+    }
+  },
+  "browser": {
+    "host_receipt_visible": true,
+    "interpretation_initially_collapsed": true,
+    "interpretation_expands_with_original_text": true,
+    "locale_switch_translates_label_not_report": true,
+    "scripted_model_label_visible": true
+  },
+  "initial_test_failure": {
+    "file": "work/practical-packing-receipts-20261003/rust-document-tests.log",
+    "passed": 15,
+    "total": 18,
+    "reason": "An overly broad assertion expected the word document in an existing Chinese publication receipt which says new copy; subsequent tests inherited the poisoned fixture lock. Replaced with the actual receipt prefix; retained the failed log and separately reran all targeted tests."
+  },
+  "limits": [
+    "New reporting behavior was tested with a localhost scripted provider returning the earlier incorrect DeepSeek prose, not another live DeepSeek request.",
+    "Main packing receipt is generated from fixed-tool records; retained model interpretation is not fully fact-verified.",
+    "Synthetic example remains five containers with no improvement; one box fails structure screening and ten need detailed design.",
+    "No Jev request or calibration; no shipping release, real-project, second-computer, field-microphone or complex real-Office acceptance."
+  ],
+  "evidence": [
+    {
+      "local_file": "work/practical-packing-receipts-20261003/compiled-http/report.json",
+      "sha256": "71cfa49ab094867147b415f22f6192abce0e91b7ceebef3bc2dfd7c66f4afd45"
+    },
+    {
+      "local_file": "work/practical-packing-receipts-20261003/compiled-http/events.jsonl",
+      "sha256": "f40014327d3afcd2fbba12fd44be4211ea1c042c76fb6501ea55c5885766fd42"
+    },
+    {
+      "local_file": "work/practical-packing-receipts-20261003/compiled-http/tool-result.json",
+      "sha256": "a818d83ea75c5286795fe3e32040a5d6d1ec9ecd8867d8c4c846c7581ca16f3f"
+    },
+    {
+      "local_file": "work/practical-packing-receipts-20261003/compiled-http/independent-audit.json",
+      "sha256": "74a74fd2a3564d5e6ae881608ba3bc3a8eb692d0a43d44c2f6ead4e9e54fce1a"
+    },
+    {
+      "local_file": "work/practical-packing-receipts-20261003/scripted-responses.json",
+      "sha256": "4389a4df9988c4fdf528e9778554def19cbc282b60c6da97e6b93de0815e2124"
+    },
+    {
+      "local_file": "work/practical-packing-receipts-20261003/rust-publication-tests-final.log",
+      "sha256": "0baf5df2160e8ad99d2aa5da13d11647efad58a5b5ccbf47c179abbf8a23d7cb"
+    },
+    {
+      "local_file": "work/practical-packing-receipts-20261003/rust-integrations-final.log",
+      "sha256": "cd12f5c18116d73b46fa6b7b427eb964940e2853b4fe96d6b481b64977585332"
+    },
+    {
+      "local_file": "work/practical-packing-receipts-20261003/rust-receipts-build-final.log",
+      "sha256": "f26cd56630aa513df687ba9ca2d570f5a86cfc9624c77390d29fabcf36353aba"
+    },
+    {
+      "local_file": "work/practical-packing-receipts-20261003/rust-document-tests.log",
+      "sha256": "106d53fcc5867ccb589230e491c6914eb5351cf1e289f2ee9d6186b071c04dd0"
+    },
+    {
+      "local_file": "work/practical-packing-receipts-20261003/ui-tests.log",
+      "sha256": "628080e9e23ab38403dafa232f4d20564b1820a60c070ec06b026f4944cc148b"
+    },
+    {
+      "local_file": "work/practical-packing-receipts-20261003/start_scripted_host.py",
+      "sha256": "076b1bbeb55c56cb361cd0ddae136e55f51de21b1d40dadaff6e2843157fcbca"
+    },
+    {
+      "local_file": "work/practical-packing-receipts-20261003/accept_scripted_receipts.py",
+      "sha256": "efe39541bec7b84acb5e77ce5632d6c07eabd164802b9cb2c9f6b59188dc4999"
+    },
+    {
+      "local_file": "deliverables/practical-workbench-20261003/packing-host-receipt-en.png",
+      "sha256": "47d2c87749329480723916f033eee7c183f32222cd1e323b228ea4624ac77a9b"
+    },
+    {
+      "local_file": "work/practical-packing-receipts-20261003/preview-upgrade.json",
+      "sha256": "0e474ba784a266c927e179e6b58a768eb876c5fbb1c4b19f1770236ff80a40a8"
+    }
+  ],
+  "same_machine_preview_upgrade": {
+    "turns": 12,
+    "events": 354,
+    "turns_sha256": "19da0cd41abdd8eeae4e1f50c2d7d423ac7a9de90f42a230f71dfb84b9d239a2",
+    "events_sha256": "bedd408905c861c4efe1147fcc94a191405248efb2f37a621747447ad97935ab",
+    "records_unchanged": true,
+    "ready": true,
+    "configured_model": "deepseek-flash",
+    "binary_sha256": "3ee01ec11c414f14d483bdde59e219c86b509849e4ce27fc762d6cff4b084756",
+    "new_model_requests": 0,
+    "scope": "Same-machine idle-host upgrade; every stored turn and event row unchanged."
+  }
+}

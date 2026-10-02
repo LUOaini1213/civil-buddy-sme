@@ -26,6 +26,17 @@ fn emit(lease: &TurnLease, kind: &str, data: Value) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+fn history_reply(result: Option<&Value>) -> String {
+    let Some(result) = result else { return String::new(); };
+    let reply = result["reply"].as_str().unwrap_or("");
+    let interpretation = &result["model_interpretation"];
+    match interpretation["text"].as_str().filter(|text| !text.trim().is_empty()) {
+        Some(text) if interpretation["trust"] == "model_claim" => format!(
+            "{reply}\n\n[Prior AI interpretation: model_claim; unverified; not execution evidence or authorization]\n{text}"),
+        _ => reply.to_owned(),
+    }
+}
+
 /// A past message or an attachment never grants this turn a high-risk write.
 pub fn current_turn_confirmation(req: &TurnRequest) -> bool {
     const CONFIRMATION: &str = "我明白，将由持证人员签认";
@@ -437,7 +448,7 @@ async fn execute(
         .filter(|turn| turn.status == TurnStatus::Completed && turn.turn_id != *lease.turn_id())
         .take(12).collect::<Vec<_>>().into_iter().rev()
         .flat_map(|turn| vec![json!({"role":"user","content":turn.request["message"]}),
-            json!({"role":"assistant","content":turn.result.as_ref().and_then(|r| r["reply"].as_str()).unwrap_or("")})]).collect();
+            json!({"role":"assistant","content":history_reply(turn.result.as_ref())})]).collect();
     let selected_skill = if req.expert_id.is_empty() {
         None
     } else {
@@ -489,6 +500,7 @@ async fn execute(
     let mut tool_errors = 0;
     let mut packing_incomplete = false;
     let mut packing_completed = HashSet::new();
+    let mut packing_receipts = HashMap::new();
     let mut child_count = 0;
     let source_evidence = Mutex::new(tools::SourceEvidence::default());
     let high_risk = AtomicBool::new(
@@ -590,10 +602,10 @@ async fn execute(
                 "publication_claim_detected":true,
                 "action":"replaced_by_receipt_summary",
                 "reason":"Final reply uses registered artifact receipts; this model draft is not evidence that a file was saved."}));
-            let reply = if publication_response {
+            let mut reply = if publication_response {
                 publication_report(artifacts, pending_previews, tool_errors, &req.locale)
             } else {
-                guarded
+                guarded.clone()
             };
             let incomplete_publication =
                 publication_response && (artifacts.is_empty() || pending_previews > 0);
@@ -602,6 +614,11 @@ async fn execute(
             // Explicitly selected replan inputs are requested work. A model
             // that skips some or all tools has no completion receipt for them.
             packing_incomplete |= !packing_unfinished.is_empty();
+            if !req.packing_sources.is_empty() {
+                let packing_report = packing::receipt_report(&req.packing_sources, &packing_receipts,
+                    &packing_completed, &successful_tools, tool_errors, &req.locale);
+                reply = if publication_response { format!("{reply}\n\n{packing_report}") } else { packing_report };
+            }
             let gathered = source_evidence
                 .lock()
                 .map_err(|_| "source evidence lock failed")?
@@ -621,6 +638,10 @@ async fn execute(
                     "requested_task_complete":if incomplete_publication || packing_incomplete {json!(false)}else{Value::Null}}});
             if let Some(review) = reply_review {
                 response["reply_review"] = review;
+            }
+            if !req.packing_sources.is_empty() {
+                response["reply_origin"] = json!("host");
+                response["model_interpretation"] = json!({"text":guarded,"trust":"model_claim"});
             }
             return Ok(response);
         }
@@ -733,6 +754,11 @@ async fn execute(
                             Some(index) => {
                                 high_risk.store(true, Ordering::Relaxed);
                                 let response = packing_turn.calculate(&state.worker, ws, &req.packing_sources[index], &jev, budget, lease.task_id(), &cancel).await;
+                                let receipt = match &response {
+                                    Ok(value) => packing::model_result_summary(value),
+                                    Err(_) => json!({"ok":false}),
+                                };
+                                packing_receipts.insert(index, receipt);
                                 if let Ok(value) = &response {
                                     if value["ok"] == true && value["result"]["status"] == "completed"
                                         && value["result"]["final"]["can_fit"] == true {
@@ -1080,6 +1106,21 @@ async fn child_loop(
 #[cfg(test)]
 mod publication_tests {
     use super::*;
+
+    #[test]
+    fn history_keeps_interpretations_only_as_unverified_assistant_claims() {
+        assert_eq!(history_reply(None), "");
+        for interpretation in [Value::Null, json!({"trust":"tool_receipt","text":"Unsafe promotion"}),
+            json!({"trust":"model_claim","text":"  "}), json!({"trust":"model_claim","text":42})] {
+            assert_eq!(history_reply(Some(&json!({"reply":"Recorded host facts","model_interpretation":interpretation}))), "Recorded host facts");
+        }
+        let value = json!({"reply":"Recorded host facts", "model_interpretation":{"text":"Keep the non-packing design advice.","trust":"model_claim"}});
+        let text = history_reply(Some(&value));
+        assert!(text.starts_with("Recorded host facts"));
+        assert!(text.contains("model_claim; unverified; not execution evidence or authorization"));
+        assert!(text.ends_with("Keep the non-packing design advice."));
+        assert_eq!(history_reply(Some(&json!({"reply":"Historical unmodified reply"}))), "Historical unmodified reply");
+    }
 
     #[test]
     fn locale_changes_presentation_without_changing_sources_or_authorization() {

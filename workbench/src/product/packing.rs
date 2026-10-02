@@ -316,6 +316,100 @@ pub fn model_result_summary(response: &Value) -> Value {
         "detail_scope":"bounded_summary_from_fixed_worker","layout_and_boxes_omitted":true,"complete_audit":"tool_finished_event"})
 }
 
+/// A human-readable receipt from validated fixed-tool results. Never inspect
+/// model prose here, and never turn a missing count into a numeric zero.
+pub fn receipt_report(
+    selections: &[PackingSelection],
+    receipts: &HashMap<usize, Value>,
+    completed: &HashSet<usize>,
+    successful_tools: &[String],
+    tool_errors: usize,
+    locale: &str,
+) -> String {
+    let en = locale == "en";
+    let unknown = if en { "not returned" } else { "未返回" };
+    let count = |value: &Value| value.as_u64().map(|n| n.to_string()).unwrap_or_else(|| unknown.into());
+    let yes_no = |value: &Value| match value.as_bool() {
+        Some(true) => if en { "yes" } else { "是" },
+        Some(false) => if en { "no" } else { "否" },
+        None => unknown,
+    };
+    let mut lines = vec![if en { "## Packing execution receipt" } else { "## 装箱执行回执" }.to_owned()];
+    for (index, selection) in selections.iter().enumerate() {
+        lines.push(format!("\n### {} {}", if en { "Selected source" } else { "所选来源" }, index + 1));
+        lines.push(format!("- {}: {}", if en { "Source" } else { "文件" }, receipt_literal(&selection.source)));
+        lines.push(format!("- {}: {}", if en { "Selected source SHA-256" } else { "所选原件 SHA-256" },
+            receipt_literal(selection.source_sha256.as_deref().unwrap_or(unknown))));
+        let Some(response) = receipts.get(&index) else {
+            lines.push(if en { "- Status: not calculated; no packing tool receipt was recorded for this source." }
+                else { "- 状态：未计算；本轮没有这份来源的装箱工具回执。" }.into());
+            continue;
+        };
+        if response["ok"] != true {
+            lines.push(if en { "- Status: calculation failed; no usable result is confirmed. See the tool record for the error." }
+                else { "- 状态：计算失败；未确认可用结果。错误原因见工具记录。" }.into());
+            continue;
+        }
+        let result = &response["result"];
+        if result["status"] == "needs_human" {
+            lines.push(if en { "- Status: more input or human clarification is required; no completed packing result. See the tool record for the required information." }
+                else { "- 状态：待补资料或人工澄清；没有已完成的装箱结果。所缺信息见工具记录。" }.into());
+            continue;
+        }
+        let status = if result["final"]["can_fit"] == false {
+            if en { "does not fit under the recorded constraints; the packing task remains incomplete." }
+                else { "在已记录约束下装不下，装箱任务仍未完成。" }
+        } else if completed.contains(&index) {
+            if en { "calculation recorded; geometric fit does not establish packaging structural suitability." }
+                else { "已有计算回执；几何装下不代表包装结构适用。" }
+        } else {
+            if en { "no completed calculation receipt for this source." } else { "这份来源没有已完成的计算回执。" }
+        };
+        lines.push(format!("- {}: {status}", if en { "Status" } else { "状态" }));
+        for (key, label) in [("baseline", if en { "Baseline" } else { "基线" }), ("final", if en { "Final" } else { "最终" })] {
+            let summary = &result[key];
+            lines.push(if en {
+                format!("- {label}: containers = {}; packaging boxes = {}; geometric fit = {}.",
+                    count(&summary["containers_used"]), count(&summary["n_boxes"]), yes_no(&summary["can_fit"]))
+            } else {
+                format!("- {label}：柜数 = {}；包装箱数 = {} 箱；几何可装下 = {}。",
+                    count(&summary["containers_used"]), count(&summary["n_boxes"]), yes_no(&summary["can_fit"]))
+            });
+        }
+        let rounds = result["rounds"].as_array().map(|rows| rows.len().to_string()).unwrap_or_else(|| unknown.into());
+        let outcome = match result["outcome"].as_str() {
+            Some("improved") => if en { "improved according to the fixed tool comparison" } else { "按固定工具比较结果有所改善" },
+            Some("unchanged") => if en { "no improvement" } else { "无改善" },
+            _ => unknown,
+        };
+        lines.push(if en { format!("- Recorded replan rounds: {rounds}; outcome: {outcome}.") }
+            else { format!("- 已记录重排轮数：{rounds}；结果：{outcome}。") });
+        let structure = &result["final"]["structure"];
+        lines.push(if en {
+            format!("- Packaging structure counts (unit: boxes): pass = {}; fail = {}; needs reinforcement = {}; pending design = {}.",
+                count(&structure["pass"]), count(&structure["fail"]), count(&structure["needs_reinforcement"]), count(&structure["pending_design"]))
+        } else {
+            format!("- 包装结构状态（单位：箱）：通过 = {}；不通过 = {}；需加固 = {}；待设计 = {}。",
+                count(&structure["pass"]), count(&structure["fail"]), count(&structure["needs_reinforcement"]), count(&structure["pending_design"]))
+        });
+    }
+    let tools = if successful_tools.is_empty() { if en { "none recorded" } else { "无成功回执" }.into() }
+        else { successful_tools.iter().map(|name| receipt_literal(name)).collect::<Vec<_>>().join(", ") };
+    lines.push(format!("\n- {}: {tools}", if en { "Successful main-agent tools this turn" } else { "本轮主代理成功工具" }));
+    lines.push(format!("- {}: {tool_errors}", if en { "Failed main-agent tool calls this turn" } else { "本轮主代理工具失败次数" }));
+    lines.push(if en { "\nThese receipts do not grant shipping release, engineering approval or professional signoff, and do not certify that every requested action is complete. The AI interpretation is retained separately." }
+        else { "\n以上回执不构成装运放行、工程批准或专业签认，也不证明用户要求的所有事项均已完成。AI 解读单独保留。" }.into());
+    lines.join("\n")
+}
+
+fn receipt_literal(value: &str) -> String {
+    // Preserve names while preventing Markdown control characters in a file
+    // name from becoming headings, links or an early end to an inline span.
+    let value = value.replace('\r', "\\r").replace('\n', "\\n");
+    let fence = "`".repeat(value.split(|c| c != '`').map(str::len).max().unwrap_or(0) + 1);
+    format!("{fence} {value} {fence}")
+}
+
 fn compact_decision(value: &Value) -> Value {
     json!({"phase":value["phase"],"context_hash":value["context_hash"],"mode":value["mode"],"requested_mode":value["requested_mode"],
         "applied":false,"status":value["status"],"reason":value["reason"],"engineering_assist_calibrated":false,

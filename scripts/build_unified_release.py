@@ -52,6 +52,7 @@ EXTRA = (
     "docs/civil-buddy/acceptance/2026-09-30-practical.json",
     "docs/civil-buddy/acceptance/2026-10-03-packing-replan.json",
     "docs/civil-buddy/acceptance/2026-10-03-live-packing.json",
+    "docs/civil-buddy/acceptance/2026-10-03-packing-receipts.json",
     "docs/civil-buddy/architecture/civil-buddy-rust-architecture.md",
     "docs/civil-buddy/architecture/civil-buddy-document-skills.md",
     "docs/civil-buddy/architecture/civil-buddy-agent-infra.md",
