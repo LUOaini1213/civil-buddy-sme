@@ -813,6 +813,98 @@ async fn model_loop_requires_human_post_classification_and_current_risk_acknowle
 }
 
 #[tokio::test]
+async fn read_only_model_summary_preserves_local_negation_and_audits_publication_claims() {
+    use axum::{body::Body, http::{Request, StatusCode}, routing::post, Json, Router};
+    use civil_workbench::config::{set_runtime_llm, LlmConfig};
+    use http_body_util::BodyExt;
+    use std::time::Duration;
+    use tower::ServiceExt;
+    let _model_guard = SCRIPTED_MODEL_LOCK.lock().unwrap();
+    struct ResetModel;
+    impl Drop for ResetModel {
+        fn drop(&mut self) { set_runtime_llm(None); }
+    }
+    let _reset = ResetModel;
+    async fn http(app: &Router, method: &str, url: &str, body: Value) -> (StatusCode, Value) {
+        let response = app.clone().oneshot(Request::builder().method(method).uri(url)
+            .header("content-type", "application/json").body(Body::from(body.to_string())).unwrap())
+            .await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+    for (index, (draft, claimed)) in [
+        ("Read-only review complete. No files were modified.", false),
+        ("No new files were created. The selected source was read using the fixed tool.", false),
+        ("None of the original documents were modified. Review complete.", false),
+        ("No files were modified, but I saved a new report.", true),
+        ("No files were modified. I saved a report.", true),
+        ("I saved the new report.", true),
+    ].into_iter().enumerate() {
+        let f = Fixture::new();
+        let original = std::fs::read(f.workspace.root().join("report.docx")).unwrap();
+        let model = Router::new().route("/chat/completions", post(move |Json(payload): Json<Value>| async move {
+            let read = payload["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool");
+            Json(json!({"model":"scripted-publication-negation","choices":[{
+                "finish_reason":if read {"stop"} else {"tool_calls"},
+                "message":if read {json!({"role":"assistant","content":draft})}
+                    else {json!({"role":"assistant","tool_calls":[{"id":"read-source","type":"function",
+                        "function":{"name":"read_file","arguments":"{\"source\":\"report.docx\"}"}}]})}
+            }],"usage":{"prompt_tokens":100,"completion_tokens":100}}))
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, model).await.unwrap() });
+        set_runtime_llm(Some(LlmConfig { api_key:"scripted-only".into(), base_url,
+            model:"scripted-publication-negation".into() }));
+        let app = civil_workbench::product::api::router(f.state.clone());
+        let (_, registered) = http(&app, "POST", "/api/agent/workspaces", json!({"path":f.workspace.root()})).await;
+        let wid = registered["workspace"]["id"].as_str().unwrap();
+        let session = format!("publication_negation_{index}");
+        let (status, started) = http(&app, "POST", "/api/agent/turns", json!({
+            "workspace":wid,"session_id":session,"mode":"model","sandbox":"read-only","locale":"en",
+            "message":"Read the selected document and summarize it without changing any files.",
+            "files":["report.docx"]})).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+        let url = format!("/api/agent/turns/{}?workspace={wid}&session_id={session}", started["turn_id"].as_str().unwrap());
+        let mut completed = Value::Null;
+        for _ in 0..150 {
+            completed = http(&app, "GET", &url, Value::Null).await.1;
+            if completed["turn"]["status"] != "running" { break; }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        set_runtime_llm(None);
+        server.abort();
+        assert_eq!(completed["turn"]["status"], "completed", "{draft}: {completed}");
+        let result = &completed["turn"]["result"];
+        assert_eq!(result["partial"], claimed, "{draft}: {result}");
+        assert_eq!(result["tool_errors"], 0);
+        assert_eq!(result["execution_evidence"]["successful_tools"], json!(["read_file"]));
+        assert_eq!(result["execution_evidence"]["requested_document_publication"], false);
+        assert_eq!(result["execution_evidence"]["publication_summary_from_receipts"], claimed);
+        assert_eq!(result["artifacts"], json!([]));
+        assert_eq!(std::fs::read(f.workspace.root().join("report.docx")).unwrap(), original);
+        f.no_documents_published();
+        if claimed {
+            assert_ne!(result["reply"], draft);
+            assert!(result["reply"].as_str().unwrap().contains("No new document was saved"));
+            assert_eq!(result["execution_evidence"]["requested_task_complete"], false);
+            assert_eq!(result["reply_review"]["origin"], "host");
+            assert_eq!(result["reply_review"]["model_draft"], draft);
+            assert_eq!(result["reply_review"]["draft_trust"], "model_claim");
+            assert_eq!(result["reply_review"]["publication_claim_detected"], true);
+            assert_eq!(result["reply_review"]["action"], "replaced_by_receipt_summary");
+            assert!(!result["reply_review"]["reason"].as_str().unwrap().is_empty());
+        } else {
+            assert_eq!(result["reply"], draft);
+            assert!(result.get("reply_review").is_none());
+        }
+        let persisted = http(&app, "GET", &url, Value::Null).await.1;
+        assert_eq!(persisted["turn"]["result"], *result, "Guard audit must survive a fresh result read");
+    }
+}
+
+#[tokio::test]
 async fn preview_ids_apply_the_cached_patch_and_reject_unknown_or_mixed_arguments() {
     use axum::{
         body::Body,

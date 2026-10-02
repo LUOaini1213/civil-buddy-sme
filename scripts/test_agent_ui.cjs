@@ -367,7 +367,7 @@ test("Agent UI: selected inputs, real context, tools, subtasks and saved artifac
   await h.ready(); h.selectFirst(); h.$("agentMessage").value = "读取方案"; await h.app.send();
   const sent = h.calls.find((call) => call.url === "/api/agent/turns").body;
   assert.deepEqual(sent.files, ["方案.docx"]); assert.equal(sent.mode, "steps"); assert.equal(sent.sandbox, "read-only");
-  assert.equal(h.$("agentTurnStatus").textContent, "已完成"); assert.equal(h.timers.size, 0);
+  assert.equal(h.$("agentTurnStatus").textContent, "部分完成"); assert.equal(h.timers.size, 0);
   assert.equal(h.$("agentEvents").children.length, 8); assert.doesNotMatch(h.$("agentEvents").textContent, /must-not-repeat/);
   assert.match(h.$("agentContextText").textContent, /输入估算 1,000 \/ 6,000/); assert.match(h.$("agentContextText").textContent, /省略 2 条/);
   assert.equal(h.$("agentContextMeter").value, 1000); assert.equal(h.$("agentContextMeter").max, 6000);
@@ -980,6 +980,111 @@ test("History recovery: fresh browser discovers persisted sessions and reopens o
   h.win.CBI18n.setLocale("en");
   assert.match(h.$("agentSession").textContent, /Tasks: 1/);
   assert.equal(h.$("agentReply").textContent, "已保存的原文");
+});
+
+test("Agent result: partial completion without artifacts has honest bilingual result and history labels", async (t) => {
+  for (const [status, partial, zh, en] of [
+    ["completed", true, "部分完成", "Partially completed"],
+    ["succeeded", true, "部分完成", "Partially completed"],
+    ["completed", false, "已完成", "Completed"],
+    ["completed", "true", "已完成", "Completed"],
+    ["failed", true, "未完成", "Incomplete"],
+    ["cancelled", true, "已停止", "Stopped"],
+    ["interrupted", true, "服务重启时中断", "Interrupted by service restart"]
+  ]) {
+    const turn = { turn_id: "status-turn", session_id: "status-session", status, last_seq: 0,
+      result: { reply: "原文件未变，工具未生成副本。", partial, artifacts: [] } };
+    const h = harness(historyRoute((url) => {
+      if (url.startsWith("/api/agent/sessions?")) return response({ workspace: "workspace-1", sessions: [{ ...savedSession(turn.session_id, turn.turn_id), status }], next_cursor: null });
+      if (url.startsWith("/api/agent/turns?")) return response({ turns: [turn], next_cursor: null });
+      if (url.includes("/status-turn/events?")) return response({ turn, events: [] });
+      if (url.startsWith("/api/agent/turns/status-turn?")) return response({ turn });
+    })); t.after(h.close); installLanguage(h); await h.ready();
+    for (const [locale, label] of [["zh-CN", zh], ["en", en], ["zh-CN", zh]]) {
+      h.win.CBI18n.setLocale(locale);
+      assert.equal(h.$("agentTurnStatus").textContent, label);
+      assert.ok(h.$("agentNotice").textContent.startsWith(label));
+      assert.ok(h.$("agentTurns").textContent.includes(" · " + label));
+      assert.ok(h.$("agentSession").selectedOptions[0].textContent.endsWith(" · " + label));
+      assert.equal(h.$("agentPartial").hidden, partial !== true);
+      assert.doesNotMatch(h.$("agentPartial").textContent, /下载|download|已保存|Saved outputs/);
+      assert.equal(h.$("agentArtifacts").children.length, 0);
+      assert.equal(h.$("agentReply").textContent, turn.result.reply);
+    }
+    assert.equal(h.app.state.turn.status, status, "presentation must not rewrite the runtime lifecycle");
+    assert.equal(h.timers.size, 0);
+    assert.equal(h.calls.some(call => call.url === "/api/agent/turns" && call.init), false);
+  }
+});
+
+test("Agent result: detailed partial result overrides a summary-only history row", async (t) => {
+  const turn = { turn_id: "partial-summary", status: "completed", result: { partial: true, reply: "仍有未完成项", artifacts: [] } };
+  const other = { turn_id: "older-partial", status: "completed", result: { partial: true } };
+  const h = harness((url, init) => {
+    if (url === "/api/agent/turns" && init) return response({ turn_id: turn.turn_id, session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/partial-summary/events?")) return response({ turn, events: [] });
+    if (url.startsWith("/api/agent/turns?")) return response({ turns: [{ turn_id: turn.turn_id, status: "completed" }, other] });
+  }); t.after(h.close); installLanguage(h); await showDelivery(h);
+  assert.equal(h.$("agentTurnStatus").textContent, "部分完成");
+  assert.equal([...h.$("agentTurns").children].filter(button => button.textContent.includes(" · 部分完成")).length, 2);
+  h.win.CBI18n.setLocale("en");
+  assert.equal([...h.$("agentTurns").children].filter(button => button.textContent.includes(" · Partially completed")).length, 2);
+});
+
+test("Agent reply provenance: only recorded model replies show the bilingual interpretation label", async (t) => {
+  const reply = "原文：10 箱型、已完成，不据此改写工具结果。";
+  for (const [mode, resultReply] of [["model", reply], ["steps", reply], [undefined, reply], ["model", ""]]) {
+    const turn = { turn_id: "provenance-turn", session_id: "provenance-session", status: "completed", last_seq: 0,
+      ...(mode ? { request: { mode } } : {}), result: { reply: resultReply } };
+    const h = harness(historyRoute((url) => {
+      if (url.startsWith("/api/agent/sessions?")) return response({ workspace: "workspace-1", sessions: [savedSession(turn.session_id, turn.turn_id)], next_cursor: null });
+      if (url.startsWith("/api/agent/turns?")) return response({ turns: new URL(url, "http://local").searchParams.get("session_id") === turn.session_id ? [turn] : [], next_cursor: null });
+      if (url.includes("/provenance-turn/events?")) return response({ turn, events: [] });
+      if (url.startsWith("/api/agent/turns/provenance-turn?")) return response({ turn });
+    })); t.after(h.close); installLanguage(h); await h.ready();
+    const label = h.$("agentReplyProvenance"), visible = mode === "model" && resultReply.length > 0;
+    assert.equal(label.nextElementSibling, h.$("agentReply"));
+    for (const [locale, text] of [["zh-CN", "AI 解读：请结合工具结果核对数值和执行情况。"],
+      ["en", "AI interpretation: check figures and execution details against the tool results."],
+      ["zh-CN", "AI 解读：请结合工具结果核对数值和执行情况。"]]) {
+      h.win.CBI18n.setLocale(locale);
+      assert.equal(label.hidden, !visible);
+      assert.equal(label.textContent, visible ? text : "");
+      assert.equal(h.$("agentReply").textContent, resultReply);
+    }
+    await h.app.changeSession("", true);
+    assert.equal(label.hidden, true); assert.equal(label.textContent, "");
+    h.win.CBI18n.setLocale("en");
+    assert.equal(label.hidden, true); assert.equal(label.textContent, "");
+  }
+});
+
+test("Agent reply provenance: new task clears the prior model label before a steps result arrives", async (t) => {
+  let starts = 0, release;
+  const configuredCaps = { ...caps, models: { configured: true } };
+  const h = harness((url, init) => {
+    if (url === "/api/agent/capabilities") return response(configuredCaps);
+    if (url === "/api/agent/workspaces") return response({ workspace: { id: "workspace-1", root: "C:/engineering" }, capabilities: configuredCaps });
+    if (url === "/api/llm-config") return response({ configured: true, model: "test-model" });
+    if (url === "/api/agent/turns" && init) {
+      starts++;
+      const accepted = { turn_id: `provenance-${starts}`, session_id: JSON.parse(init.body).session_id };
+      return starts === 2 ? new Promise(resolve => { release = () => resolve(response(accepted)); }) : response(accepted);
+    }
+    if (/\/provenance-[12]\/events\?/.test(url)) return response({ events: [], turn: { status: "completed",
+      request: { mode: url.includes("provenance-1") ? "model" : "steps" }, result: { reply: "保持原有回复" } } });
+  }); t.after(h.close); installLanguage(h); await h.ready();
+  h.$("agentMode").value = "model"; h.$("agentMode").dispatchEvent(new h.win.Event("change"));
+  h.$("agentMessage").value = "核对资料"; await h.app.send();
+  const label = h.$("agentReplyProvenance");
+  assert.equal(label.hidden, false);
+  h.$("agentMode").value = "steps"; h.$("agentMode").dispatchEvent(new h.win.Event("change"));
+  h.$("agentMessage").value = "检查资料"; const pending = h.app.send(); await settle();
+  assert.equal(typeof release, "function");
+  assert.equal(label.hidden, true); assert.equal(label.textContent, "");
+  release(); await pending;
+  assert.equal(label.hidden, true); assert.equal(label.textContent, "");
+  assert.equal(h.$("agentReply").textContent, "保持原有回复");
 });
 
 test("History recovery: session pages merge while refresh preserves unsent local drafts and permissions", async (t) => {

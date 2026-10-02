@@ -133,6 +133,12 @@ Explicitly selected packing sources must each produce a successful calculation r
 
 The [2026-10-03 acceptance record](acceptance/2026-10-03-packing-replan.json) records the bounded synthetic example, independent geometry checks and current validation limits. Its unchanged five-container result is not an efficiency improvement or a shipping authorization.
 
+The separate [live packing follow-up](acceptance/2026-10-03-live-packing.json) preserves real DeepSeek receipts, independent numerical checks and failed attempts. Model response tokens are provider-reported usage, not billing proof. Raw tool arguments are not retained; the strict index-only schema, single selected source and full source/hash result bind the demonstrated calculation.
+
+Final-reply review distinguishes local English negations such as “No files were modified” from an actual publication claim. A positive claim is still replaced with the registered-artifact summary, and its reviewed draft is retained under `reply_review` with `draft_trust=model_claim`; this draft is audit material, never evidence that a file was saved. Completed executions with `result.partial=true` display “Partially completed” in the result and in history entries for which detailed result evidence is available. The partial notice does not imply that downloads exist.
+
+Saved model replies carry an “AI interpretation” label, translated with the interface while preserving the original reply. Fixed tool result cards and the execution timeline remain separate evidence. The repaired English run retained the correct core calculation but still confused ten boxes with ten box types and incompletely described its tools; neither the label nor a completed workflow certifies full prose accuracy.
+
 ## Deliverable checks
 
 The Agent page checks registered DOCX, XLSX and PDF outputs against their registered SHA-256 and reports whether the original source is current, changed, unavailable or unrecorded. A changed source requires a new copy generated from the updated material. Inspection records identify who requested the check; they are not a reviewer's acceptance or professional sign-off.

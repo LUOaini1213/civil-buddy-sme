@@ -60,8 +60,13 @@ export function createAgentWorkbench(deps) {
   function record() { return state.workspace && saved.workspaces[state.workspace.id]; }
   function sessionRecord() { return record() && record().sessions.find((item) => item.id === state.session); }
   function notice(text, error = false, terminal = false) { state.terminalNotice = terminal; $("agentNotice").textContent = text; $("agentNotice").className = "notice" + (error ? " error" : ""); }
+  function turnStatus(turn) {
+    return ["completed", "succeeded"].includes(turn?.status) && turn.result?.partial === true
+      ? t("部分完成") : t(STATUS[turn?.status]) || turn?.status || t("状态待读取");
+  }
   function terminalNotice() {
-    notice(t(STATUS[state.turn.status]) + (state.turn.result?.partial ? t("，部分工作尚未完成。") : (win.CBI18n?.locale === "en" ? "." : "。")), state.turn.status === "failed", true);
+    notice(turnStatus(state.turn) + (state.turn.result?.partial === true && !["completed", "succeeded"].includes(state.turn.status)
+      ? t("，部分工作尚未完成。") : (win.CBI18n?.locale === "en" ? "." : "。")), state.turn.status === "failed", true);
   }
   function engineeringStatus(key, values = {}, detail = "") {
     state.engineeringStatus = { key, values, detail };
@@ -89,6 +94,7 @@ export function createAgentWorkbench(deps) {
     state.writeGateReason = null; paintWriteGate();
     state.sourceEvidence = null; paintSourceEvidence(null);
     $("agentEvents").replaceChildren(); $("agentArtifacts").replaceChildren(); $("agentReply").textContent = t("结果将显示在这里。");
+    paintReplyProvenance(null);
     if ($("agentEngineeringResults")) { $("agentEngineeringResults").replaceChildren(); $("agentEngineeringResults").hidden = true; }
     if ($("agentPackingResults")) { $("agentPackingResults").replaceChildren(); $("agentPackingResults").hidden = true; }
     $("agentTurnStatus").textContent = t("尚未开始"); $("agentPartial").hidden = true; $("agentUsage").hidden = true;
@@ -155,8 +161,10 @@ export function createAgentWorkbench(deps) {
   function paintSessions() {
     const select = $("agentSession"); select.replaceChildren();
     for (const item of record()?.sessions || []) {
+      const latest = item.latest_turn_id && (idOf(state.turn) === item.latest_turn_id && object(state.turn.result) ? state.turn
+        : state.taskRows.find(turn => idOf(turn) === item.latest_turn_id));
       const suffix = Number.isSafeInteger(item.turn_count) && item.turn_count > 0
-        ? t(" · {count} 条任务", { count: item.turn_count }) + " · " + (t(STATUS[item.status]) || item.status || "") : "";
+        ? t(" · {count} 条任务", { count: item.turn_count }) + " · " + turnStatus(latest || item) : "";
       const option = node("option", t("会话 ") + item.id.slice(0, 10) + suffix); option.value = item.id; select.appendChild(option);
     }
     select.value = state.session;
@@ -387,10 +395,12 @@ export function createAgentWorkbench(deps) {
     if (!state.taskRows.length) host.appendChild(node("p", t("本会话暂无执行记录。"), "muted"));
     for (const turn of state.taskRows) {
       const id = idOf(turn); if (!id) continue;
-      const button = node("button", (turn.message || turn.title || id.slice(0, 12)) + " · " + (t(STATUS[turn.status]) || turn.status || t("状态待读取")) + t(" · 发起者：") + (turn.actor_id || t("历史记录未标记")));
+      const displayed = id === idOf(state.turn) && object(state.turn.result) ? state.turn : turn;
+      const button = node("button", (turn.message || turn.title || id.slice(0, 12)) + " · " + turnStatus(displayed) + t(" · 发起者：") + (turn.actor_id || t("历史记录未标记")));
       button.type = "button"; button.setAttribute("aria-current", String(id === idOf(state.turn)));
       button.addEventListener("click", () => showTurn(id)); host.appendChild(button);
     }
+    paintSessions();
     controls();
   }
   async function loadTurns({ more = false, keepHistory = false } = {}) {
@@ -725,7 +735,14 @@ export function createAgentWorkbench(deps) {
       host.appendChild(card);
     }
   }
+  function paintReplyProvenance(result) {
+    const label = $("agentReplyProvenance");
+    const visible = state.turn?.request?.mode === "model" && typeof result?.reply === "string" && result.reply.trim().length > 0;
+    label.hidden = !visible;
+    label.textContent = visible ? t("AI 解读：请结合工具结果核对数值和执行情况。") : "";
+  }
   function paintResult(result) {
+    paintReplyProvenance(result);
     if (!object(result)) return;
     if (typeof result.reply === "string") renderReply($("agentReply"), result.reply);
     if (Object.prototype.hasOwnProperty.call(result, "source_evidence")) paintSourceEvidence(result.source_evidence);
@@ -737,9 +754,10 @@ export function createAgentWorkbench(deps) {
   function paintTurn(turn) {
     if (!object(turn)) return;
     state.turn = { ...state.turn, ...turn };
-    $("agentTurnStatus").textContent = t(STATUS[state.turn.status]) || state.turn.status || t("状态待读取");
+    $("agentTurnStatus").textContent = turnStatus(state.turn);
     $("agentTurnActor").textContent = t("任务发起者：") + (state.turn.actor_id || t("历史记录未标记身份"));
     paintResult(state.turn.result); controls();
+    if (TERMINAL.has(state.turn.status)) paintTurns();
   }
   function renderReply(host, text) {
     renderAgentMarkdown(host, text, { lexer: typeof win.marked?.lexer === "function" ? win.marked.lexer.bind(win.marked) : null, t });
