@@ -85,10 +85,10 @@ export function createAgentWorkbench(deps) {
   }
   const post = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   function stopPolling() { if (timer !== null) unschedule(timer); timer = null; if (controller) controller.abort(); controller = null; }
-  function resetView({ keepHistory = false } = {}) {
+  function resetView({ keepHistory = false, keepPackingSelection = false } = {}) {
     state.subtasks.clear();
     state.packingResults.clear();
-    $("agentPackingSource").value = "";
+    if (!keepPackingSelection) $("agentPackingSource").value = "";
     stopPolling(); state.epoch += 1; state.listEpoch += 1; state.turn = null; state.seq = 0; state.emptyEventPages = 0; state.turnsLoading = false; if (!keepHistory) { state.nextTurnCursor = null; state.taskRows = []; } state.eventRows = []; state.contextData = null; state.artifacts.clear(); state.artifactChecks.clear(); state.engineeringResults.clear();
     state.submitting = false; state.cancelling = false;
     state.writeGateReason = null; paintWriteGate();
@@ -850,7 +850,10 @@ export function createAgentWorkbench(deps) {
     if ($("agentSend").disabled || !$("agentMessage").value.trim()) return;
     cancelVoice();
     const packingSource = $("agentPackingSource").value;
-    const message = $("agentMessage").value.trim(); resetView({ keepHistory: true }); state.submitting = true; controls();
+    const messageDraft = $("agentMessage").value, message = messageDraft.trim();
+    // Submission failures keep the draft and its explicit source available for
+    // retry. Workspace/session changes still reset both in their own handlers.
+    resetView({ keepHistory: true, keepPackingSelection: true }); state.submitting = true; controls();
     const epoch = state.epoch;
     notice(t("正在提交任务…"));
     try {
@@ -862,7 +865,10 @@ export function createAgentWorkbench(deps) {
       if (!current(epoch)) return;
       if (!data.turn_id || data.session_id !== state.session) throw new Error(t("任务响应缺少本会话的执行标识"));
       sessionRecord().turn = data.turn_id; persist(); state.turn = { turn_id: data.turn_id, status: "queued" };
-      $("agentMessage").value = ""; $("agentRiskConfirmation").value = ""; notice(t("任务已提交，正在接收执行事件。")); await poll();
+      // Consume only the accepted draft; a user can already be writing the next.
+      if ($("agentMessage").value === messageDraft) $("agentMessage").value = "";
+      if (payload.packing_sources?.some(selection => selection.source === $("agentPackingSource").value)) $("agentPackingSource").value = "";
+      $("agentRiskConfirmation").value = ""; notice(t("任务已提交，正在接收执行事件。")); await poll();
     } catch (error) { if (current(epoch)) notice(t("任务提交失败：") + error.message, true); }
     finally { if (current(epoch)) { state.submitting = false; controls(); } }
   }

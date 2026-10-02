@@ -13,6 +13,15 @@ UNKNOWN = "UNSPECIFIED"
 CHOICES = {"orientation": {UNKNOWN, "fixed", "upright", "free"},
            "stacking": {UNKNOWN, "no_stack", "allowed"}}
 FRAME = re.compile(r"(?<![a-z])a[\s_-]?frames?(?![a-z])|stillages?|运输架|周转架|A\s*(?:型)?架", re.I)
+# Scan mixed remarks only for explicit handling instructions. A general note
+# such as "tip sheet enclosed" is not itself a transport constraint.
+RAW_HANDLING = re.compile(
+    r"upright|no[ _-]?stack|do not stack|this side up|"
+    r"\b(?:do\s+not|don['’]t|never)\s+(?:tip|tilt|turn\s+over|invert|rotate)\b|"
+    r"\bkeep\s+(?:this|the)\s+(?:face|side)\s+up(?:wards?)?\b|\bno\s+rotation\b|"
+    r"竖放|直立|禁止堆叠|不得堆码|禁止叠放|(?:禁止|不得|不可|请勿)(?:倾斜|倒置|旋转)|此面向上",
+    re.I,
+)
 
 
 def _key(value):
@@ -183,6 +192,6 @@ def legacy_handling(row):
             found[field] = value
     for field in ("note", "备注", "package_type", "spec"):
         value = str(row.get(field) or "")
-        if FRAME.search(value) or re.search(r"upright|no[ _-]?stack|do not stack|this side up|竖放|直立|禁止堆叠|不得堆码|禁止叠放", value, re.I):
+        if FRAME.search(value) or RAW_HANDLING.search(value):
             found[field] = row[field]
     return found

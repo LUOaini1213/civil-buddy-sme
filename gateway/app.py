@@ -2052,13 +2052,16 @@ def api_export_shipment(body: dict):
     """导出 POR+绑扎 xlsx。body: {session_id} → {xlsx_path, download_url, ...}"""
     from urllib.parse import quote
 
-    from packing_assistant.export_pack import export_shipment_xlsx
+    from packing_assistant.export_pack import ShipmentSourceError, export_shipment_xlsx
 
     sid = str((body or {}).get("session_id") or "pipeline")
     st = _get_session(sid)
     if not st:
         raise HTTPException(404, "session 不存在")
-    meta = export_shipment_xlsx(st, output_dir=_export_root())
+    try:
+        meta = export_shipment_xlsx(st, output_dir=_export_root())
+    except ShipmentSourceError as exc:
+        raise HTTPException(409, str(exc)) from exc
     name = Path(str(meta.get("xlsx_path") or "")).name
     return {"ok": True, **meta, "download_url": f"/api/export/file?name={quote(name)}"}
 

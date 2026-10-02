@@ -38,7 +38,8 @@ file:line references in the submitted PDFs were measured there. Since then `main
 workbench (PR #1) and a `/demo` page and a Lightsail guide (PR #2), and on 2026-09-28 it merged the later
 review rounds of the development line (how the link reads mass limits and clauses, English verdict and record
 guards, panel lists with title rows and packaging-equipment rows, a hardened `/demo` upload, a stricter sign-off
-rule); none of these are in the PDFs. The façade demo's figures are unchanged. Smaller differences on `main`: the
+rule); none of these are in the PDFs. The current preview additionally preserves unsupported transport requirements
+and stops the original façade fixture before planning; its old 6/8-container figures are historical only. Other post-submission differences: the
 Rust workbench refuses a bare `confirm_ok`, the Python surfaces also accept one English sign-off sentence but only
 typed on its own, the English bid-book has no Chinese rows, and the tender parse keeps the liquidated-damages and
 retention rows for a person.
@@ -53,70 +54,60 @@ Python 3.11. No model key, no network, no account. It writes drafts into a throw
 (a new temporary folder, or `--job <new folder>`) and ends with `PASS demo_facade`. Flow 1 is the linked run; flows 2–4
 run tender review, packing and site paperwork on their own.
 
-**Clause → plan → statement.** Abridged output of flow 1 (current `main`; the figures are the same at `v0.7.0`):
+**Clause → source requirement → statement.** Current preview output of flow 1
+(reproduced offline on 2026-10-03 at `4fc84a5`):
 
 ```text
-== 1 Tender <-> packing, linked: the ITT's logistics clauses, the plan under them, the English statements
-  $ civil exec 'Link the tender facade_itt_doc.md to the packing list facade_panels.xlsx and write the logistics response'
-  reply: Linked facade_itt_doc.md and facade_panels.xlsx: 5 logistics clauses, 7 statements (1 covered by the plan, 2 partial, 0 gap, 4 for a person). ...
-    container type: Container type 40HQ taken from Clause 4.8.
-    inputs: tender facade_itt_doc.md sha256 855de144f92e · panel_list facade_panels.xlsx sha256 3d62fd55274c · plan pack-plan.json sha256 8a0bec8ece8a
-    S1 Clause 4.8 · container_type · covered · clause names 40HQ; plan made in 40HQ
-    S2 Clause 4.8 · containers_used · partial · 6 x 40HQ (N0 6) for 24 pieces / 10,800 kg net from facade_panels.xlsx
-    S3 Clause 4.9 · gross_mass · partial · heaviest container 6,472.8 kg gross (2,582.8 cargo + 3,890.0 tare) vs limit 20,000 kg, margin 13,527.2
-    S4 Clause 4.10 · securing · human_required · not modelled -> competent person (lashing)
-    S5 Clause 4.7 · handling · human_required · not modelled -> logistics
-    S6 Clause 4.7 · crate_structure · human_required · 24 of 24 crates pending detailed design
-    S7 Clause 4.11 · delivery_sequence · human_required · not modelled -> project manager
+Linked facade_itt_doc.md and facade_panels.xlsx: 5 logistics clauses, 7 statements
+(0 covered by the plan, 0 partial, 0 gap, 7 for a person).
+container type: 40HQ taken from Clause 4.8.
+no loading plan: unsupported_transport_requirements
+plan name: null; plan sha256: null
+S1 Clause 4.8  container_type    human_required
+S2 Clause 4.8  containers_used   human_required
+S3 Clause 4.9  gross_mass        human_required
+S4 Clause 4.10 securing          human_required
+S5 Clause 4.7  handling          human_required
+S6 Clause 4.7  crate_structure   human_required
+S7 Clause 4.11 delivery_sequence human_required
 ```
 
-It also writes an English bid-book draft (`bidbook.en.md` / `.docx`) whose logistics chapter states
-each of these with its clause and figure, and the link record `tender-packing-link.json`
-(`confirmed_by_person = false`, `submit_blocked = true`). S2 and S3 read *partial* because the
-tender asks for A-frame stillages, which the planner does not model; the statement says so with a
-`[TO CONFIRM by logistics: ...]` placeholder.
+The original panel list requires upright transport, A-frame stillages and no
+stacking. Automatic boxing cannot enforce those requirements, so the demo
+preserves their source text and asks for package data instead of calculating an
+unsupported container count. The English bid-book and `tender-packing-link.json`
+retain source hashes, clause references and unresolved statements, with
+`confirmed_by_person = false` and `submit_blocked = true`.
 
-**What goes stale when the panel list changes.** The demo then feeds revision B of the panel list
-(level L9 added, L8 panels heavier; 30 panels, 13,920 kg) with the same request, asked in Chinese:
+**When revision B arrives**, the source name and hash change. Transport data is
+still missing, so no container-count or mass change is invented. Earlier Word
+copies are preserved; the re-run writes new copies such as `bidbook.en-2.docx` and
+`tender-packing-link-2.docx`. The packing-only flow likewise writes a row-by-row
+human supplement checklist in English or Chinese and gives no loading plan.
 
-```text
-    S2 Clause 4.8 · containers_used · partial · 8 x 40HQ (N0 8) for 30 pieces / 13,920 kg net from facade_panels_rev_b.xlsx
-    since the previous run: panel list (facade_panels.xlsx -> facade_panels_rev_b.xlsx) changed, plan changed: containers used 6 -> 8;
-      pieces 24 -> 30; cargo net kg 10,800 -> 13,920; max cargo kg 2,582.8 -> 2,862.8; max gross kg 6,472.8 -> 6,752.8;
-      statements S2, S3, S6, S7 need re-confirmation; earlier Word copies bidbook.en.docx, tender-packing-link.docx
-      still hold the previous statements - do not send them
-      re-derived with the same figures: S1, S4, S5
-  sign-off: nothing here is booked or submitted (submit_blocked stays true). A person confirms the loading plan
-  before booking, and re-confirms every statement the re-run names.
-```
+**To try a numerical packing example**, use the separate
+[bounded replan fixture](examples/packing-replan/README.md). It explicitly declares
+fixed orientation and floor-only placement, and reports layout feasibility apart
+from unresolved box-structure checks. Do not remove requirements from a real
+shipment to make it resemble this synthetic fixture.
 
-(Lines wrapped here for width.) The re-run never overwrites the earlier Word files; it writes
-`bidbook.en-2.docx` and `tender-packing-link-2.docx` beside them.
+### What remains for a person
 
-### What the demo itself says is not done
+- Supply the loaded package outer dimensions, package count and gross mass;
+  A-frame/stillage loads also require net mass, tare and declared capacity.
+- Check securing, lifting, delivery sequence, stability, packaging structure and
+  the signed VGM. A geometric fit is not shipping release.
+- Review façade specification clauses and unclassified commercial rows. The
+  ordinary tender parser does not provide complete façade-specification coverage;
+  the linked run separately reads the five logistics clauses.
+- Review the site-document drafts. The high-risk safety-brief flow deliberately
+  writes nothing until the operator supplies the current-turn confirmation.
 
-These are printed by `scripts/demo_facade.py`, not added for this page:
-
-- **Securing, handling and delivery sequence are not modelled.** Lashing to the CTU Code (S4), A-frame
-  stillages / upright transport / no stacking (S5) and the delivery sequence (S7) go to a person.
-  "not modelled: A-frame stillages (the ITT asks for them). That needs the contractor's stillage size,
-  tare and capacity."
-- **Crate structure is not designed.** 24 of 24 crates are *pending detailed design*; the
-  engine does not invent a pass.
-- **Handling notes do not change the plan.** Glass / upright / no-stack notes have no effect on the
-  plan, in English or in Chinese.
-- **The tender parse lists 0 of the ITT's 12 façade specification clauses** (PMU and VMU mock-ups, heat
-  soak, site water test, PE-endorsed calculations, warranty, A-frame delivery, the four logistics
-  clauses, insurance). The four logistics clauses are read by the link instead. The liquidated-damages
-  (S$5,000 per day) and retention (5%) rows are kept as unclassified rows for a person to check.
-- **Nothing is booked or submitted.** `submit_blocked` stays `true`; a person confirms the loading plan
-  and re-confirms every statement a re-run names.
-
-The gross mass is the engine's per-container cargo plus an approximate knowledge-base tare (40HQ
-3,890 kg); dunnage, lashing and stillage mass are excluded, and the signed VGM governs. More limits
-(there is no dedicated linked-run MCP tool or gateway endpoint; the UI and most post templates are in Chinese;
-no live-model run) are listed in [examples/facade-demo/README.md](examples/facade-demo/README.md)
-and in §3.4 of the technical document.
+The [v0.7.0 README](https://github.com/LUOaini1213/civil-buddy-sme/blob/v0.7.0/README.md)
+and submitted documents retain the earlier 6/8-container results. They describe
+that historical version, whose handling notes did not alter the plan; they are
+not the expected result of today's command. More fixture details and limitations
+are in [examples/facade-demo/README.md](examples/facade-demo/README.md).
 
 ## Safety model
 
@@ -124,8 +115,9 @@ Enforced in code, not in prompts; shipped as the security baseline (pull request
 `d3ada11`):
 
 1. **Code computes the numbers.** Container counts, masses, coordinates and clause figures come from
-   deterministic tools. A model (optional, any OpenAI-compatible endpoint) may route and phrase, but its
-   text never reaches a deliverable.
+   deterministic tools. The legacy Python pipeline excludes model prose from deliverables. The unified
+   Rust workbench can publish model-drafted document copies only after source, preview, permission and
+   verification gates; see [the runtime boundaries](docs/civil-buddy/unified-workbench.md).
 2. **The model never approves.** A program cannot approve by sending a flag: the Python MCP server
    neither offers nor accepts one, and the web apps refuse a `true` boolean. In civil-buddy's own model
    loop the model's tools have no confirm field, and a copied sentence is replaced.
@@ -135,9 +127,10 @@ Enforced in code, not in prompts; shipped as the security baseline (pull request
    this off." (the Rust workbench accepts only the Chinese sentence), and it covers that turn only. It is
    typed on its own, in the confirmation box, at the terminal's `approve>` prompt or in the desktop dialog:
    on the Python surfaces the sentence written into a task, or quoted from a tender, approves nothing. The
-   sentence is asked for only when a high-risk post is selected or loaded; in the Rust workbench's default
-   automatic mode the model decides whether to load a post, and there a sentence pasted on a line of its own
-   still approves (both are open items in [SECURITY.md](SECURITY.md)).
+   legacy Python flow asks for the sentence when a high-risk post is selected or loaded. The unified Rust
+   Agent requires a person to select a post before saving document copies; automatic mode can read and
+   preview. It accepts acknowledgement only from the dedicated current-turn field or the entire trimmed
+   message, never a line inside pasted material. See [SECURITY.md](SECURITY.md).
    The bid posts (bid-parse, bid-tech, bid-compliance) are **low risk** in `seed.json`: they draft without
    the sentence, but every draft carries `submit_blocked = true` and the qualification / rejection rows
    wait for a person.

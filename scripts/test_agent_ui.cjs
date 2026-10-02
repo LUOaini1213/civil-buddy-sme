@@ -95,6 +95,90 @@ function harness(route = () => undefined, saved = storage()) {
   return h;
 }
 
+function packingDraftHarness(route = () => undefined) {
+  const packingCaps = { ...caps, features: { ...caps.features, packing_replan: true } };
+  return harness((url, init) => {
+    const custom = route(url, init); if (custom !== undefined) return custom;
+    if (url === "/api/agent/capabilities") return response(packingCaps);
+    if (url === "/api/agent/workspaces" && init) {
+      const root = JSON.parse(init.body).path;
+      return response({ workspace: { id: root === "C:/new" ? "workspace-2" : "workspace-1", root }, capabilities: packingCaps });
+    }
+    if (url.startsWith("/api/agent/files?")) return response({ files: [{ path: "箱单.json" }, { path: "新箱单.json" }] });
+  });
+}
+
+test("Agent submission: failed packing requests retain the exact draft and source for retry", async (t) => {
+  let attempts = 0;
+  const h = packingDraftHarness((url, init) => {
+    if (url === "/api/agent/turns" && init) return ++attempts === 1
+      ? response({ detail: "Temporarily unavailable" }, 503)
+      : response({ turn_id: "packing-retry", session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/packing-retry/events?")) return response({ events: [], turn: { status: "completed", result: { reply: "Done" } } });
+  });
+  t.after(h.close); await h.ready(); h.selectFirst();
+  h.$("agentPackingSource").value = "箱单.json";
+  const draft = "  请重排箱单\n保留原始约束  "; h.$("agentMessage").value = draft;
+  await h.app.send();
+  assert.equal(h.$("agentPackingSource").value, "箱单.json");
+  assert.equal(h.$("agentMessage").value, draft);
+  assert.equal(h.$("agentSend").disabled, false);
+  assert.match(h.$("agentNotice").textContent, /Temporarily unavailable/);
+  await h.app.send();
+  const sent = h.calls.filter(call => call.url === "/api/agent/turns" && call.init).map(call => call.body);
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent.map(body => body.packing_sources), [[{ source: "箱单.json" }], [{ source: "箱单.json" }]]);
+  assert.deepEqual(sent.map(body => body.message), [draft.trim(), draft.trim()]);
+  assert.equal(h.$("agentPackingSource").value, ""); assert.equal(h.$("agentMessage").value, "");
+});
+
+test("Agent submission: accepting a request preserves a newer unsent message", async (t) => {
+  let finish;
+  const h = packingDraftHarness((url, init) => {
+    if (url === "/api/agent/turns" && init) return new Promise(resolve => { finish = resolve; });
+    if (url.includes("/accepted-draft/events?")) return response({ events: [], turn: { status: "completed", result: { reply: "Done" } } });
+  });
+  t.after(h.close); await h.ready(); h.selectFirst();
+  h.$("agentPackingSource").value = "箱单.json"; h.$("agentMessage").value = "已提交任务";
+  const sending = h.app.send(); await settle();
+  assert.equal(h.$("agentMessage").disabled, false);
+  assert.equal(h.$("agentPackingSource").value, "箱单.json");
+  const nextDraft = "  下一项任务\n尚未提交  "; h.$("agentMessage").value = nextDraft;
+  h.$("agentMessage").dispatchEvent(new h.win.Event("input"));
+  finish(response({ turn_id: "accepted-draft", session_id: h.app.state.session })); await sending;
+  assert.equal(h.$("agentMessage").value, nextDraft);
+  assert.equal(h.$("agentPackingSource").value, "");
+  const requests = h.calls.filter(call => call.url === "/api/agent/turns" && call.init);
+  assert.equal(requests.length, 1); assert.equal(requests[0].body.message, "已提交任务");
+  assert.deepEqual(requests[0].body.packing_sources, [{ source: "箱单.json" }]);
+});
+
+test("Agent submission: late responses cannot restore or consume drafts after changing context", async (t) => {
+  for (const context of ["session", "workspace"]) for (const accepted of [false, true]) {
+    await t.test(`${context}: ${accepted ? "accepted" : "failed"}`, async () => {
+      let finish;
+      const h = packingDraftHarness((url, init) => {
+        if (url === "/api/agent/turns" && init) return new Promise(resolve => { finish = resolve; });
+      });
+      try {
+        await h.ready(); h.selectFirst(); h.$("agentPackingSource").value = "箱单.json"; h.$("agentMessage").value = "旧上下文任务";
+        const previousSession = h.app.state.session, sending = h.app.send(); await settle();
+        if (context === "session") await h.app.changeSession("", true);
+        else await h.app.openWorkspace("C:/new", { manual: true });
+        assert.equal(h.$("agentPackingSource").value, ""); assert.equal(h.$("agentMessage").value, "");
+        const nextFile = h.doc.querySelectorAll("#agentFiles input")[1]; nextFile.checked = true; nextFile.dispatchEvent(new h.win.Event("change"));
+        h.$("agentPackingSource").value = "新箱单.json"; h.$("agentMessage").value = "新上下文草稿";
+        finish(accepted ? response({ turn_id: "old-context-turn", session_id: previousSession }) : response({ detail: "Old request failed" }, 503));
+        await sending;
+        assert.equal(h.$("agentPackingSource").value, "新箱单.json"); assert.equal(h.$("agentMessage").value, "新上下文草稿");
+        assert.equal(h.app.state.turn, null); assert.equal(h.app.state.submitting, false);
+        assert.doesNotMatch(h.$("agentNotice").textContent, /Old request failed/);
+        assert.equal(h.calls.some(call => call.url.includes("/old-context-turn/")), false);
+      } finally { h.close(); }
+    });
+  }
+});
+
 test("Agent packing: only explicitly selected JSON is authorized for one turn", async (t) => {
   const h = harness((url, init) => {
     if (url === "/api/agent/capabilities" || url === "/api/agent/workspaces") return response(url.endsWith("workspaces")
