@@ -27,15 +27,48 @@ can_fit=True、柜数合理、没有告警。实测过的三种丢法：
 from __future__ import annotations
 
 from collections import defaultdict
+from copy import deepcopy
 from fractions import Fraction
 from typing import Any, Dict, List, Sequence
 
 NOT_CONSERVED = "cargo_not_conserved"
+PHYSICAL_SPLIT_NOT_AUTHORIZED = "physical_split_not_authorized"
 
 #: 每个箱的净重取整到 0.1 kg，逐箱最多差 0.05；再留一点给拆行时的 0.001 kg 取整。
 _KG_PER_BOX = 0.06
 _KG_BASE = 0.5
 _MM_TOL = 1.0
+
+
+def physical_split_issues(materials, boxes, *, lang="zh") -> List[Dict[str, Any]]:
+    """A conserved fractional piece is not an authorized physical cargo item.
+
+    Keep candidate boxes available for audit, but require a human-reviewed
+    material list or packaging design before any layout or shipping draft.
+    Check actual content markers so a caller cannot bypass this by omitting the
+    conservation summary or by invoking the loader directly.
+    """
+    sources = {str(row.get("id") or ""): row for row in materials or []}
+    splits = {}
+    for box in boxes or []:
+        for item in box.get("contents") or box.get("content") or []:
+            parts = int(item.get("split_of") or 1)
+            if parts <= 1:
+                continue
+            source_id = str(item.get("source_material_id") or item.get("material_id") or "")
+            record = splits.setdefault(source_id, {"id": source_id, "parts_per_unit": parts})
+            record["parts_per_unit"] = max(record["parts_per_unit"], parts)
+    ask = ("成箱器将一个原始实物按质量拆成了虚拟份额，但原件未授权切割或拆解。请保留原物料，"
+           "由人工确认适用的包装设计；若实物已经拆分，请提供人工核对后的实际分件尺寸、重量和数量。")
+    if lang == "en":
+        ask = ("Automatic boxing would split an individual source piece into virtual mass parts. "
+               "This source does not authorize cutting or dismantling. Preserve the original piece and obtain "
+               "a suitable packaging design, or provide a human-reviewed source with the actual separate pieces "
+               "and their dimensions, weights and quantities.")
+    return [{**record, "name": str(sources.get(source_id, {}).get("name") or ""),
+             "reason": PHYSICAL_SPLIT_NOT_AUTHORIZED,
+             "source_material": deepcopy(sources.get(source_id, {})), "ask": ask}
+            for source_id, record in sorted(splits.items())]
 
 
 def _row_quantity(m: Dict[str, Any]) -> int:

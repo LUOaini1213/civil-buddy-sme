@@ -13,6 +13,18 @@ an integer from 0 to 80 mm. At most 40 rows / 200 pieces and 2 MiB are accepted.
 Material IDs must be distinct. Unknown fields, arbitrary options and missing
 policy values are rejected, not silently ignored.
 
+When both unit and total weight are supplied, total weight must match unit
+weight times quantity (0.01 kg absolute rounding tolerance). Conflicting values
+return a row-level `source_weight_mismatch` question with the original values;
+the planner does not choose the lighter value.
+
+An individual source piece remains indivisible. If the boxing rules would meet
+a mass limit by splitting one piece into virtual parts, replan returns
+`needs_human` with `physical_split_not_authorized` before layout solving. This
+also applies to the boxer's own structural mass limit. Supply a suitable package
+design or a reviewed source describing actual separate pieces; lowering a mass
+cap does not authorize cutting or dismantling.
+
 `layout_policy` must explicitly declare `orientation: fixed` and
 `stacking: floor_only`. The existing standard boxing rules produce the baseline
 boxes. Those outer dimensions and masses remain fixed during at most two

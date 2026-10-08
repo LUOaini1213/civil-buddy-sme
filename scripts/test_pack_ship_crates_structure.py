@@ -74,11 +74,12 @@ def test_module_majority_judges_the_unit_not_the_row() -> None:
 
 
 def test_bare_beams_are_still_crated_by_the_library() -> None:
-    """梁、柱不是成品箱：仍走标准箱库，超跨距上限的仍按质量拆分并在报告里说明（#49 的行为不变）。"""
+    """梁、柱不是成品箱；标准库的虚拟拆件保留对账，但不能成为可用方案。"""
     path = Path(tempfile.gettempdir()) / "cb_crates_beams.csv"
     path.write_text(BEAMS_CSV, encoding="utf-8")
     plan = run_plan(file_path=str(path))
-    assert plan["ok"] is True and plan["n_boxes"] == 14, plan
+    assert plan["ok"] is False and plan["can_fit"] is False, plan
+    assert plan["error"] == "physical_split_not_authorized" and "containers_used" not in plan, plan
     assert [row["id"] for row in plan["conservation"]["mass_split_rows"]] == ["GL-1", "GZ-2"], plan["conservation"]
 
 

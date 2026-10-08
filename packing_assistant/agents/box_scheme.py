@@ -266,9 +266,17 @@ def _conservation_fields(materials: List[Dict[str, Any]], boxes: List[Dict[str, 
 
     返回要并进节点输出的键；finalize 见到 ship_ok=False 即判不可出运（与缺尺寸阻断同一机制）。
     """
-    from packing_assistant.tools.cargo_conservation import check_conservation, violation_sentences
+    from packing_assistant.tools.cargo_conservation import check_conservation, physical_split_issues, violation_sentences
 
     found = check_conservation(materials, boxes)
+    physical_issues = physical_split_issues(materials, boxes)
+    if physical_issues:
+        return {
+            "cargo_conservation": found, "needs_human": physical_issues,
+            "materials_incomplete": True, "ship_ok": False,
+            "errors": ([] if found["ok"] else ["box_scheme_cargo_not_conserved: " + "；".join(violation_sentences(found, 3))])
+                      + ["box_scheme_blocked: physical_split_not_authorized"],
+        }
     if found["ok"]:
         return {"cargo_conservation": found}
     return {

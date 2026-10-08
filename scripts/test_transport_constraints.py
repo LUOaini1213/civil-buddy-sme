@@ -14,7 +14,7 @@ os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 from packing_assistant.logistics import agent, bundle, packing
 from packing_assistant.logistics.intake import parse_document
 from packing_assistant.logistics.ledger import audit_document, validate_document
-from packing_assistant.transport_constraints import normalize
+from packing_assistant.transport_constraints import legacy_handling, normalize
 
 
 def source(**extra):
@@ -33,6 +33,16 @@ def project(data):
 
 
 class Constraints(unittest.TestCase):
+    def test_explicit_orientation_in_mixed_notes_preserves_original_text(self):
+        for field in ("note", "备注", "package_type", "spec"):
+            for instruction in ("DO NOT TIP", "keep this face upward", "keep the side up", "do not rotate", "请勿倒置"):
+                text = "Batch 3; " + instruction + "; painted blue"
+                with self.subTest(field=field, instruction=instruction):
+                    self.assertEqual(legacy_handling({field: text}), {field: text})
+        for note in ("Batch 3; painted blue", "Tip sheet enclosed", "Tipping fees included", "No special handling"):
+            with self.subTest(note=note):
+                self.assertEqual(legacy_handling({"note": note}), {})
+
     def test_boolean_header_polarity_is_explicit(self):
         for field, header, value, expected in [
             ("orientation", "this_side_up", "true", "upright"),

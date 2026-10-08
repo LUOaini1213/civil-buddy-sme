@@ -11,6 +11,10 @@ from typing import Any, Dict, List, Optional
 from packing_assistant.runtime import cancel as _cancel
 
 
+class ShipmentSourceError(ValueError):
+    """Unresolved source cargo cannot be exported as a shipment workbook."""
+
+
 def export_shipment_xlsx(
     state: Dict[str, Any],
     *,
@@ -20,6 +24,17 @@ def export_shipment_xlsx(
     """
     写 xlsx，返回 {xlsx_path, sheets, por_rows, secure_rows}。
     """
+    from packing_assistant.tools.cargo_conservation import physical_split_issues
+    from packing_assistant.tools.pack_ship_solve import rows_needing_human, NEEDS_HUMAN_WEIGHT_MISMATCH
+
+    # Revalidate the source and candidate contents even when an older session
+    # contains a cached manifest or stale success flags. Refuse before writing.
+    mats = state.get("materials") or []
+    boxes = state.get("boxes") or []
+    issues = physical_split_issues(mats, boxes)
+    issues += [row for row in rows_needing_human(mats) if row["reason"] == NEEDS_HUMAN_WEIGHT_MISMATCH]
+    if issues:
+        raise ShipmentSourceError("出运单未导出：" + "；".join(row["ask"] for row in issues[:3]))
     try:
         import openpyxl
         from openpyxl.styles import Font
@@ -27,8 +42,6 @@ def export_shipment_xlsx(
         raise RuntimeError("需要 openpyxl: pip install openpyxl") from e
 
     plan = state.get("container_plan") or {}
-    boxes = state.get("boxes") or []
-    mats = state.get("materials") or []
     swo = state.get("secure_work_order")
     if not swo:
         from packing_assistant.tools.secure_work_order import build_secure_work_order

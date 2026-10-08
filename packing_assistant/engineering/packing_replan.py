@@ -140,7 +140,7 @@ def _calculate(document, result):
     from packing_assistant.runtime.cancel import check, RunCancelled
     from packing_assistant.tools.pack_ship_solve import rows_blocking_plan, structure_summary
     from packing_assistant.agents.box_scheme import agent_box_scheme, effective_container_type
-    from packing_assistant.tools.cargo_conservation import check_conservation
+    from packing_assistant.tools.cargo_conservation import check_conservation, physical_split_issues
     from packing_assistant.tools.booking import compute_booking
     from packing_assistant.bounded_debate import run_bounded_debate
 
@@ -169,6 +169,14 @@ def _calculate(document, result):
     if not boxes or len(boxes) > 200 or not conservation.get("ok"):
         result.update(ok=False, status="needs_human", outcome="needs_human",
                       needs_human=[{"reason": "boxing_not_conserved", "conservation": conservation}])
+        return
+    # The legacy boxer can satisfy a mass cap by inventing fractional pieces.
+    # Their accounting still conserves mass/count, but v1 has no source field
+    # authorizing physical cutting or dismantling. Reject these before solving,
+    # including splits caused by the boxer's own smaller structural mass cap.
+    if split_issues := physical_split_issues(materials, boxes, lang="en"):
+        result.update(ok=False, status="needs_human", outcome="needs_human", conservation=conservation,
+                      needs_human=[{**issue, "max_box_net_kg": document["max_box_net_kg"]} for issue in split_issues])
         return
     # Freeze generated outer dimensions and gross masses across every candidate.
     # Source handling constraints were checked before automatic boxing.
