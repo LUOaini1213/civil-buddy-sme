@@ -204,6 +204,8 @@ The [2026-10-10 feature acceptance record](acceptance/2026-10-10-local-excel.jso
 same-machine HTTP checks through Agent preview/apply, native Excel, immutable child download,
 cancellation and restart. The parent turn used a loopback scripted model; these checks do not constitute
 real-project, paid-model or second-computer acceptance. Earlier failed attempts remain in local evidence.
+This record is bound to its listed initial source and binary hashes. Subsequent host hardening and
+newer Windows ZIPs use separate local package reports; the initial result is not retargeted to them.
 
 On an interactive Windows desktop with Microsoft Excel installed, explicitly add
 `--excel-engine windows-desktop` to the unified launcher. Normal startup defaults to `off`, including

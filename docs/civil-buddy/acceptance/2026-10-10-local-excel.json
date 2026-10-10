@@ -2,6 +2,7 @@
   "schema": "civil-buddy-local-excel-acceptance.v1",
   "date": "2026-10-10",
   "implementation_base_commit": "037ea0e37589b38ac160f72415106251e532a815",
+  "evidence_scope_note": "Historical initial feature run on the exact hashes below, committed in 79dd3bfa57187c691cc74480fb351190c0eb5431. Later ownership-enumeration hardening and newer release binaries require their own package acceptance; this record is not retargeted to them.",
   "tested_scope": "Synthetic same-machine native Excel product flow; local scripted provider only; not real-project/engineering acceptance",
   "passed": true,
   "checks_passed": 37,

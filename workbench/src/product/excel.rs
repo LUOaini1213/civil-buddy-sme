@@ -1722,6 +1722,7 @@ mod native {
     #[link(name = "kernel32")]
     extern "system" {
         fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> Handle;
+        fn GetLastError() -> u32;
         fn Process32FirstW(snapshot: Handle, entry: *mut ProcessEntry) -> i32;
         fn Process32NextW(snapshot: Handle, entry: *mut ProcessEntry) -> i32;
         fn OpenProcess(access: u32, inherit: i32, pid: u32) -> Handle;
@@ -1770,25 +1771,99 @@ mod native {
             )
         }
     }
+    struct Snapshot(Handle);
+    impl Drop for Snapshot {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+    fn collect_excel_processes(
+        mut next: impl FnMut(bool) -> Result<Option<(u32, String)>, u32>,
+    ) -> Result<HashSet<u32>, String> {
+        let mut first = true;
+        let mut found = HashSet::new();
+        loop {
+            match next(first) {
+                Ok(Some((pid, name))) => {
+                    if name.eq_ignore_ascii_case("EXCEL.EXE") {
+                        found.insert(pid);
+                    }
+                }
+                // A live host guarantees a nonempty process snapshot. An empty
+                // first entry is not evidence that no Excel processes exist.
+                Ok(None) if first => {
+                    return Err("Prior process snapshot contains no process information".into())
+                }
+                Ok(None) => return Ok(found),
+                Err(code) => {
+                    return Err(format!(
+                        "Cannot completely enumerate prior processes (Windows error {code})"
+                    ))
+                }
+            }
+            first = false;
+        }
+    }
     pub fn excel_processes() -> Result<HashSet<u32>, String> {
         unsafe {
             let snapshot = CreateToolhelp32Snapshot(2, 0);
             if snapshot as isize == -1 {
                 return Err("Cannot enumerate prior Excel processes".into());
             }
+            let snapshot = Snapshot(snapshot);
             let mut entry: ProcessEntry = std::mem::zeroed();
             entry.size = std::mem::size_of::<ProcessEntry>() as u32;
-            let mut found = HashSet::new();
-            let mut ok = Process32FirstW(snapshot, &mut entry);
-            while ok != 0 {
-                let end = entry.name.iter().position(|c| *c == 0).unwrap_or(260);
-                if String::from_utf16_lossy(&entry.name[..end]).eq_ignore_ascii_case("EXCEL.EXE") {
-                    found.insert(entry.pid);
+            collect_excel_processes(|first| {
+                let ok = if first {
+                    Process32FirstW(snapshot.0, &mut entry)
+                } else {
+                    Process32NextW(snapshot.0, &mut entry)
+                };
+                if ok == 0 {
+                    // Capture immediately: closing the snapshot or another API
+                    // call may overwrite the thread's Win32 last-error value.
+                    let code = GetLastError();
+                    return if code == 18 { Ok(None) } else { Err(code) };
                 }
-                ok = Process32NextW(snapshot, &mut entry);
-            }
-            CloseHandle(snapshot);
-            Ok(found)
+                let end = entry.name.iter().position(|c| *c == 0).unwrap_or(260);
+                Ok(Some((
+                    entry.pid,
+                    String::from_utf16_lossy(&entry.name[..end]),
+                )))
+            })
+        }
+    }
+    #[cfg(test)]
+    mod inventory_tests {
+        use super::*;
+        #[test]
+        fn failed_enumeration_never_becomes_an_empty_or_partial_exclusion_inventory() {
+            assert!(collect_excel_processes(|_| Err(5)).is_err());
+            assert!(collect_excel_processes(|_| Ok(None)).is_err());
+            let mut entries = vec![Ok(Some((41, "EXCEL.EXE".into()))), Err(5)].into_iter();
+            assert!(collect_excel_processes(|_| entries.next().unwrap()).is_err());
+            let mut entries = vec![Ok(Some((41, "EXCEL.EXE".into()))), Err(0)].into_iter();
+            assert!(collect_excel_processes(|_| entries.next().unwrap()).is_err());
+        }
+        #[test]
+        fn complete_process_snapshot_preserves_every_prior_excel_identity() {
+            let mut entries = vec![
+                Ok(Some((41, "EXCEL.EXE".into()))),
+                Ok(Some((42, "civil-workbench.exe".into()))),
+                Ok(Some((43, "excel.exe".into()))),
+                Ok(None),
+            ]
+            .into_iter();
+            let mut calls = Vec::new();
+            let found = collect_excel_processes(|first| {
+                calls.push(first);
+                entries.next().unwrap()
+            })
+            .unwrap();
+            assert_eq!(found, HashSet::from([41, 43]));
+            assert_eq!(calls, vec![true, false, false, false]);
         }
     }
     pub fn verify_new_excel(message: &Value, previous: &HashSet<u32>) -> Result<Identity, Failure> {
