@@ -30,6 +30,7 @@ REQUIRED = {
     "pypdf": ("pypdf", "5.0.0"),
 }
 OPTIONAL = {
+    "logistics PDF": ("requirements-logistics.txt", ("pdfplumber", "PIL")),
     "CAD": ("requirements-cad.txt", ("ezdxf", "shapely", "trimesh", "mapbox_earcut")),
     "engineering": ("requirements-engineering.txt", ("Pynite", "sectionproperties", "ifcopenshell", "ifctester", "ifcdiff")),
     "planning": ("requirements-planning.txt", ("ortools", "networkx", "defusedxml", "mpxj", "jpype")),

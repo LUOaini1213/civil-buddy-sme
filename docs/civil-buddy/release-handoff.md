@@ -8,6 +8,13 @@
 
 ## 启动个人工程
 
+Windows 发布包新增两个入口：先运行 `prepare-unified-workbench.bat` 联网准备，再运行
+`start-unified-workbench.bat`。该准备流程要求 Windows x64 CPython 3.11，按
+`requirements-unified-windows-py311.lock` 安装固定版本、哈希校验的基础、文档和物流依赖；
+正常启动和 `--check` 不安装依赖。环境保存在本包 `.civil-buddy-runtime`，准备失败不切换
+原有成功环境，也不修改工程与历史。升级时在新版重新准备环境，继续传原工程和状态目录；
+不能复制旧虚拟环境替代安装。其他 Python 3.11+ 环境仍可按 README 人工配置。
+
 本机试用可继续使用 `scripts/start_unified_workbench.py`。需要身份和工程隔离时，每位同事使用独立且互不包含的工程目录、状态目录和启动端口；不能把同一个物理工程目录同时分给两个人。登录口令文件必须放在工程目录外，避免被选为资料。
 
 下面命令在解压后的发布包根目录运行。先安装 README 列出的 Python 依赖；`C:\CivilJobs\demo` 必须是自己已有的工程目录。日常使用将工程和状态放在发布包外，升级程序时保留它们原来的绝对路径。

@@ -97,10 +97,22 @@ async fn readiness_and_native_pdf_preview_bind_real_worker_checks_to_registered_
     let mut artifacts = Vec::new();
     for name in ["plain.pdf", "active.pdf", "attached.pdf"] {
         let bytes = std::fs::read(out.join(name)).unwrap();
+        // The real worker stores a canonical absolute source (including \\?\ on Windows).
+        // Older registrations used relative sources, which must remain supported.
+        let source = if name == "plain.pdf" {
+            job.join("original.pdf").canonicalize().unwrap()
+        } else {
+            "original.pdf".into()
+        };
         let record=state.register_artifact(&workspace,&json!({"output_path":out.join(name).canonicalize().unwrap(),"output_sha256":sha256(&bytes),
-            "source":"original.pdf","source_sha256":sha256(&original),"validation":{},"evidence_validation":"not_checked"})).unwrap();
+            "source":source,"source_sha256":sha256(&original),"validation":{},"evidence_validation":"not_checked"})).unwrap();
         artifacts.push(record["id"].as_str().unwrap().to_owned());
     }
+    let normal_absolute = state.register_artifact(&workspace, &json!({
+        "output_path":out.join("plain.pdf").canonicalize().unwrap(),
+        "output_sha256":sha256(&original), "source":job.join("original.pdf"),
+        "source_sha256":sha256(&original), "validation":{}, "evidence_validation":"not_checked"
+    })).unwrap();
     let app = router(state);
     let plain = &artifacts[0];
     let inspection = format!("/api/agent/artifacts/{plain}/readiness?workspace={workspace}");
@@ -120,6 +132,17 @@ async fn readiness_and_native_pdf_preview_bind_real_worker_checks_to_registered_
     assert_eq!(report["writes"], false);
     assert_eq!(report["original_source_status"], "current");
     assert_eq!(report["inspected_by"], "local-owner");
+    let (status, _, body) = call(
+        &app,
+        "POST",
+        &format!(
+            "/api/agent/artifacts/{}/readiness?workspace={workspace}",
+            normal_absolute["id"].as_str().unwrap()
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", parsed(&body));
+    assert_eq!(parsed(&body)["original_source_status"], "current");
     let (status, headers, bytes) = call(&app, "GET", &preview).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers[header::CONTENT_TYPE], "application/pdf");
@@ -138,6 +161,10 @@ async fn readiness_and_native_pdf_preview_bind_real_worker_checks_to_registered_
         .await;
         let report = parsed(&body);
         assert_eq!(status, StatusCode::OK, "{report}");
+        assert_eq!(
+            report["original_source_status"], "current",
+            "old relative receipt"
+        );
         assert_eq!(report["readiness"]["status"], "blocked");
         assert_eq!(report["readiness"]["preview"]["eligible"], false);
         assert!(

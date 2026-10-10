@@ -82,7 +82,8 @@ class UnifiedReleaseTests(unittest.TestCase):
                              "demo/static/modules/agent-markdown.js", "demo/static/vendor/marked.min.js",
                              "gateway/idempotency.py", "scripts/workbench_preflight.py",
                              "gateway/pages/demo.html", "examples/facade-demo/facade_itt_doc.md",
-                             "start-workbench.bat", "packing_assistant/civil.py", *release.EXTRA]:
+                             "start-workbench.bat", "prepare-unified-workbench.bat", "start-unified-workbench.bat",
+                             "packing_assistant/civil.py", *release.EXTRA]:
                 self.assertIn(expected, names)
             self.assertEqual(package.read(release.BINARY_NAME), self.binary.read_bytes())
             self.assertEqual(len([name for name in names if name.startswith(".agents/skills/")]), 67)
@@ -96,6 +97,9 @@ class UnifiedReleaseTests(unittest.TestCase):
             self.assertIn("--check", readme)
             self.assertIn("不会安装全局依赖", readme)
             self.assertIn("不自动安装任何依赖", readme)
+            self.assertIn("requirements-unified-windows-py311.lock", readme)
+            self.assertIn("prepare-unified-workbench.bat", readme)
+            self.assertIn("start-unified-workbench.bat", readme)
             self.assertIn("start-workbench.bat", readme)
             self.assertIn("不证明该 exe 由本次源码编译", readme)
         self.assertEqual(json.loads(archive.with_suffix(".manifest.json").read_text(encoding="utf-8")), manifest)
@@ -118,6 +122,10 @@ class UnifiedReleaseTests(unittest.TestCase):
         with zipfile.ZipFile(archive) as package:
             self.assertFalse((set(private) | set(untracked)) & set(package.namelist()))
             self.assertIn(".env.example", package.namelist())
+            self.assertEqual(package.read("prepare-unified-workbench.bat"),
+                             package.read("scripts/prepare-unified-workbench.bat"))
+            self.assertEqual(package.read("start-unified-workbench.bat"),
+                             package.read("scripts/start-unified-workbench.bat"))
 
     def test_extracted_package_reads_original_tender_without_a_checkout(self):
         # Use real runtime sources for this package, then execute only its
@@ -199,6 +207,7 @@ class UnifiedReleaseTests(unittest.TestCase):
             {**original, "demo/.env": b"synthetic-private"},
             {**original, "demo/kb/general/login-token.txt": b"synthetic-private"},
             {**original, "demo/kb/general/identity.sqlite-wal": b"synthetic-private"},
+            {**original, ".civil-buddy-runtime/selected.json": b"local-install-state"},
             {**original, "readme.md": original["README.md"]},
             {**original, "../outside": b"bad path"},
             {**original, "extra.txt": b"not in manifest"},

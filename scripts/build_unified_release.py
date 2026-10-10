@@ -47,6 +47,8 @@ EXTRA = (
     "workbench/scripts/run_tender_extract.py", "workbench/scripts/run_packing_sidecar.py",
     "scripts/docker_smoke.sh",
     "scripts/build_workbench_release.py", "scripts/build_unified_release.py",
+    "scripts/prepare_unified_workbench.py", "scripts/prepare-unified-workbench.bat",
+    "scripts/start-unified-workbench.bat", "requirements-unified-windows-py311.lock",
     "docs/civil-buddy/architecture/implementation.md",
     "docs/civil-buddy/acceptance/2026-09-21.json",
     "docs/civil-buddy/acceptance/2026-09-30-practical.json",
@@ -63,7 +65,7 @@ MAX_FILE = 512 * 1024 * 1024
 MAX_ARCHIVE_CONTENT = 1024 * 1024 * 1024
 FORBIDDEN_ROOTS = (
     "demo/data/", "demo/out/", "workbench/target/", "target/", "work/",
-    "output/", "outputs/", "dist/", "runtime/",
+    "output/", "outputs/", "dist/", "runtime/", ".civil-buddy-runtime/",
 )
 
 
@@ -117,6 +119,8 @@ def committed_inputs(root: Path) -> tuple[dict[str, Path], str]:
     additions = set(EXTRA) | {name for name in tracked if name.startswith("workbench/src/") and name.endswith(".rs")}
     for name in additions:
         inputs[name] = legacy.checked_path(root, name)
+    for name in ("prepare-unified-workbench.bat", "start-unified-workbench.bat"):
+        inputs[name] = legacy.checked_path(root, "scripts/" + name)
     folded = set()
     for name, path in inputs.items():
         safe_name(name)
@@ -184,11 +188,33 @@ def release_readme(version: str, architecture: str, commit: str) -> str:
 
 ## 首次准备
 
-先完整解压到可写目录，再在解压根目录打开 PowerShell。请手动建立本地虚拟环境并安装依赖：
+先安装 **Windows x64 CPython 3.11**，完整解压本包到可写目录。双击
+`prepare-unified-workbench.bat` 完成首次准备，再双击 `start-unified-workbench.bat` 打开统一工作台。
+只有“首次准备”会联网安装；启动入口不自动安装任何依赖。准备使用
+`requirements-unified-windows-py311.lock` 中固定版本、校验哈希的 wheel，
+覆盖基础服务、文档与物流数字 PDF；不会安装全局依赖，也不会修改工程或产品历史。
+环境保存在包内 `.civil-buddy-runtime` 的版本目录，不能随 ZIP 或升级直接搬走。
+准备失败可以重试；新的准备未成功前保留原有已准备环境的选择。
+
+默认通过 `py -3.11` 或 `python` 找到解释器。已有 3.11 解释器不在 PATH 时，
+可在 PowerShell 显式指定：
+
+```powershell
+& 'C:/Python311/python.exe' scripts/prepare_unified_workbench.py --python 'C:/Python311/python.exe'
+```
+
+两个双击入口也支持用 `CIVIL_PYTHON` 指定引导解释器。准备后可在 PowerShell 检查再启动：
+
+```powershell
+.\\start-unified-workbench.bat --check
+.\\start-unified-workbench.bat --port 8766
+```
+
+**人工配置其他 Python 3.11+ 环境**仍可使用以下方式；该方式不使用上面的 3.11 固定锁：
 
 ```powershell
 py -3.11 -m venv .venv
-& ".\\.venv\\Scripts\\python.exe" -m pip install -r requirements.txt -r requirements-documents.txt
+& ".\\.venv\\Scripts\\python.exe" -m pip install -r requirements.txt -r requirements-documents.txt -r requirements-logistics.txt
 ```
 
 安装需要网络；上述命令只修改本目录 `.venv`，不会安装全局依赖。统一启动器不自动安装任何依赖。
@@ -245,6 +271,7 @@ py -3.11 -m venv .venv
 
 原 Python CLI `python -m packing_assistant.civil` 和 `start-workbench.bat` 保留。
 旧启动器可能按原流程准备本地 `.venv`；统一入口不调用该安装流程。两种入口不要使用同一个端口同时运行。
+物流数字 PDF 缺依赖时会在预检单独提示；基础服务能启动不代表扫描件可识别。
 CAD、工程计算、排程、语音依赖分别见 `requirements-cad.txt`、`requirements-engineering.txt`、
 `requirements-planning.txt`、`requirements-asr.txt`，请只在同一虚拟环境内按需安装。
 Java/JVM、Office 或 OCR 引擎均不随包提供。

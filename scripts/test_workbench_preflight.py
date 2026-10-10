@@ -89,6 +89,14 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("requirements-asr.txt", text)
         self.assertIn("not verified", text)
 
+    def test_logistics_pdf_dependency_is_reported_separately_from_base_startup(self):
+        data = self.data()
+        data["optional"].update(pdfplumber=False, PIL=False)
+        report, _ = self.probe(data)
+        self.assertTrue(report.ok)
+        self.assertEqual(report.missing_optional, {"logistics PDF": ["pdfplumber", "PIL"]})
+        self.assertIn("requirements-logistics.txt", preflight.format_report(report, self.root))
+
     def test_probe_timeout_or_invalid_output_is_actionable_without_raw_secrets(self):
         for failure in (subprocess.TimeoutExpired("secret-command", 20, output=b"secret-output"), OSError("secret-error")):
             with self.subTest(failure=type(failure).__name__), patch.object(preflight, "check_port", return_value=None), \

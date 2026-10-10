@@ -110,6 +110,79 @@ fn read_source(ws: &WorkspaceContext, relative: &str) -> Result<Vec<u8>, Error> 
     }
     Ok(bytes)
 }
+
+fn source_root_component_matches(
+    root: std::path::Component<'_>,
+    source: std::path::Component<'_>,
+) -> bool {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let same_name = |a: &std::ffi::OsStr, b: &std::ffi::OsStr| {
+            a.to_str()
+                .zip(b.to_str())
+                .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
+        };
+        match (root, source) {
+            (Component::Prefix(a), Component::Prefix(b)) => match (a.kind(), b.kind()) {
+                (
+                    Prefix::Disk(a) | Prefix::VerbatimDisk(a),
+                    Prefix::Disk(b) | Prefix::VerbatimDisk(b),
+                ) => a.eq_ignore_ascii_case(&b),
+                (
+                    Prefix::UNC(a, b) | Prefix::VerbatimUNC(a, b),
+                    Prefix::UNC(c, d) | Prefix::VerbatimUNC(c, d),
+                ) => same_name(a, c) && same_name(b, d),
+                _ => false,
+            },
+            (Component::Normal(a), Component::Normal(b)) => same_name(a, b),
+            _ => root == source,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        root == source
+    }
+}
+
+// Only registered artifact receipts may contain worker-produced absolute sources.
+// Match the lexical root before resolving: canonicalizing the source first would
+// hide a symlink/junction. The resulting relative path still goes through every
+// WorkspaceContext read restriction, including link, secret and traversal checks.
+fn read_artifact_source(ws: &WorkspaceContext, source: &str) -> Result<Vec<u8>, Error> {
+    let path = std::path::Path::new(source);
+    let relative = if path.is_absolute() {
+        let mut components = path.components();
+        for root in ws.root().components() {
+            if !components
+                .next()
+                .is_some_and(|part| source_root_component_matches(root, part))
+            {
+                return Err(bad("Artifact source is outside this workspace"));
+            }
+        }
+        components.as_path()
+    } else {
+        path
+    };
+    read_source(
+        ws,
+        relative
+            .to_str()
+            .ok_or_else(|| bad("Source path must be Unicode"))?,
+    )
+}
+
+fn artifact_source_status(ws: &WorkspaceContext, record: &Value) -> &'static str {
+    match (record["source"].as_str(), record["source_sha256"].as_str()) {
+        (Some(source), Some(expected)) => match read_artifact_source(ws, source) {
+            Ok(bytes) if super::tools::sha256(&bytes) == expected => "current",
+            Ok(_) => "changed",
+            Err(_) => "unavailable",
+        },
+        _ => "not_recorded",
+    }
+}
 fn document(db: &Connection, workspace: &str, doc_id: &str) -> Result<Value, Error> {
     let raw: Option<String> = db
         .query_row(
@@ -900,15 +973,7 @@ async fn inspect_artifact(
     result["inspected_by"] = json!(st.auth.owner());
     result["inspected_at"] = json!(now());
     result["artifact_id"] = json!(artifact_id);
-    result["original_source_status"] =
-        match (record["source"].as_str(), record["source_sha256"].as_str()) {
-            (Some(source), Some(expected)) => json!(match read_source(&ws, source) {
-                Ok(bytes) if super::tools::sha256(&bytes) == expected => "current",
-                Ok(_) => "changed",
-                Err(_) => "unavailable",
-            }),
-            _ => json!("not_recorded"),
-        };
+    result["original_source_status"] = json!(artifact_source_status(&ws, &record));
     st.index
         .lock()
         .map_err(internal)?
@@ -965,4 +1030,193 @@ async fn preview_artifact(
             .into_response())
     })
     .await
+}
+
+#[cfg(test)]
+mod artifact_source_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    const ORIGINAL: &[u8] = b"registered original bytes";
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir()
+                .join(format!("civil-artifact-source-{}", uuid::Uuid::new_v4()));
+            for folder in ["project/sub", "project-other", "other"] {
+                std::fs::create_dir_all(root.join(folder)).unwrap();
+            }
+            std::fs::write(root.join("project/source.xlsx"), ORIGINAL).unwrap();
+            Self(root)
+        }
+        fn workspace(&self) -> WorkspaceContext {
+            WorkspaceContext::new(self.0.join("project")).unwrap()
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn record(path: &Path) -> Value {
+        json!({"source": path, "source_sha256": super::super::tools::sha256(ORIGINAL)})
+    }
+
+    #[test]
+    fn registered_sources_support_relative_normal_and_canonical_absolute_with_hash_checks() {
+        let fixture = Fixture::new();
+        let ws = fixture.workspace();
+        let source = fixture.0.join("project/source.xlsx");
+        let canonical = source.canonicalize().unwrap();
+        #[cfg(windows)]
+        {
+            assert!(canonical.to_str().unwrap().starts_with(r"\\?\"));
+            assert!(!source.to_str().unwrap().starts_with(r"\\?\"));
+        }
+        let paths = [PathBuf::from("source.xlsx"), source.clone(), canonical];
+        for path in &paths {
+            assert_eq!(
+                artifact_source_status(&ws, &record(path)),
+                "current",
+                "{path:?}"
+            );
+        }
+        // Public document inputs still require relative paths.
+        assert!(read_source(&ws, source.to_str().unwrap()).is_err());
+        std::fs::write(&source, b"changed after registration").unwrap();
+        for path in &paths {
+            assert_eq!(
+                artifact_source_status(&ws, &record(path)),
+                "changed",
+                "{path:?}"
+            );
+        }
+        std::fs::remove_file(&source).unwrap();
+        for path in &paths {
+            assert_eq!(
+                artifact_source_status(&ws, &record(path)),
+                "unavailable",
+                "{path:?}"
+            );
+        }
+        assert_eq!(artifact_source_status(&ws, &json!({})), "not_recorded");
+        assert_eq!(
+            artifact_source_status(&ws, &json!({"source":"source.xlsx"})),
+            "not_recorded"
+        );
+    }
+
+    #[test]
+    fn registered_sources_reject_other_workspaces_prefix_neighbors_traversal_and_secrets() {
+        let fixture = Fixture::new();
+        let ws = fixture.workspace();
+        for path in ["other/source.xlsx", "project-other/source.xlsx"] {
+            let absolute = fixture.0.join(path);
+            std::fs::write(&absolute, ORIGINAL).unwrap();
+            for source in [absolute.clone(), absolute.canonicalize().unwrap()] {
+                assert_eq!(
+                    artifact_source_status(&ws, &record(&source)),
+                    "unavailable",
+                    "{source:?}"
+                );
+            }
+        }
+        for path in ["../other/source.xlsx", "sub/../source.xlsx"] {
+            // PathBuf::join normalizes `..` for verbatim Windows roots. Keep the
+            // untrusted receipt text literal so traversal reaches the guard.
+            let literal = PathBuf::from(format!(
+                "{}{}{}",
+                ws.root().display(),
+                std::path::MAIN_SEPARATOR,
+                path.replace('/', std::path::MAIN_SEPARATOR_STR)
+            ));
+            for source in [
+                PathBuf::from(path),
+                fixture.0.join("project").join(path),
+                literal,
+            ] {
+                assert_eq!(
+                    artifact_source_status(&ws, &record(&source)),
+                    "unavailable",
+                    "{source:?}"
+                );
+            }
+        }
+        for path in [".env", "private.key", ".git/config"] {
+            let absolute = ws.root().join(path);
+            std::fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+            std::fs::write(&absolute, ORIGINAL).unwrap();
+            for source in [PathBuf::from(path), absolute] {
+                assert_eq!(
+                    artifact_source_status(&ws, &record(&source)),
+                    "unavailable",
+                    "{source:?}"
+                );
+            }
+        }
+        assert_eq!(
+            artifact_source_status(&ws, &record(ws.root())),
+            "unavailable"
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn registered_sources_reject_links_even_when_the_target_is_inside_the_workspace() {
+        struct Link(PathBuf);
+        impl Drop for Link {
+            fn drop(&mut self) {
+                #[cfg(windows)]
+                std::fs::remove_dir(&self.0).unwrap();
+                #[cfg(unix)]
+                std::fs::remove_file(&self.0).unwrap();
+            }
+        }
+        let fixture = Fixture::new();
+        let ws = fixture.workspace();
+        for target in [ws.root().join("sub"), fixture.0.join("other")] {
+            std::fs::write(target.join("source.xlsx"), ORIGINAL).unwrap();
+            let link = Link(ws.root().join("linked"));
+            #[cfg(windows)]
+            {
+                // Junction creation needs no symlink privilege. The link is removed
+                // before fixture cleanup, including on assertion failure.
+                let made = std::process::Command::new("cmd")
+                    .args(["/C", "mklink", "/J"])
+                    .arg(&link.0)
+                    .arg(&target)
+                    .output()
+                    .unwrap();
+                assert!(
+                    made.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&made.stderr)
+                );
+            }
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&target, &link.0).unwrap();
+            for source in [
+                PathBuf::from("linked/source.xlsx"),
+                link.0.join("source.xlsx"),
+            ] {
+                assert_eq!(
+                    artifact_source_status(&ws, &record(&source)),
+                    "unavailable",
+                    "{source:?}"
+                );
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn registered_source_roots_remain_case_sensitive_on_posix() {
+        let fixture = Fixture::new();
+        let ws = fixture.workspace();
+        let other = fixture.0.join("PROJECT/source.xlsx");
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::write(&other, ORIGINAL).unwrap();
+        assert_eq!(artifact_source_status(&ws, &record(&other)), "unavailable");
+    }
 }
