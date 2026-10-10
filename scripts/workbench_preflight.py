@@ -1,4 +1,4 @@
-"""Read-only, offline launcher diagnostics; never import product modules."""
+"""Read-only offline diagnostics with isolated, fixed native dependency imports."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -12,7 +12,8 @@ import subprocess
 
 
 # Keep aligned with the base requirements, not optional engineering/model packages.
-# Metadata + module discovery avoids import-time caches, model downloads and app stores.
+# Product/optional modules use metadata + discovery only. The fixed native smoke
+# below is isolated from credentials, product imports, downloads and bytecode.
 REQUIRED = {
     "langgraph": ("langgraph", "0.2.0"),
     "langgraph-checkpoint-sqlite": ("langgraph", "3.0.0"),
@@ -37,8 +38,12 @@ OPTIONAL = {
     "local voice": ("requirements-asr.txt", ("faster_whisper",)),
 }
 PROBE_TIMEOUT = 20
-PROBE = r"""
-import importlib.metadata as metadata, importlib.util, json, sys
+NATIVE_IMPORTS = ("xxhash", "pydantic_core", "numpy")
+NATIVE_FAILURES = {"missing_module", "import_error", "os_error", "load_error"}
+NATIVE_GUIDANCE = ("Extract a fresh program copy to a new short directory such as C:\\CivilBuddy and run preparation there, "
+                   "or verify the selected Python environment. Keep the existing environment, project files and state unchanged.")
+PROBE = "NATIVE_IMPORTS = " + repr(NATIVE_IMPORTS) + r"""
+import contextlib, importlib, importlib.metadata as metadata, importlib.util, json, os, sys
 request = json.loads(sys.argv[1])
 def found(name):
     try:
@@ -52,8 +57,23 @@ for package, module in request['required'].items():
     except metadata.PackageNotFoundError:
         version = None
     required[package] = version
+native = {}
+# Imported dependencies may print warnings or exception context. Discard that
+# output at source; only the bounded fixed-name status records leave this child.
+with open(os.devnull, 'w', encoding='utf-8') as quiet:
+    with contextlib.redirect_stdout(quiet), contextlib.redirect_stderr(quiet):
+        for name in NATIVE_IMPORTS:
+            try:
+                importlib.import_module(name)
+                native[name] = {'status': 'pass'}
+            except Exception as exc:
+                classification = ('missing_module' if isinstance(exc, ModuleNotFoundError) else
+                                  'import_error' if isinstance(exc, ImportError) else
+                                  'os_error' if isinstance(exc, OSError) else 'load_error')
+                native[name] = {'status': 'failed', 'classification': classification}
 print(json.dumps({'version': list(sys.version_info[:3]), 'required': required,
-                  'optional': {name: found(name) for name in request['optional']}}))
+                  'optional': {name: found(name) for name in request['optional']},
+                  'native_imports': native}))
 """
 
 
@@ -64,10 +84,11 @@ class Report:
     errors: list[str] = field(default_factory=list)
     missing_required: list[str] = field(default_factory=list)
     missing_optional: dict[str, list[str]] = field(default_factory=dict)
+    native_failures: dict[str, str] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
-        return not self.errors and not self.missing_required
+        return not self.errors and not self.missing_required and not self.native_failures
 
 
 def diagnostic_environment() -> dict[str, str]:
@@ -146,6 +167,18 @@ def run(*, python: str, binary: Path, port: int, root: Path,
         report.version = ".".join(map(str, version))
         if tuple(version) < (3, 11, 0):
             report.errors.append("Python 3.11 or newer is required. Select it with --python.")
+        native = data["native_imports"]
+        if not isinstance(native, dict) or set(native) != set(NATIVE_IMPORTS):
+            raise ValueError("invalid native import scope")
+        for name in NATIVE_IMPORTS:
+            item = native[name]
+            if not isinstance(item, dict):
+                raise ValueError("invalid native import result")
+            if item == {"status": "pass"}:
+                continue
+            if set(item) != {"status", "classification"} or item["status"] != "failed" or item["classification"] not in NATIVE_FAILURES:
+                raise ValueError("invalid native import result")
+            report.native_failures[name] = item["classification"]
         for name, (_, minimum) in REQUIRED.items():
             installed = data["required"][name]
             match = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?(?:$|[.+-])", installed or "")
@@ -159,7 +192,7 @@ def run(*, python: str, binary: Path, port: int, root: Path,
         report.errors.append(f"Python dependency check exceeded {PROBE_TIMEOUT} seconds. Verify the selected environment, then retry --check.")
     except (OSError, ValueError, KeyError, TypeError):
         # Raw subprocess output/errors can contain environment secrets: never echo them.
-        report.errors.append("Python dependency check failed. Select a working Python 3.11+ environment with --python and retry --check.")
+        report.errors.append("Python dependency check failed. Select a working Python 3.11+ environment with --python and retry --check. " + NATIVE_GUIDANCE)
     return report
 
 
@@ -177,6 +210,10 @@ def format_report(report: Report, root: Path) -> str:
         lines.append(f"Python: {report.python}" + (f" ({report.version})" if report.version else ""))
     for error in report.errors:
         lines.append(f"[FAIL] {error}")
+    if report.native_failures:
+        failures = [name + " (" + report.native_failures[name] + ")" for name in NATIVE_IMPORTS if name in report.native_failures]
+        lines.append("[FAIL] Required native dependencies could not load: " + ", ".join(failures))
+        lines.append(NATIVE_GUIDANCE)
     if report.missing_required:
         lines.append("[FAIL] Required packages missing or below minimum version: " + ", ".join(report.missing_required))
         if managed:
@@ -196,7 +233,7 @@ def format_report(report: Report, root: Path) -> str:
         lines.append("Keep the release-managed environment unchanged. Configure optional capabilities in a separate manual environment and use the advanced launcher; see "
                      + powershell_quote(root / "docs/civil-buddy/unified-workbench.md") + ".")
     lines.append("[OK] Startup prerequisites passed." if report.ok else "[FAIL] Fix the required items above, then rerun --check.")
-    lines.append("Offline metadata/module checks only; no product/provider started, no model downloaded. Optional native libraries/models and live service health are not verified.")
+    lines.append("Offline metadata/module checks and isolated native imports (xxhash, pydantic_core, numpy) only; no product/provider started, no model downloaded. Optional native libraries/models and live service health are not verified.")
     return "\n".join(lines)
 
 

@@ -9,7 +9,10 @@
 ## 启动个人工程
 
 Windows 发布包新增两个入口：先运行 `prepare-unified-workbench.bat` 联网准备，再运行
-`start-unified-workbench.bat`。该准备流程要求 Windows x64 CPython 3.11，按
+`start-unified-workbench.bat`。程序包应解压到可写的短目录，例如 `C:/CivilBuddy`。
+准备及启动检查会在独立进程中验证必要原生依赖能否加载，不启动产品或调用模型。
+Windows 深目录可能使 DLL 无法加载；遇到加载失败提示时核对所选环境，或将新的程序包解压到另一个短目录并重新准备，保留原环境、工程和状态，不搬动已有环境。
+该准备流程要求 Windows x64 CPython 3.11，按
 `requirements-unified-windows-py311.lock` 安装固定版本、哈希校验的基础、文档和物流依赖；
 正常启动和 `--check` 不安装依赖。环境保存在本包 `.civil-buddy-runtime`，准备失败不切换
 原有成功环境，也不修改工程与历史。升级时在新版重新准备环境，继续传原工程和状态目录；

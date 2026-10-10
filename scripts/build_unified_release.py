@@ -190,12 +190,15 @@ def release_readme(version: str, architecture: str, commit: str) -> str:
 
 ## 首次准备
 
-先安装 **Windows x64 CPython 3.11**，完整解压本包到可写目录。双击
+先安装 **Windows x64 CPython 3.11**，完整解压本包到可写的短目录，例如 `C:/CivilBuddy`。双击
 `prepare-unified-workbench.bat` 完成首次准备，再双击 `start-unified-workbench.bat` 打开统一工作台。
 只有显式准备或重建会安装依赖；启动入口不自动安装任何依赖。准备使用
 `requirements-unified-windows-py311.lock` 中固定版本、校验哈希的 wheel，
 覆盖基础服务、文档与物流数字 PDF；不会安装全局依赖，也不会修改工程或产品历史。
 环境保存在包内 `.civil-buddy-runtime` 的版本目录，不能随 ZIP 或升级直接搬走。
+准备及启动检查会在独立进程中检查必要的原生依赖能否加载，不启动产品或调用模型。
+Windows 深目录可能导致 DLL 加载失败；遇到加载提示，应核对所选环境，
+或将新的程序包解压到另一个短目录并重新准备，保留原环境、工程和状态。
 准备失败可以重试；新的准备未成功前保留原有已准备环境的选择。
 
 如已准备环境的依赖、解释器或准备记录损坏，关闭使用该环境的工作台，再运行：

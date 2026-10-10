@@ -4,7 +4,7 @@ This implementation records feature-specific evidence in the [acceptance record]
 
 ## Start locally
 
-For the Windows release ZIP, install x64 CPython 3.11, extract to a writable directory, run
+For the Windows release ZIP, install x64 CPython 3.11, extract to a writable short directory such as `C:/CivilBuddy`, run
 `prepare-unified-workbench.bat` once, then use `start-unified-workbench.bat`. Preparation installs
 the pinned, hash-verified base, document and logistics wheels in a package-owned versioned environment.
 Only explicit preparation or rebuilding installs dependencies; normal startup and `--check` never install anything.

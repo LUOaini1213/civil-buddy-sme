@@ -37,7 +37,8 @@ class PreflightTests(unittest.TestCase):
     def data(self):
         return {"version": [3, 11, 7],
                 "required": {name: minimum for name, (_, minimum) in preflight.REQUIRED.items()},
-                "optional": {name: True for _, modules in preflight.OPTIONAL.values() for name in modules}}
+                "optional": {name: True for _, modules in preflight.OPTIONAL.values() for name in modules},
+                "native_imports": {name: {"status": "pass"} for name in preflight.NATIVE_IMPORTS}}
 
     def probe(self, data=None, **kwargs):
         with patch.object(preflight, "check_port", return_value=None), \
@@ -68,6 +69,48 @@ class PreflightTests(unittest.TestCase):
         self.assertFalse(set(secrets) & set(options["env"]))
         self.assertEqual(options["env"]["PYTHONDONTWRITEBYTECODE"], "1")
         self.assertFalse(any(value in preflight.format_report(report, self.root) for value in secrets.values()))
+        request = json.loads(args[0][-1])
+        self.assertEqual(set(request), {"required", "optional"})
+        self.assertEqual(preflight.NATIVE_IMPORTS, ("xxhash", "pydantic_core", "numpy"))
+        self.assertNotIn("import_module(name)", args[0][-1], "Native import scope must not come from a request")
+
+    def test_native_failure_blocks_startup_with_safe_actionable_guidance(self):
+        data = self.data()
+        data["native_imports"]["xxhash"] = {"status": "failed", "classification": "import_error"}
+        report, _ = self.probe(data)
+        self.assertFalse(report.ok)
+        self.assertFalse(report.errors)
+        self.assertFalse(report.missing_required)
+        self.assertEqual(report.native_failures, {"xxhash": "import_error"})
+        text = preflight.format_report(report, self.root)
+        self.assertIn("xxhash (import_error)", text)
+        self.assertIn("C:\\CivilBuddy", text)
+        self.assertIn("or verify the selected Python environment", text)
+        self.assertIn("existing environment, project files and state unchanged", text)
+        self.assertIn("xxhash, pydantic_core, numpy", text)
+        self.assertIn("Optional native libraries/models and live service health are not verified", text)
+        self.assertNotIn("MAX_PATH", text)
+
+    def test_native_results_are_exact_fixed_scope_and_fail_closed(self):
+        rows = {name: {"status": "pass"} for name in preflight.NATIVE_IMPORTS}
+        invalid = [None, [], {"xxhash": {"status": "pass"}},
+                   dict(rows, provider={"status": "pass"})]
+        for value in (True, "pass", {"status": True}, {"status": "pass", "verified": True},
+                      {"status": "failed"}, {"status": "failed", "classification": "secret-path"},
+                      {"status": "failed", "classification": []},
+                      {"status": "failed", "classification": "import_error", "message": "secret-path"}):
+            invalid.append(dict(rows, xxhash=value))
+        for value in invalid:
+            with self.subTest(value=value):
+                data = self.data()
+                data["native_imports"] = value
+                report, _ = self.probe(data)
+                self.assertFalse(report.ok)
+                self.assertIn("dependency check failed", preflight.format_report(report, self.root))
+                self.assertNotIn("secret-path", preflight.format_report(report, self.root))
+        data = self.data()
+        del data["native_imports"]
+        self.assertFalse(self.probe(data)[0].ok)
 
     def test_required_missing_or_old_provides_install_command_and_fails(self):
         data = self.data()
@@ -211,6 +254,84 @@ class PreflightTests(unittest.TestCase):
             self.assertEqual(launcher.main(["--binary", str(self.binary), "--state-root", str(state)]), 2)
         spawn.assert_not_called()
         self.assertFalse(state.exists())
+
+    def test_native_failure_refuses_check_and_normal_start_before_state_or_product(self):
+        state = self.root / "never created native failure state"
+        report = preflight.Report(python=str(self.python), native_failures={"pydantic_core": "os_error"})
+        for check in ([], ["--check"]):
+            with self.subTest(check=check), patch.dict(os.environ, {}, clear=True), \
+                 patch.object(launcher.preflight, "run", return_value=report), \
+                 patch.object(launcher.preflight, "load_environment_file") as config, \
+                 patch.object(launcher, "ProcessFamily") as family, patch.object(launcher.subprocess, "Popen") as spawn, \
+                 patch.object(launcher.urllib.request, "urlopen") as network, patch.object(launcher.webbrowser, "open") as browser, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                result = launcher.main(["--open", "--binary", str(self.binary), "--state-root", str(state), *check])
+            self.assertEqual(result, 2)
+            self.assertFalse(state.exists())
+            for action in (config, family, spawn, network, browser):
+                action.assert_not_called()
+
+    def test_real_native_import_smoke_uses_selected_env_without_credentials_product_or_mutation(self):
+        # The real child imports fixtures from a fresh selected venv. No packages
+        # are installed and no product/provider module may run during discovery.
+        environment = self.root / "native smoke \u4f9d\u8d56 \U0001f9f0"
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(environment)], check=True, timeout=30,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        selected = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        result = subprocess.run([str(selected), "-I", "-B", "-c", "import json, sysconfig; print(json.dumps(sysconfig.get_path('purelib')))"],
+                                check=True, env=preflight.diagnostic_environment(), timeout=20,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        site = Path(json.loads(result.stdout))
+        guarded = "raise AssertionError('product or provider discovery unexpectedly executed')\n"
+        for package, (module, minimum) in preflight.REQUIRED.items():
+            (site / (module + ".py")).write_text(guarded, encoding="utf-8")
+            metadata = site / (package.replace("-", "_") + "-" + minimum + ".dist-info")
+            metadata.mkdir()
+            (metadata / "METADATA").write_text("Metadata-Version: 2.1\nName: " + package + "\nVersion: " + minimum + "\n", encoding="utf-8")
+        for _, modules in preflight.OPTIONAL.values():
+            for module in modules:
+                (site / (module + ".py")).write_text(guarded, encoding="utf-8")
+        for module in ("demo", "packing_assistant", "gateway"):
+            (site / (module + ".py")).write_text(guarded, encoding="utf-8")
+        secrets = {"OPENAI_API_KEY": "private-key", "CUSTOM_PROVIDER_SECRET": "private-provider",
+                   "CIVIL_TOKEN": "private-token", "PYTHONPATH": str(self.root), "PYTHONSTARTUP": "private-startup"}
+        stub = ("import os, sys\n"
+                "assert sys.flags.isolated == 1 and sys.dont_write_bytecode\n"
+                "assert not any(name in os.environ for name in " + repr(tuple(secrets)) + ")\n"
+                "assert not any(name in sys.modules for name in ('demo', 'packing_assistant', 'gateway', 'langchain_openai'))\n"
+                "print('private-module-output')\n"
+                "print('private-module-error', file=sys.stderr)\n")
+        for name in preflight.NATIVE_IMPORTS:
+            (site / (name + ".py")).write_text(stub, encoding="utf-8")
+        # Isolated mode must also reject the misleading native module in cwd.
+        (self.root / "xxhash.py").write_text("raise AssertionError('wrong interpreter search path')\n", encoding="utf-8")
+        (self.root / "original.txt").write_text("unchanged project source", encoding="utf-8")
+        (self.root / "provider.env").write_text("CIVIL_API_KEY=private-env-file\n", encoding="utf-8")
+        state = self.root / "never created native state"
+        def snapshot():
+            return {str(path.relative_to(self.root)): hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in self.root.rglob("*") if path.is_file()}
+        before = snapshot()
+        with patch.dict(os.environ, secrets), patch.object(preflight, "check_port", return_value=None):
+            passed = preflight.run(python=str(selected), binary=self.binary, port=8765, root=self.root)
+        self.assertTrue(passed.ok, preflight.format_report(passed, self.root))
+        self.assertEqual(before, snapshot(), "Native smoke success wrote environment/project/cache files")
+        exception_secret = "C:\\private\\\u51ed\u636e\U0001f512\\native-secret.pyd"
+        for name, exception in (("xxhash", "ImportError"), ("pydantic_core", "OSError"), ("numpy", "RuntimeError")):
+            (site / (name + ".py")).write_text(stub + "raise " + exception + "(" + repr(exception_secret) + ")\n", encoding="utf-8")
+        before = snapshot()
+        with patch.dict(os.environ, secrets), patch.object(preflight, "check_port", return_value=None):
+            failed = preflight.run(python=str(selected), binary=self.binary, port=8765, root=self.root)
+        self.assertFalse(failed.ok)
+        self.assertFalse(failed.errors)
+        self.assertFalse(failed.missing_required)
+        self.assertEqual(failed.native_failures, {"xxhash": "import_error", "pydantic_core": "os_error", "numpy": "load_error"})
+        text = preflight.format_report(failed, self.root)
+        for private in (*secrets.values(), exception_secret, "private-module-output", "private-module-error", "private-env-file"):
+            if private != str(self.root):
+                self.assertNotIn(private, text)
+        self.assertFalse(state.exists())
+        self.assertEqual(before, snapshot(), "Native smoke failure wrote environment/project/cache files")
 
     def test_normal_launch_config_uses_selected_python_and_keeps_values_out_of_logs(self):
         config = self.root / "selected provider.env"
