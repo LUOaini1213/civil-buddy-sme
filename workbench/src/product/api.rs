@@ -178,7 +178,7 @@ async fn capabilities(State(st): State<Arc<ProductState>>) -> Json<Value> {
         json!({"available":true,"models":{"configured":!cfg.api_key.is_empty(),"model":cfg.model,"provider_host":provider_host(&cfg.base_url)},
         "modes":["steps","model"],"sandbox":["read-only","workspace-write"],
         "sandbox_controls":{"policy":true,"os_enforced":null,"network_confined":null,"reads_confined":null,"probe":"workspace_required"},
-        "features":{"context":true,"subagents":true,"cancel":true,"documents":true,"retrieval":true,"voice":false,"session_discovery":true,"packing_replan":true},
+        "features":{"context":true,"subagents":true,"cancel":true,"documents":true,"retrieval":true,"voice":false,"session_discovery":true,"packing_replan":true,"saved_planning":true},
         "identity":st.auth.capabilities(),"excel_engine":st.excel.capabilities(),"unavailability_reason":null}),
     )
 }
@@ -403,6 +403,8 @@ pub struct TurnRequest {
     pub files: Vec<String>,
     #[serde(default)]
     pub engineering: Vec<EngineeringSelection>,
+    #[serde(default = "default_planning_action")]
+    pub planning_action: String,
     #[serde(default)]
     pub packing_sources: Vec<PackingSelection>,
     #[serde(default)]
@@ -417,6 +419,7 @@ pub struct TurnRequest {
 fn default_locale() -> String {
     "zh-CN".into()
 }
+fn default_planning_action() -> String { "inspect".into() }
 fn default_mode() -> String {
     "model".into()
 }
@@ -462,6 +465,7 @@ async fn start(
         || !matches!(req.mode.as_str(), "model" | "steps")
         || !matches!(req.locale.as_str(), "zh-CN" | "en")
         || !matches!(req.sandbox.as_str(), "read-only" | "workspace-write")
+        || !matches!(req.planning_action.as_str(), "inspect" | "calculate")
     {
         return Err(bad(
             "invalid message, mode, sandbox, file or engineering selection",
@@ -477,6 +481,9 @@ async fn start(
     }
     for selection in &req.engineering {
         selection.validate().map_err(bad)?;
+    }
+    if req.planning_action == "calculate" && !req.engineering.iter().any(|v| v.kind == EngineeringKind::SavedPlanning) {
+        return Err(bad("planning calculation requires an explicitly selected saved plan"));
     }
     let ws = st.workspace(&req.workspace).map_err(bad)?;
     let session = SessionId::parse(&req.session_id).map_err(bad)?;

@@ -48,6 +48,16 @@ function engineeringSnapshot(data, expected) {
     source_sha256: value.source_sha256, inputs_sha256: value.inputs_sha256, confirmed_solid: false };
 }
 
+export function planningHandoff(search) {
+  const query = new URLSearchParams(search), keys = ["planning_project_id", "planning_revision", "planning_inputs_sha256"];
+  if (!keys.some(key => query.has(key))) return null;
+  if (keys.some(key => query.getAll(key).length !== 1)) throw new Error("计划链接缺少唯一的编号、版本或输入摘要");
+  const [project_id, rawRevision, inputs_sha256] = keys.map(key => query.get(key));
+  const revision = Number(rawRevision);
+  if (!/^[a-f0-9]{32}$/.test(project_id) || !/^[1-9][0-9]*$/.test(rawRevision) || !Number.isSafeInteger(revision) || !/^[a-f0-9]{64}$/.test(inputs_sha256)) throw new Error("计划链接缺少唯一的编号、版本或输入摘要");
+  return {kind:"saved_planning", project_id, revision, inputs_sha256};
+}
+
 export function artifactUrl(value, origin, workspace) {
   try {
     const url = new URL(value, origin);
@@ -69,7 +79,7 @@ export function createAgentWorkbench(deps) {
   const state = { capabilities: null, workspace: null, session: "", files: [], selected: new Set(), turn: null,
     seq: 0, emptyEventPages: 0, nextTurnCursor: null, turnsLoading: false, sessionListEpoch: 0, sessionsLoading: false, nextSessionCursor: null, sessionHistoryMessage: null, artifacts: new Map(), artifactChecks: new Map(), engineeringResults: new Map(), epoch: 0, workspaceEpoch: 0, fileEpoch: 0, listEpoch: 0,
     contextData: null, taskRows: [], eventRows: [], subtasks: new Map(), packingResults: new Map(), modelConfig: null, writeGateReason: null, sourceEvidence: null, modelInterpretationText: null,
-    engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, engineeringStatus: null, terminalNotice: false, experts: [],
+    engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, engineeringStatus: null, pendingPlanning: null, terminalNotice: false, experts: [],
     excelJobs: new Map(), excelActions: new Map(), excelLoading: false, excelError: "", excelTruncated: false, excelEpoch: 0,
     opening: false, submitting: false, cancelling: false, modelBusy: false, modelConfigured: false, disposed: false };
   let saved = { lastRoot: "", workspaces: {} }, timer = null, controller = null, started = false;
@@ -273,16 +283,23 @@ export function createAgentWorkbench(deps) {
     for (const row of state.engineeringRows) { row.selected = false; row.confirmed = false; row.loading = false; row.detail = null; row.snapshot = null; }
     engineeringStatus("工程选择已清空；请重新读取需要使用的项目快照。");
     paintEngineering();
+    if ($("agentPlanningRecalculate")) $("agentPlanningRecalculate").checked = false;
   }
   function paintEngineering() {
     const host = $("agentEngineering"); host.replaceChildren();
     const busy = state.submitting || state.opening || state.engineeringLoading;
+    if ($("agentPlanningActionLabel")) $("agentPlanningActionLabel").hidden = $("agentMode").value !== "steps" || !state.engineeringRows.some(row => row.kind === "saved_planning" && row.selected);
+    if ($("agentPlanningRecalculate")) $("agentPlanningRecalculate").disabled = busy;
     for (const row of state.engineeringRows) {
       const card = node("article", undefined, "engineering-card"), title = node("strong", row.name);
-      card.dataset.project = engineeringKey(row); card.append(title, node("p", (row.kind === "cad_section" ? t("CAD 截面") : t("已保存框架")) + t(" · 列表修订 {revision}", { revision: row.revision }), "muted small"));
+      card.dataset.project = engineeringKey(row); card.append(title, node("p", (row.kind === "cad_section" ? t("CAD 截面") : row.kind === "saved_planning" ? t("已保存施工计划") : t("已保存框架")) + t(" · 列表修订 {revision}", { revision: row.revision }), "muted small"));
       const inspect = node("button", row.loading ? t("正在读取…") : row.detail ? t("重新核对快照") : t("读取当前快照")); inspect.type = "button";
-      inspect.disabled = busy || row.loading; inspect.addEventListener("click", () => inspectEngineering(row)); card.appendChild(inspect);
-      if (row.error) card.appendChild(node("p", row.error, "notice error small"));
+      if (row.handoffStale) inspect.textContent = t("读取并核对新修订");
+      inspect.disabled = busy || row.loading; inspect.addEventListener("click", () => inspectEngineering(row, {acceptCurrent:row.handoffStale === true})); card.appendChild(inspect);
+      if (row.kind === "saved_planning") {
+        const link = node("a", t("在施工计划页预览和应用修改")); link.href = "/engineering/planning?project_id=" + encodeURIComponent(row.project_id); card.appendChild(link);
+      }
+      if (row.error) card.appendChild(node("p", row.handoffStale ? t("链接对应旧修订或输入；尚未选择。请返回计划页，或明确读取并核对新修订。") : row.error, "notice error small"));
       if (row.detail) {
         const detail = row.detail, missing = Array.isArray(detail.missing_inputs) ? detail.missing_inputs : [];
         const summary = node("details"); summary.append(node("summary", t("当前修订 {revision} · 查看输入摘要", { revision: row.snapshot.revision })), node("pre", printable(detail.summary ?? {}))); card.appendChild(summary);
@@ -294,7 +311,7 @@ export function createAgentWorkbench(deps) {
           label.append(check, node("span", t("我已核对当前截面的实体区域与孔洞"))); card.appendChild(label);
         }
         const label = node("label", undefined, "engineering-check"), check = node("input"); check.type = "checkbox"; check.checked = row.selected;
-        check.disabled = busy || row.loading || missing.length > 0 || !["ready", "confirmation_required"].includes(detail.status) || (needsConfirm && !row.confirmed);
+        check.disabled = busy || row.loading || row.handoffStale || missing.length > 0 || !["ready", "confirmation_required"].includes(detail.status) || (needsConfirm && !row.confirmed);
         check.addEventListener("change", () => {
           if (check.checked && state.engineeringRows.filter((item) => item.selected).length >= 4) { check.checked = false; engineeringStatus("最多选择 4 个工程项目。"); return; }
           row.selected = check.checked; engineeringStatus("已选 {count} / 4 个项目。", { count: state.engineeringRows.filter((item) => item.selected).length }); controls();
@@ -312,8 +329,13 @@ export function createAgentWorkbench(deps) {
       const data = await request(`/api/agent/engineering/projects?${scoped()}`);
       if (version !== state.engineeringEpoch || state.disposed) return;
       if (!Array.isArray(data.projects)) throw new Error(t("工程项目列表不完整"));
-      state.engineeringRows = data.projects.filter((row) => row && ["cad_section", "saved_frame"].includes(row.kind) && /^[A-Za-z0-9_-]+$/.test(row.project_id || "")).map((row) => ({ ...row, name: String(row.name || row.project_id), selected: false, confirmed: false, loading: false, detail: null, snapshot: null }));
+      state.engineeringRows = data.projects.filter((row) => row && ["cad_section", "saved_frame", "saved_planning"].includes(row.kind) && /^[A-Za-z0-9_-]+$/.test(row.project_id || "")).map((row) => ({ ...row, name: String(row.name || row.project_id), selected: false, confirmed: false, loading: false, detail: null, snapshot: null }));
       engineeringStatus(state.engineeringRows.length ? "请先读取需要使用的项目快照；刷新会清除上次确认。" : "暂无可用的已保存截面或框架。");
+      if (state.pendingPlanning) {
+        const row = state.engineeringRows.find(row => engineeringKey(row) === engineeringKey(state.pendingPlanning));
+        if (!row) engineeringStatus("链接指定的计划不可用，请返回计划页重新打开。");
+        else { row.handoff = state.pendingPlanning; await inspectEngineering(row); if (!row.handoffStale && !row.error) engineeringStatus("已读取链接指定的保存修订；请核对日历、资源和计算方式后加入本次任务。"); }
+      }
     } catch (error) { if (version === state.engineeringEpoch) engineeringStatus("工程选集暂不可用：", {}, error.message); }
     finally { if (version === state.engineeringEpoch) { state.engineeringLoading = false; controls(); } }
   }
@@ -321,11 +343,17 @@ export function createAgentWorkbench(deps) {
     const detail = await request(`/api/agent/engineering/projects/${encodeURIComponent(row.kind)}/${encodeURIComponent(row.project_id)}?${scoped()}`);
     return { detail, snapshot: engineeringSnapshot(detail, row) };
   }
-  async function inspectEngineering(row) {
+  async function inspectEngineering(row, options = {}) {
     const version = state.engineeringEpoch;
     row.selected = false; row.confirmed = false; row.detail = null; row.snapshot = null; row.error = ""; row.loading = true; controls();
     engineeringStatus("已清除此项目的旧选择，请核对当前快照。");
-    try { const value = await fetchEngineering(row); if (version === state.engineeringEpoch && state.engineeringRows.includes(row) && !state.disposed) Object.assign(row, value); }
+    try { const value = await fetchEngineering(row); if (version === state.engineeringEpoch && state.engineeringRows.includes(row) && !state.disposed) {
+      Object.assign(row, value);
+      if (options.acceptCurrent) { row.handoff = null; row.handoffStale = false; state.pendingPlanning = null; }
+      else if (row.handoff && (row.handoff.revision !== value.snapshot.revision || row.handoff.inputs_sha256 !== value.snapshot.inputs_sha256)) {
+        row.handoffStale = true; row.error = t("链接对应旧修订或输入；尚未选择。请返回计划页，或明确读取并核对新修订。");
+      }
+    } }
     catch (error) { if (version === state.engineeringEpoch) row.error = t("快照读取失败：") + error.message; }
     finally { if (version === state.engineeringEpoch) { row.loading = false; controls(); } }
   }
@@ -777,11 +805,18 @@ export function createAgentWorkbench(deps) {
   }
   function paintEngineeringResult(value) {
     const data = value?.result, source = value?.provenance;
-    if (value?.ok !== true || !object(data) || !object(source) || !["cad_section", "saved_frame"].includes(source.kind)) return;
+    if (value?.ok !== true || !object(data) || !object(source) || !["cad_section", "saved_frame", "saved_planning"].includes(source.kind)) return;
     const section = source.kind === "cad_section" && data.kind === "section";
     const frame = source.kind === "saved_frame" && (data.kind === "frame" || data.analysis === "linear_elastic_frame");
-    if (!section && !frame) return;
-    const key = String(value.call_id || [source.kind, source.project_id, source.revision].join(":"));
+    const planning = source.kind === "saved_planning" && ["planning_inspection", "planning"].includes(data.kind)
+      && /^[a-f0-9]{32}$/.test(source.project_id || "") && Number.isSafeInteger(source.revision) && source.revision > 0
+      && HASH.test(source.saved_inputs_sha256 || "") && source.source_project_modified === false
+      && (data.kind === "planning_inspection" && source.result_origin === "saved_record_not_recomputed"
+        || data.kind === "planning" && data.inputs_sha256 === source.saved_inputs_sha256
+          && source.result_origin === "fixed_solver_recomputed" && source.calculation_method === data.method
+          && ["cpm", "resource"].includes(data.method) && data.result?.kind === data.method && object(data.plan));
+    if (!section && !frame && !planning) return;
+    const key = String(value.call_id || [source.kind, source.project_id, source.revision, data.kind].join(":"));
     state.engineeringResults.set(key, value);
     let host = $("agentEngineeringResults");
     if (!host) { host = node("div", undefined, "engineering-results"); host.id = "agentEngineeringResults"; $("agentArtifacts").before(host); }
@@ -789,6 +824,25 @@ export function createAgentWorkbench(deps) {
     for (const [id, item] of state.engineeringResults) {
       const result = item.result, provenance = item.provenance, isSection = provenance.kind === "cad_section";
       const card = node("article", undefined, "engineering-result"); card.dataset.callId = id;
+      if (provenance.kind === "saved_planning") {
+        const inspection = result.kind === "planning_inspection", saved = inspection ? result.saved_plan : result;
+        const computed = inspection ? saved.recorded_result : result.result;
+        card.append(node("h3", inspection ? t("保存记录检查（本次读取未重算）") : t("计划固定求解器重算")),
+          node("p", t("来源项目 {project} · 修订 {revision}", {project:provenance.project_id,revision:provenance.revision}), "muted small wrap"),
+          node("p", t("计算方式：{method} · 输入摘要：{hash}", {method:saved.method,hash:provenance.saved_inputs_sha256}), "muted small wrap"));
+        const metrics = node("dl", undefined, "engineering-metrics");
+        engineeringMetric(metrics, t("总工期（工作日）"), engineeringNumber(computed?.duration_workdays));
+        engineeringMetric(metrics, t("计划完成日期"), computed?.finish_date || t("未返回"));
+        engineeringMetric(metrics, t("计算引擎"), [computed?.engine?.name,computed?.engine?.version].filter(Boolean).join(" ") || t("未返回"));
+        if (saved.method === "cpm") engineeringMetric(metrics, t("CPM 关键任务"), (computed?.critical_task_ids || []).join(", "));
+        else card.appendChild(node("p", t("资源方案不报告 CPM 关键路径；最优性以本次求解器记录为准。"), "muted small"));
+        card.appendChild(metrics);
+        if (saved.synthetic === true) card.appendChild(node("p", t("合成教学计划，不是实际施工安排。"), "notice warning small"));
+        for (const warning of computed?.warnings || []) card.appendChild(node("p", String(warning), "notice warning small"));
+        const detail = node("details"); detail.append(node("summary", t("查看明确的日历、工序、依赖和资源")), node("pre", printable(saved.plan)));
+        const link = node("a", t("在施工计划页预览和应用修改")); link.href = "/engineering/planning?project_id=" + encodeURIComponent(provenance.project_id);
+        card.append(detail, node("p", t("原计划未修改；日期和资源结果须由负责人员复核。"), "muted small"), link); host.appendChild(card); continue;
+      }
       card.appendChild(node("h3", isSection ? t("截面几何计算") : t("梁框架线弹性分析")));
       card.appendChild(node("p", t("来源项目 {project} · 修订 {revision}", { project: provenance.project_id || t("未返回"), revision: provenance.revision ?? t("未返回") }), "muted small wrap"));
       if (isSection) {
@@ -1008,7 +1062,7 @@ export function createAgentWorkbench(deps) {
     if (kind === "context") paintContext(data);
     if (kind === "source_evidence") paintSourceEvidence(data);
     if (kind === "artifact") paintArtifact(data);
-    if (kind === "tool_finished" && (data.name === "engineering_analyze" || data.tool === "engineering_analyze")) paintEngineeringResult(data.result);
+    if (kind === "tool_finished" && ["engineering_analyze", "planning_inspect", "planning_calculate"].includes(data.name || data.tool)) paintEngineeringResult(data.result);
     if (kind === "tool_finished" && (data.name === "packing_replan" || data.tool === "packing_replan")) paintPackingResult(data.result);
     if (kind === "done") paintResult(data.result || data);
     if (TURN_EVENTS[kind]) paintTurn({ status: TURN_EVENTS[kind], ...(data.result ? { result: data.result } : {}) });
@@ -1068,6 +1122,7 @@ export function createAgentWorkbench(deps) {
       if (!(await verifyEngineering(epoch))) return;
       const payload = { workspace: state.workspace.id, session_id: state.session, message, locale: win.CBI18n?.locale || "zh-CN", mode: $("agentMode").value, sandbox: $("agentSandbox").value, files: [...state.selected],
         ...(state.capabilities?.features?.packing_replan === true ? { packing_sources: packingSource && state.selected.has(packingSource) ? [{ source: packingSource }] : [] } : {}),
+        ...(state.capabilities?.features?.saved_planning === true ? { planning_action: $("agentMode").value === "steps" && $("agentPlanningRecalculate")?.checked && state.engineeringRows.some(row => row.selected && row.kind === "saved_planning") ? "calculate" : "inspect" } : {}),
         expert_id: $("agentExpert").value, risk_confirmation: $("agentRiskConfirmation").value.trim(), engineering: state.engineeringRows.filter((row) => row.selected).map((row) => ({ ...row.snapshot, confirmed_solid: row.kind === "cad_section" && row.confirmed })) };
       const data = await request("/api/agent/turns", post(payload));
       if (!current(epoch)) return;
@@ -1159,6 +1214,9 @@ export function createAgentWorkbench(deps) {
     $("agentNewSession").addEventListener("click", () => changeSession("", true)); $("agentSession").addEventListener("change", () => changeSession($("agentSession").value));
     await Promise.all([loadCapabilities(), loadExperts(), loadModel().catch((error) => { $("agentModelLabel").textContent = t("暂不可用"); $("agentModelStatus").textContent = t("模型设置暂不可用：") + error.message; })]);
     if (state.disposed || state.workspaceEpoch !== startupWorkspaceEpoch) return;
+    try { state.pendingPlanning = planningHandoff(win.location.search); }
+    catch (error) { notice(t(error.message), true); return; }
+    if (state.pendingPlanning && state.capabilities?.features?.saved_planning !== true) { notice(t("当前 Agent 尚不支持已保存计划上下文；计划页仍可使用。"), true); return; }
     const linked = new URLSearchParams(win.location.search).getAll("workspace");
     if (linked.length) {
       // URL input is only an opaque registered ID. Resolve its path through the
@@ -1181,6 +1239,7 @@ export function createAgentWorkbench(deps) {
       }
       return;
     }
+    if (state.pendingPlanning) { notice(t("计划链接已保留。请先打开用于本次任务的工程文件夹，再核对并选择保存修订。")); return; }
     if (saved.lastRoot && state.capabilities?.available === true) await openWorkspace(saved.lastRoot);
   }
   function dispose() { win.removeEventListener("cb:languagechange", languageChanged); cancelVoice(); state.disposed = true; state.epoch += 1; stopPolling(); stopExcelPolling(); }

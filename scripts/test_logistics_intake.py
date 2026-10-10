@@ -103,6 +103,46 @@ def business_pdf_bytes(titles=("PACKING LIST",), merged=True, cargo_name="Synthe
 
 
 class IntakeTests(unittest.TestCase):
+    def test_digital_pdf_capability_missing_dependencies_and_native_loader_failure(self):
+        source = b"%PDF-1.4\n"
+        for error, code in [
+            (ModuleNotFoundError("dependency missing at C:/private/synthetic.py"), "missing_dependency"),
+            (ImportError("DLL failure at C:/private/synthetic.pyd"), "dependency_load_failed"),
+            (OSError("DLL failure at C:/private/synthetic.dll"), "dependency_load_failed"),
+        ]:
+            with self.subTest(error=type(error).__name__), patch.object(intake.importlib, "import_module", side_effect=error):
+                capability = intake.digital_pdf_capability()
+                with self.assertRaises(intake.DigitalPdfDependencyError) as refused:
+                    parse_document(source, "synthetic.pdf", "none")
+            self.assertFalse(capability["available"])
+            self.assertEqual(capability["status"], "unavailable")
+            self.assertEqual(capability["reason_code"], code)
+            self.assertEqual(refused.exception.reason_code, code)
+            self.assertEqual(str(refused.exception), capability["reason"])
+            self.assertTrue(refused.exception.__suppress_context__)
+            self.assertNotIn("private", json.dumps(capability))
+            self.assertNotIn("DLL", str(refused.exception))
+
+    def test_digital_pdf_module_without_opener_fails_closed_in_capability_and_intake(self):
+        from types import SimpleNamespace
+        with patch.object(intake.importlib, "import_module", return_value=SimpleNamespace(open=None)):
+            capability = intake.digital_pdf_capability()
+            with self.assertRaises(intake.DigitalPdfDependencyError) as refused:
+                parse_document(b"%PDF-1.4\n", "synthetic.pdf", "none")
+        self.assertFalse(capability["available"])
+        self.assertEqual(capability["reason_code"], "dependency_load_failed")
+        self.assertEqual(str(refused.exception), capability["reason"])
+
+    def test_digital_pdf_dependency_readiness_is_not_field_accuracy_or_ocr(self):
+        from types import SimpleNamespace
+        with patch.object(intake.importlib, "import_module", return_value=SimpleNamespace(open=lambda: None)):
+            available = intake.digital_pdf_capability()
+        self.assertTrue(available["available"])
+        self.assertEqual(available["status"], "available")
+        self.assertEqual(available["verification_scope"], "dependency_import_only")
+        self.assertEqual(available["field_accuracy"], "not_verified")
+        self.assertNotIn("ocr", available)
+
     def test_native_csv_keeps_separate_quantities_and_net_gross(self):
         doc = parse_document(csv_bytes(), "synthetic.csv", "off")
         row = doc["rows"][0]

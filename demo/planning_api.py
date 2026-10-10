@@ -101,6 +101,8 @@ def snapshot(plan, run_id=None, method=None):
 
 
 def project_response(project):
+    from packing_assistant.engineering.planning_binding import context
+    project = dict(project, **context(project))
     if project.get("import_source"):
         source = dict(project["import_source"])
         blob = store().source_file(project["id"], source["source"]["sha256"])

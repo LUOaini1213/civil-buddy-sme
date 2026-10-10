@@ -163,6 +163,10 @@ def dispatch(module, request, root):
         from packing_assistant.engineering.packing_replan import run
         return {"version": 1, "ok": True, "call_id": request["call_id"],
                 "result": run(root, request.get("payload")), "error": None}
+    if operation == "planning_calculate":
+        from packing_assistant.engineering.planning_binding import calculate_saved
+        return {"version": 1, "ok": True, "call_id": request["call_id"],
+                "result": calculate_saved(request.get("payload")), "error": None}
     if operation not in {"frame", "section", "ifc_check", "ifc_diff"}:
         raise ValueError("Unknown engineering operation")
     payload = request.get("payload")

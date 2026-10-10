@@ -6,6 +6,23 @@ const t = (source, values) => {
   return result;
 };
 const translateAgain = text => { const entry = translatedMessages.get(text); return entry ? t(entry.source, entry.values) : text; };
+export function capabilityText(data={}) {
+  const digital=data.digital_pdf || {}, ocr=data.ocr || {};
+  const pdfStatus=digital.available===true && digital.status==='available'
+    ? t('数字 PDF 表格解析依赖可用；识别字段仍须对照原件核对。')
+    : digital.reason_code==='missing_dependency'
+      ? t('数字 PDF 表格解析不可用：当前环境缺少依赖，请按 requirements-logistics.txt 配置环境。Excel、CSV 仍可上传。')
+      : digital.reason_code==='dependency_load_failed'
+        ? t('数字 PDF 表格解析依赖加载失败；请检查当前工作台环境。Excel、CSV 仍可上传。')
+        : t('数字 PDF 表格解析能力尚未核实。');
+  const ocrStatus=ocr.ready===true && ocr.available===true
+    ? t('{v0} 模型已就绪。',{v0:ocr.engine || t('本地 OCR')})
+    : ocr.environment_found
+      ? t('{v0} 环境已安装，模型尚未就绪。',{v0:ocr.engine || 'OCR'})
+      : t('本地 OCR 环境尚未就绪。');
+  return t('文件类型：xlsx / xlsm / csv / tsv / pdf / png / jpg，单文件最多 {v0} MB。{v1} {v2} 扫描件识别不会自动下载模型，未知字段保持待确认。',
+    {v0:Math.floor((data.limits?.source_bytes || 8388608)/1048576),v1:pdfStatus,v2:ocrStatus});
+}
 const UNKNOWN = 'UNSPECIFIED';
 const SIGNOFF = '我明白，将由持证人员签认';
 const SIGNOFFS = [SIGNOFF, 'I understand; a licensed person will sign this off.'];
@@ -60,7 +77,7 @@ export function startLogisticsApp(document, options={}) {
   const $=id=>document.getElementById(id), win=options.window || globalThis.window;
   const fetcher=options.fetch || globalThis.fetch;
   const element=(tag,text,cls)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=String(text);if(cls)node.className=cls;return node;};
-  const state={project:null,draft:null,latestRevision:null,historical:false,pending:new Map(),proposal:null,sequence:0,busy:null,page:0,packing:null,calculationAttempt:null,chats:[],selectedSource:null,recentProjects:[],comparison:null};
+  const state={project:null,draft:null,latestRevision:null,historical:false,pending:new Map(),proposal:null,sequence:0,busy:null,page:0,packing:null,calculationAttempt:null,chats:[],selectedSource:null,recentProjects:[],comparison:null,capabilities:null};
   let controller=null, operation=null, recentSequence=0, previewSequence=0;
   const doc=()=>state.project?.document || state.draft?.document;
   const projectId=()=>state.project?.id;
@@ -317,7 +334,7 @@ export function startLogisticsApp(document, options={}) {
   async function initialize(){
     const initialSequence=state.sequence,params=new URLSearchParams(win?.location?.search || '');
     void refreshProjects();
-    try{const response=await request('/api/logistics/capabilities'),data=await response.json();const ocr=data.ocr || {};const status=ocr.ready===true && ocr.available===true?t("{v0} 模型已就绪。", {v0: ocr.engine || t('本地 OCR')}):ocr.environment_found?t("{v0} 环境已安装，模型尚未就绪。", {v0: ocr.engine || 'OCR'}):t('本地 OCR 环境尚未就绪。');$('capabilities').textContent=t("本页支持 xlsx / xlsm / csv / tsv / pdf / png / jpg，单文件最多 {v0} MB。{v1}{v2} 扫描件识别不会自动下载模型，未知字段保持待确认。", {v0: Math.floor((data.limits?.source_bytes || 8388608)/1048576), v1: status, v2: ocr.reason || ''});}catch(error){$('capabilities').textContent=t("能力信息未读取：{v0}", {v0: error.message});}
+    try{const response=await request('/api/logistics/capabilities');state.capabilities=await response.json();$('capabilities').textContent=capabilityText(state.capabilities);}catch(error){state.capabilities=null;$('capabilities').textContent=t("能力信息未读取：{v0}", {v0: error.message});}
     if(state.sequence!==initialSequence || state.project || state.draft)return;
     const id=params.get('project_id');if(id){await openProject(id);const proposal=params.get('proposal_id');if(proposal && projectId()===id)await loadLinkedProposal(proposal);}
   }
@@ -343,7 +360,7 @@ export function startLogisticsApp(document, options={}) {
     optionsIn($('compareProjects'),state.recentProjects.filter(item=>item.id!==projectId()).map(item=>[item.id,`${item.name} · v${item.revision}`]),t('选择另一项目'));
     if(source)showSource(...source);
     if(state.notice)notify(translateAgain(state.notice.message),state.notice.error);
-    $('capabilities').textContent=translateAgain($('capabilities').textContent);
+    $('capabilities').textContent=state.capabilities?capabilityText(state.capabilities):translateAgain($('capabilities').textContent);
     if(row && field){const node=[...document.querySelectorAll('[data-ledger-field]')].find(node=>node.dataset.rowId===row && node.dataset.ledgerField===field);node?.focus?.();if(node?.setSelectionRange && selection[0]!=null)try{node.setSelectionRange(...selection);}catch{}}
   });
   render();if(options.initialize!==false)void initialize();

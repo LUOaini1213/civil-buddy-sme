@@ -97,6 +97,7 @@ async fn api_exposes_saved_projects_and_validates_turn_bindings_before_creation(
     let domain = Router::new()
         .route("/api/cad/projects", get(|| async { Json(json!({"projects":[{"id":CAD,"revision":4,"name":"Saved CAD"}]})) }))
         .route("/api/engineering/projects", get(|| async { Json(json!({"projects":[{"id":FRAME,"revision":2,"kind":"frame","name":"Frame"}, {"id":"c".repeat(32),"revision":1,"kind":"ifc_diff"}]})) }))
+        .route("/api/engineering/planning/projects", get(|| async { Json(json!({"projects":[]})) }))
         .route(&format!("/api/cad/projects/{CAD}"), get(|| async { Json(json!({"ok":true,
             "project":{"id":CAD,"revision":4,"name":"Saved CAD"},
             "document":{"sha256":"a".repeat(64),"filename":"section.dxf","entities":[{"id":"entity"}]},

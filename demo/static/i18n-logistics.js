@@ -1,5 +1,10 @@
 // Presentation-only English translations for the logistics and packing workbenches.
 window.CBI18n?.add({
+  "数字 PDF 表格解析依赖可用；识别字段仍须对照原件核对。": "Digital PDF table dependencies are available; extracted fields still require checking against the original.",
+  "数字 PDF 表格解析不可用：当前环境缺少依赖，请按 requirements-logistics.txt 配置环境。Excel、CSV 仍可上传。": "Digital PDF table parsing is unavailable: dependencies are missing in this environment. Configure it using requirements-logistics.txt. Excel and CSV uploads remain available.",
+  "数字 PDF 表格解析依赖加载失败；请检查当前工作台环境。Excel、CSV 仍可上传。": "Digital PDF table dependencies could not load. Check the current workbench environment. Excel and CSV uploads remain available.",
+  "数字 PDF 表格解析能力尚未核实。": "Digital PDF table parsing availability has not been checked.",
+  "文件类型：xlsx / xlsm / csv / tsv / pdf / png / jpg，单文件最多 {v0} MB。{v1} {v2} 扫描件识别不会自动下载模型，未知字段保持待确认。": "File types: xlsx / xlsm / csv / tsv / pdf / png / jpg; maximum {v0} MB per file. {v1} {v2} Scanned-document recognition does not download models automatically; unknown fields require review.",
   "装箱拼柜 · Civil Buddy": "Packing & Loading · Civil Buddy",
   "装箱拼柜": "Packing & Loading",
   "大 Team⊃A/B ·": "Lead team + A/B ·",

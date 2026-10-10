@@ -75,6 +75,7 @@ CHECKS = (
     Check("engineering-planning", ("scripts/test_engineering_planning.py",)),
     Check("planning-exchange", ("scripts/test_planning_exchange.py",)),
     Check("planning-workbench", ("scripts/test_planning_workbench.py",), timeout=180),
+    Check("saved-planning-handoff", ("scripts/test_saved_planning_handoff.py",), timeout=180),
     Check("planning-agent", ("scripts/test_planning_agent.py",), timeout=180),
     Check("planning-chat-api", ("scripts/test_planning_chat_api.py",)),
     Check("planning-chat-host", ("scripts/test_planning_chat_host.py",)),

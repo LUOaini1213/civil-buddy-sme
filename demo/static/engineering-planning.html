@@ -45,6 +45,7 @@
 
     <section class="panel" aria-labelledby="conversationTitle">
       <div class="section-heading"><h2 id="conversationTitle">对话排程</h2><a id="unifiedChat" href="/" hidden>到统一 Agent 对话继续</a></div>
+      <p id="unifiedChatStatus" class="muted small" role="status"></p>
       <p class="muted small">引用表内已有编号，例如“把 B 的工期改为 5 工作日”“资源 crew 容量改为 2”“检查计划”“按资源容量优化”。先展示变化，确认后计算；保存需另点保存计划。</p>
       <form id="planningChatForm" class="toolbar"><label class="grow">排程指令<input id="planningMessage" maxlength="4000" placeholder="检查计划，或输入明确的参数修改" required></label><button id="sendPlanningMessage" type="submit">发送</button></form>
       <pre id="planningReply" class="conversation-reply" aria-live="polite"></pre>

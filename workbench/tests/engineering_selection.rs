@@ -124,6 +124,7 @@ impl Domain {
         let app = Router::new()
             .route("/api/cad/projects", get(|| async { Json(json!({"ok":true,"projects":[{"id":CAD,"revision":1,"name":"CAD"}]})) }))
             .route("/api/engineering/projects", get(|| async { Json(json!({"projects":[{"id":FRAME,"revision":3,"kind":"frame","name":"Frame"},{"id":"c".repeat(32),"revision":1,"kind":"ifc_diff"}]})) }))
+            .route("/api/engineering/planning/projects", get(|| async { Json(json!({"projects":[]})) }))
             .route(&format!("/api/cad/projects/{CAD}"), get(move || {
                 let record = cad_copy.clone(); let reads = reads_copy.clone(); let change = change_copy.clone();
                 async move { let n = reads.fetch_add(1, Ordering::SeqCst); let mut value = record.lock().unwrap().clone(); if change.load(Ordering::SeqCst) && n >= 1 { value["project"]["revision"] = json!(2); } Json(value) }

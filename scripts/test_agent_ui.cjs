@@ -6,10 +6,18 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { JSDOM } = require("jsdom");
-const { createAgentWorkbench, artifactUrl } = require("../demo/static/agent.js");
+const { createAgentWorkbench, artifactUrl, planningHandoff } = require("../demo/static/agent.js");
 const { renderAgentMarkdown } = require("../demo/static/modules/agent-markdown.js");
 const markedSource = fs.readFileSync(path.join(__dirname, "../demo/static/vendor/marked.min.js"), "utf8");
 const html = fs.readFileSync(path.join(__dirname, "../demo/static/agent.html"), "utf8");
+
+test("Saved plan link parser binds one exact revision/hash and rejects ambiguous or fabricated paths", () => {
+  const id = "d".repeat(32), hash = "a".repeat(64);
+  assert.deepEqual(planningHandoff(`?planning_project_id=${id}&planning_revision=3&planning_inputs_sha256=${hash}`), {kind:"saved_planning",project_id:id,revision:3,inputs_sha256:hash});
+  assert.equal(planningHandoff("?workspace=opaque"), null);
+  for (const query of [`?planning_project_id=${id}`, `?planning_project_id=${id}&planning_project_id=${id}&planning_revision=3&planning_inputs_sha256=${hash}`,
+    `?planning_project_id=../private&planning_revision=3&planning_inputs_sha256=${hash}`, `?planning_project_id=${id}&planning_revision=9007199254740992&planning_inputs_sha256=${hash}`]) assert.throws(() => planningHandoff(query));
+});
 const caps = { available: true, models: { configured: false }, modes: ["steps", "model"], sandbox: ["read-only", "workspace-write"],
   features: { cancel: true, context: true, subagents: true, documents: true }, sandbox_controls: { policy: true, os_enforced: false } };
 const response = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -825,6 +833,67 @@ function terminalRoute(url, init) {
   if (url === "/api/agent/turns" && init) return response({ turn_id: "engineering-turn", session_id: JSON.parse(init.body).session_id });
   if (url.includes("/engineering-turn/events?")) return response({ events: [event(1, "turn.completed")], turn: { status: "completed", result: { reply: "已核对" } } });
 }
+
+function savedPlanRoute(revision = () => 1) {
+  const id = "d".repeat(32), row = project("saved_planning", id);
+  const planningCaps = {...caps,features:{...caps.features,saved_planning:true}};
+  return (url,init) => {
+    if (url === "/api/agent/capabilities") return response(planningCaps);
+    if (url === "/api/agent/workspaces") return response({workspace:{id:"workspace-1",root:"C:/engineering"},capabilities:planningCaps});
+    if (url.startsWith("/api/agent/engineering/projects?")) return response({projects:[row]});
+    if (url.includes(`/saved_planning/${id}?`)) return response(inspection(row,revision()));
+    return terminalRoute(url,init);
+  };
+}
+
+test("Saved planning handoff waits for workspace choice, reads exact saved context and never auto-selects", async (t) => {
+  const id="d".repeat(32), h=harness(savedPlanRoute()); t.after(h.close);
+  h.win.history.replaceState(null,"",`/?planning_project_id=${id}&planning_revision=1&planning_inputs_sha256=${"1".repeat(64)}`);
+  await h.app.start(); assert.equal(h.app.state.workspace,null); assert.equal(h.app.state.pendingPlanning.project_id,id);
+  assert.equal(h.calls.some(call=>call.url==="/api/agent/workspaces"),false);
+  await h.app.openWorkspace("C:/engineering");
+  const row=h.app.state.engineeringRows[0]; assert.equal(row.snapshot.revision,1); assert.equal(row.selected,false);
+  assert.equal(engineeringInput(h,`saved_planning:${id}`,"加入本次任务").checked,false);
+  assert.match(h.$("agentEngineeringStatus").textContent,/日历、资源和计算方式/);
+});
+
+test("Stale planning handoff refuses selection until explicit new-revision inspection", async(t)=>{
+  const id="d".repeat(32),h=harness(savedPlanRoute(()=>2)); t.after(h.close);
+  h.win.history.replaceState(null,"",`/?planning_project_id=${id}&planning_revision=1&planning_inputs_sha256=${"1".repeat(64)}`);
+  await h.app.start();await h.app.openWorkspace("C:/engineering");
+  assert.equal(h.app.state.engineeringRows[0].handoffStale,true); assert.equal(engineeringInput(h,`saved_planning:${id}`,"加入本次任务").disabled,true);
+  installLanguage(h);h.win.CBI18n.setLocale("en");assert.match(h.$("agentEngineering").textContent,/older revision or inputs/);h.win.CBI18n.setLocale("zh-CN");
+  const button=h.doc.querySelector("#agentEngineering button"); assert.equal(button.textContent,"读取并核对新修订");button.click();await settle();
+  assert.equal(h.app.state.engineeringRows[0].handoffStale,false);assert.equal(h.app.state.engineeringRows[0].selected,false);
+  assert.equal(engineeringInput(h,`saved_planning:${id}`,"加入本次任务").disabled,false);
+});
+
+test("Saved plan steps choice sends exact selection and loses stale authorization before submission",async(t)=>{
+  let revision=1;const id="d".repeat(32),h=harness(savedPlanRoute(()=>revision));t.after(h.close);await h.ready();
+  await h.app.inspectEngineering(h.app.state.engineeringRows[0]);change(h,engineeringInput(h,`saved_planning:${id}`,"加入本次任务"),true);
+  selectValue(h,"agentMode","steps");h.$("agentPlanningRecalculate").checked=true;h.$("agentMessage").value="按已保存方式重新计算";
+  await h.app.send();const payload=h.calls.find(call=>call.url==="/api/agent/turns"&&call.body).body;
+  assert.equal(payload.planning_action,"calculate");assert.equal(payload.engineering[0].project_id,id);assert.equal(payload.engineering[0].inputs_sha256,"1".repeat(64));
+  revision=2;h.$("agentMessage").value="再次重算";await h.app.send();assert.equal(h.calls.filter(call=>call.url==="/api/agent/turns"&&call.body).length,1);
+  assert.equal(h.app.state.engineeringRows[0].selected,false);assert.match(h.$("agentNotice").textContent,/工程快照已变化/);
+});
+
+test("Older host keeps the plan link context unavailable and does not silently open another workspace",async(t)=>{
+  const h=harness();t.after(h.close);h.win.history.replaceState(null,"",`/?planning_project_id=${"d".repeat(32)}&planning_revision=1&planning_inputs_sha256=${"1".repeat(64)}`);
+  await h.app.start();assert.equal(h.app.state.workspace,null);assert.match(h.$("agentNotice").textContent,/尚不支持已保存计划上下文/);
+});
+
+test("Saved plan receipts distinguish historical records from recomputation in both languages",async(t)=>{
+  const id="d".repeat(32),hash="1".repeat(64),plan={calendar:{weekdays:[0,1,2,3,4],holidays:[]},tasks:[{id:"A",name:"原任务名"}],resources:[]};
+  const computed={kind:"cpm",engine:{name:"civil-buddy-cpm",version:"1"},duration_workdays:8,finish_date:"2026-09-30",critical_task_ids:["A"],warnings:[]};
+  const provenance={kind:"saved_planning",project_id:id,revision:1,saved_inputs_sha256:hash,source_project_modified:false,engineering_verdict:"not_provided"};
+  const inspected={ok:true,result:{kind:"planning_inspection",saved_plan:{method:"cpm",plan,recorded_result:computed,synthetic:true}},provenance:{...provenance,result_origin:"saved_record_not_recomputed"}};
+  const recalculated={ok:true,result:{kind:"planning",method:"cpm",plan,result:computed,inputs_sha256:hash,synthetic:true},provenance:{...provenance,result_origin:"fixed_solver_recomputed",calculation_method:"cpm"}};
+  const h=harness((url,init)=>url.includes("/engineering-turn/events?")?response({events:[event(1,"tool_finished",{name:"planning_inspect",result:inspected}),event(2,"tool_finished",{name:"planning_calculate",result:recalculated})],turn:{status:"completed",result:{reply:"已核对"}}}):savedPlanRoute()(url,init));t.after(h.close);installLanguage(h);await h.ready();
+  selectValue(h,"agentMode","steps");h.$("agentMessage").value="检查保存计划";await h.app.send();
+  const cards=h.doc.querySelectorAll("#agentEngineeringResults article");assert.equal(cards.length,2);assert.match(cards[0].textContent,/本次读取未重算/);assert.match(cards[1].textContent,/固定求解器重算/);assert.match(cards[1].textContent,/原计划未修改/);assert.match(cards[0].textContent,/原任务名/);
+  h.win.CBI18n.setLocale("en");assert.match(h.$("agentEngineeringResults").textContent,/this read did not recompute/);assert.match(h.$("agentEngineeringResults").textContent,/fixed solver/);assert.match(h.$("agentEngineeringResults").textContent,/原任务名/);
+});
 
 test("Engineering selection: inspect before selection, explicit CAD snapshot confirmation, missing-input block and maximum four", async (t) => {
   const rows = [project("cad_section", "cad-1"), project("saved_frame", "missing", "missing_inputs"), ...[1, 2, 3, 4].map((n) => project("saved_frame", "frame-" + n))];

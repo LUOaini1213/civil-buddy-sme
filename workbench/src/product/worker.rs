@@ -64,7 +64,7 @@ impl WorkerHost {
                 "capabilities" | "inspect" | "read" | "preview" | "apply" | "validate" | "inspect_readiness" | "inspect_excel_engine_input" | "verify_excel_engine_output"
             ),
             "packing_assistant.engineering.worker" => {
-                matches!(operation, "frame" | "section" | "ifc_check" | "ifc_diff" | "packing_replan")
+                matches!(operation, "frame" | "section" | "ifc_check" | "ifc_diff" | "packing_replan" | "planning_calculate")
             }
             "packing_assistant.retrieval.worker" => {
                 matches!(operation, "index" | "search" | "verify")

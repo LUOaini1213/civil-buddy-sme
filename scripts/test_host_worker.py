@@ -60,6 +60,21 @@ class HostWorkerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             dispatch("packing_assistant.engineering.worker", self.request("ifc_check", payload={"path": "secret.ifc"}), self.root)
 
+    @unittest.skipUnless(sys.platform == "win32" or sys.platform.startswith("linux"), "OS backend is not implemented here")
+    def test_fixed_saved_plan_cpm_runs_inside_original_os_worker_without_nested_spawn(self):
+        from packing_assistant.engineering.planning_binding import inputs
+        plan = {"start_date": "2026-09-21", "calendar": {"weekdays": [0, 1, 2, 3, 4], "holidays": []},
+                "tasks": [{"id": "A", "name": "Synthetic A", "duration": 2}], "resources": []}
+        payload = inputs(plan, "cpm")
+        result = self.process("packing_assistant.engineering.worker", self.request("planning_calculate", payload=payload), backend="os")
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["sandbox"]["enforces"]["write"])
+        self.assertTrue(result["sandbox"]["enforces"]["spawn"])
+        self.assertEqual(result["sandbox"]["selftest"]["spawn_process"], "denied")
+        self.assertEqual(result["result"]["result"]["duration_workdays"], 2)
+        self.assertEqual(result["result"]["result"]["finish_date"], "2026-09-22")
+        self.assertEqual(result["result"]["plan"], payload["plan"])
+
     def test_app_mode_is_explicit_and_never_claims_kernel_enforcement(self):
         result = self.process("packing_assistant.host_worker", self.request())
         self.assertTrue(result["ok"], result)

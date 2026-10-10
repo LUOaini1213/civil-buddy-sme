@@ -1,5 +1,10 @@
 /* Engineering UI copy only. Original documents, labels, units and calculation data remain unchanged. */
 window.CBI18n.add({
+  "请先保存当前修改，再将该修订交给统一 Agent。": "Save the current changes before passing this revision to the unified Agent.",
+  "当前 Agent 尚不支持已保存计划上下文；计划页仍可使用。": "This Agent does not support saved plan context yet. The planning page remains available.",
+  "此计划缺少版本摘要，请重新打开后继续。": "This plan lacks a revision hash. Open it again before continuing.",
+  "仅携带当前已保存修订；Agent 中需核对并选择。计划编辑仍在本页预览和应用。": "Only the current saved revision is carried over. Review and select it in the Agent. Plan changes are still previewed and applied on this page.",
+  "请先保存并重新核对计划，再到统一 Agent 继续。": "Save and review the plan before continuing in the unified Agent.",
   "可旋转的三维几何模型；构件详情也可从二维轮廓选择": "Rotatable 3D geometry; component details can also be selected from the 2D outlines",
   "三维显示上下文已丢失。模型数据仍保留，可导出；刷新页面可重新初始化查看器。": "The 3D rendering context was lost. Model data is retained and can be exported. Refresh the page to restart the viewer.",
   "CAD → 3D 建模助手 · Civil Buddy": "CAD → 3D modelling assistant · Civil Buddy",

@@ -14,6 +14,7 @@ const MAX_SNAPSHOT: usize = 24 * 1024 * 1024;
 pub enum EngineeringKind {
     CadSection,
     SavedFrame,
+    SavedPlanning,
 }
 
 impl EngineeringKind {
@@ -21,6 +22,7 @@ impl EngineeringKind {
         match value {
             "cad_section" => Ok(Self::CadSection),
             "saved_frame" => Ok(Self::SavedFrame),
+            "saved_planning" => Ok(Self::SavedPlanning),
             _ => Err("工程项目类型无效".into()),
         }
     }
@@ -58,6 +60,16 @@ impl EngineeringSelection {
             EngineeringKind::SavedFrame => {
                 if self.source_sha256.is_some() || self.confirmed_solid {
                     return Err("已保存框架选择不得附带CAD原图或实体确认".into());
+                }
+            }
+            EngineeringKind::SavedPlanning => {
+                if self.confirmed_solid
+                    || self
+                        .source_sha256
+                        .as_deref()
+                        .is_some_and(|v| !valid_hash(v))
+                {
+                    return Err("已保存计划不得附带CAD实体确认或无效来源摘要".into());
                 }
             }
         }
@@ -164,10 +176,14 @@ impl EngineeringHost {
     pub async fn list_projects(&self, cancel: &CancellationToken) -> Result<Value> {
         let cad = self.get("/api/cad/projects", cancel).await?;
         let engineering = self.get("/api/engineering/projects", cancel).await?;
+        let planning = self
+            .get("/api/engineering/planning/projects", cancel)
+            .await?;
         let mut projects = Vec::new();
         for (kind, list) in [
             (EngineeringKind::CadSection, &cad),
             (EngineeringKind::SavedFrame, &engineering),
+            (EngineeringKind::SavedPlanning, &planning),
         ] {
             for row in list["projects"]
                 .as_array()
@@ -200,10 +216,10 @@ impl EngineeringHost {
         if !valid_id(project_id) {
             return Err("工程项目ID无效".into());
         }
-        let collection = if kind == EngineeringKind::CadSection {
-            "cad"
-        } else {
-            "engineering"
+        let collection = match kind {
+            EngineeringKind::CadSection => "cad",
+            EngineeringKind::SavedFrame => "engineering",
+            EngineeringKind::SavedPlanning => "engineering/planning",
         };
         let record = self
             .get(&format!("/api/{collection}/projects/{project_id}"), cancel)
@@ -266,6 +282,7 @@ impl EngineeringHost {
                 "section"
             }
             EngineeringKind::SavedFrame => "frame",
+            EngineeringKind::SavedPlanning => "planning_calculate",
         };
         let executed_inputs_sha256 =
             sha256(&serde_json::to_vec(&payload).map_err(|e| e.to_string())?);
@@ -295,6 +312,11 @@ impl EngineeringHost {
                 }
                 response["result"]["kind"] = json!("frame");
             }
+            EngineeringKind::SavedPlanning => {
+                if !valid_planning_result(&response["result"], &bound.selection, &bound.summary) {
+                    return Err("计划计算结果未绑定授权的日历、资源、方式与任务快照".into());
+                }
+            }
         }
         // A result belongs to the selected revision, never a concurrently saved
         // new design. Fail before publishing it as the current project result.
@@ -307,8 +329,82 @@ impl EngineeringHost {
             "saved_inputs_sha256":authorized.inputs_sha256,"executed_inputs_sha256":executed_inputs_sha256,
             "geometry_origin":"validated_saved_project","source_project_modified":false,
             "current_user_confirmed_solid":authorized.confirmed_solid,"engineering_verdict":"not_provided"});
+        if authorized.kind == EngineeringKind::SavedPlanning {
+            response["result"]["synthetic"] = bound.summary["synthetic"].clone();
+            response["provenance"]["result_origin"] = json!("fixed_solver_recomputed");
+            response["provenance"]["calculation_method"] = bound.summary["method"].clone();
+            response["provenance"]["geometry_origin"] = Value::Null;
+        }
         Ok(response)
     }
+
+    /// Read only the explicitly selected saved plan. Recorded historical
+    /// results are labelled as such; this is not a new solver execution.
+    pub async fn inspect_selected_plan(
+        &self,
+        authorized: &EngineeringSelection,
+        cancel: &CancellationToken,
+    ) -> Result<Value> {
+        authorized.validate()?;
+        if authorized.kind != EngineeringKind::SavedPlanning {
+            return Err("planning_inspect只接受用户选定的已保存计划".into());
+        }
+        let bound = self
+            .snapshot(authorized.kind, &authorized.project_id, cancel)
+            .await?;
+        verify_selection(authorized, &bound.selection)?;
+        let after = self
+            .snapshot(authorized.kind, &authorized.project_id, cancel)
+            .await?;
+        verify_selection(authorized, &after.selection)?;
+        Ok(
+            json!({"ok":true,"result":{"kind":"planning_inspection","saved_plan":bound.summary},
+            "provenance":{"kind":authorized.kind,"project_id":authorized.project_id,"revision":authorized.revision,
+                "source_sha256":authorized.source_sha256,"saved_inputs_sha256":authorized.inputs_sha256,
+                "result_origin":"saved_record_not_recomputed","source_project_modified":false,"engineering_verdict":"not_provided"}}),
+        )
+    }
+}
+
+fn valid_planning_result(result: &Value, selected: &EngineeringSelection, summary: &Value) -> bool {
+    result["kind"] == "planning"
+        && result["method"] == summary["method"]
+        && result["plan"] == summary["plan"]
+        && result["inputs_sha256"] == selected.inputs_sha256
+        && valid_saved_planning_result(
+            &result["result"],
+            &result["plan"],
+            result["method"].as_str().unwrap_or(""),
+        )
+}
+
+fn valid_saved_planning_result(result: &Value, plan: &Value, method: &str) -> bool {
+    let engine = if method == "cpm" {
+        "civil-buddy-cpm"
+    } else {
+        "OR-Tools CP-SAT"
+    };
+    let Some(tasks) = plan["tasks"].as_array() else {
+        return false;
+    };
+    let Some(rows) = result["tasks"].as_array() else {
+        return false;
+    };
+    result["kind"] == method && result["engine"]["name"] == engine
+        && result["engine"]["version"].as_str().is_some_and(|v| !v.is_empty())
+        && result["duration_workdays"].as_u64().is_some_and(|v| v <= 3654)
+        && result["finish_date"].as_str().is_some_and(|v| v.len() == 10)
+        && rows.len() == tasks.len() && !rows.is_empty()
+        && rows.iter().enumerate().all(|(i, row)| {
+            row["id"] == tasks[i]["id"]
+                && row["start"].as_str().is_some_and(|v| v.len() == 10)
+                && row["end"].as_str().is_some_and(|v| v.len() == 10)
+                && matches!((row["start_offset"].as_u64(), row["finish_offset"].as_u64()), (Some(a),Some(b)) if a <= b && b <= 3654)
+        })
+        && (method != "resource" || (result["resource_optimized"] == true
+            && result["resource_feasible"] == true
+            && matches!(result["solver_status"].as_str(), Some("OPTIMAL" | "FEASIBLE"))
+            && result["proven_optimal"].is_boolean()))
 }
 
 fn valid_frame_result(result: &Value) -> bool {
@@ -405,6 +501,9 @@ fn verify_selection(
 }
 
 fn bind_inputs(kind: EngineeringKind, project_id: &str, record: Value) -> Result<BoundInputs> {
+    if kind == EngineeringKind::SavedPlanning {
+        return bind_planning_inputs(project_id, record);
+    }
     if record["ok"] != true || record["project"]["id"] != project_id {
         return Err("领域项目身份不匹配".into());
     }
@@ -488,6 +587,7 @@ fn bind_inputs(kind: EngineeringKind, project_id: &str, record: Value) -> Result
                 "origin":"saved_explicit_frame_inputs","cad_geometry_inference":false});
             (inputs, None, summary)
         }
+        EngineeringKind::SavedPlanning => unreachable!(),
     };
     let inputs_sha256 = sha256(&serde_json::to_vec(&payload).map_err(|e| e.to_string())?);
     Ok(BoundInputs {
@@ -502,5 +602,56 @@ fn bind_inputs(kind: EngineeringKind, project_id: &str, record: Value) -> Result
         payload,
         summary,
         missing,
+    })
+}
+
+fn bind_planning_inputs(project_id: &str, record: Value) -> Result<BoundInputs> {
+    let project = &record["project"];
+    if project["id"] != project_id
+        || project["schema"] != "civil-buddy.planning.v1"
+        || project["historical"] == true
+    {
+        return Err("领域计划身份不匹配或不是当前修订版".into());
+    }
+    let selection: EngineeringSelection =
+        serde_json::from_value(project["agent_selection"].clone())
+            .map_err(|_| "计划服务尚不支持版本绑定，请更新领域服务")?;
+    selection.validate()?;
+    if selection.kind != EngineeringKind::SavedPlanning
+        || selection.project_id != project_id
+        || project["revision"].as_u64() != Some(selection.revision)
+        || selection.confirmed_solid
+    {
+        return Err("计划选择与当前项目身份不匹配".into());
+    }
+    let method = project["method"]
+        .as_str()
+        .filter(|v| matches!(*v, "cpm" | "resource"))
+        .ok_or("已保存计划的计算方式无效")?;
+    let source = project["import_source"]["source"]["sha256"]
+        .as_str()
+        .map(str::to_owned);
+    if selection.source_sha256 != source {
+        return Err("计划原文件摘要不匹配".into());
+    }
+    let canonical = project["agent_inputs_json"]
+        .as_str()
+        .ok_or("计划缺少规范化输入摘要")?;
+    let payload: Value = serde_json::from_str(canonical).map_err(|_| "计划输入快照无效")?;
+    if sha256(canonical.as_bytes()) != selection.inputs_sha256
+        || payload != json!({"plan":project["plan"],"method":method})
+        || !valid_saved_planning_result(&project["result"], &project["plan"], method)
+    {
+        return Err("计划日历、资源、方式或结果与授权摘要不一致".into());
+    }
+    let summary = json!({"name":project["name"],"method":method,"plan":project["plan"],
+        "recorded_result":project["result"],"result_origin":"saved_record_not_recomputed",
+        "synthetic":project["synthetic"],"import_source":project["import_source"],
+        "origin":"saved_explicit_planning_inputs","plan_editing":"dedicated_planning_page_only"});
+    Ok(BoundInputs {
+        selection,
+        payload,
+        summary,
+        missing: Vec::new(),
     })
 }

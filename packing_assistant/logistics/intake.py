@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import importlib
 import json
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -17,6 +18,45 @@ MAX_PAGES = 40
 MAX_PIXELS = 25_000_000
 MAX_CELLS = 200000
 MAX_COLUMNS = 128
+
+
+_PDF_DEPENDENCY_REASONS = {
+    "missing_dependency": "数字 PDF 表格解析不可用：当前环境缺少依赖，请按 requirements-logistics.txt 配置环境。Excel、CSV 仍可上传。",
+    "dependency_load_failed": "数字 PDF 表格解析依赖加载失败；请检查当前工作台环境。Excel、CSV 仍可上传。",
+}
+
+
+class DigitalPdfDependencyError(ValueError):
+    """Fixed user-facing diagnosis; never expose a native loader's paths."""
+
+    def __init__(self, reason_code):
+        self.reason_code = reason_code
+        super().__init__(_PDF_DEPENDENCY_REASONS[reason_code])
+
+
+def _digital_pdf_module():
+    try:
+        module = importlib.import_module("pdfplumber")
+        if not callable(getattr(module, "open", None)):
+            raise ImportError("missing PDF opener")
+    except ModuleNotFoundError:
+        raise DigitalPdfDependencyError("missing_dependency") from None
+    except Exception:
+        raise DigitalPdfDependencyError("dependency_load_failed") from None
+    return module
+
+
+def digital_pdf_capability() -> dict:
+    """Current interpreter import readiness, never a table-recognition result."""
+    result = {"available": False, "status": "unavailable", "engine": "pdfplumber",
+              "local_only": True, "verification_scope": "dependency_import_only",
+              "field_accuracy": "not_verified"}
+    try:
+        _digital_pdf_module()
+    except DigitalPdfDependencyError as exc:
+        return {**result, "reason_code": exc.reason_code, "reason": str(exc)}
+    return {**result, "available": True, "status": "available", "reason_code": None,
+            "reason": "数字 PDF 表格解析依赖可用；识别字段仍须对照原件核对。"}
 _LENGTH = {"mm": 1, "毫米": 1, "cm": 10, "厘米": 10, "m": 1000, "米": 1000, "in": 25.4, "inch": 25.4, "inches": 25.4, "英寸": 25.4, "ft": 304.8, "英尺": 304.8}
 _WEIGHT = {"kg": 1, "kgs": 1, "千克": 1, "公斤": 1, "g": .001, "克": .001, "t": 1000, "吨": 1000, "lb": .45359237, "lbs": .45359237, "磅": .45359237}
 _QUANTITY_UNITS = {"pcs", "pc", "ea", "件", "个", "套", "卷", "米", "m", "根", "支", "片", "块", "张", "roll", "rolls", "set", "sets", "pair", "pairs"}
@@ -267,10 +307,7 @@ def _pdf_cells(table, page_number, table_index):
 
 
 def _pdf(data, ocr_backend):
-    try:
-        import pdfplumber
-    except ImportError as exc:
-        raise ValueError("数字 PDF 表格解析需要安装 pdfplumber") from exc
+    pdfplumber = _digital_pdf_module()
     tables, issues, scan_pages = [], [], []
     with pdfplumber.open(BytesIO(data)) as pdf:
         if len(pdf.pages) > MAX_PAGES:

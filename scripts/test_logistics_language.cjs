@@ -7,6 +7,33 @@ const {JSDOM}=require('jsdom');
 const root=path.join(__dirname,'..');
 const read=p=>fs.readFileSync(path.join(root,p),'utf8');
 
+test('PDF dependency status stays separate from OCR and switches languages from saved capability data',async()=>{
+  const dom=new JSDOM(read('demo/static/logistics.html'),{url:'http://localhost/logistics',runScripts:'outside-only'});
+  const {window}=dom;
+  window.eval(read('demo/static/i18n.js'));window.eval(read('demo/static/i18n-logistics.js'));
+  window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
+  globalThis.CBI18n=window.CBI18n;
+  try{
+    const {startLogisticsApp}=await import('data:text/javascript;base64,'+Buffer.from(read('demo/static/logistics.js')).toString('base64'));
+    const data={formats:['xlsx','csv','pdf'],digital_pdf:{available:false,status:'unavailable',reason_code:'missing_dependency'},ocr:{available:false,ready:false,environment_found:false},limits:{source_bytes:8388608}};
+    const app=startLogisticsApp(window.document,{window,initialize:false,fetch:async url=>new Response(JSON.stringify(url.endsWith('/capabilities')?data:{projects:[]}))});
+    await app.initialize();
+    const status=()=>window.document.getElementById('capabilities').textContent;
+    assert.match(status(),/数字 PDF 表格解析不可用/);assert.match(status(),/本地 OCR 环境尚未就绪/);
+    assert.equal(window.document.getElementById('upload').disabled,false);
+    window.CBI18n.setLocale('en');
+    assert.match(status(),/Digital PDF table parsing is unavailable/);assert.match(status(),/Excel and CSV uploads remain available/);
+    assert.doesNotMatch(status(),/数字|环境|未确认/);
+    window.CBI18n.setLocale('zh-CN');assert.match(status(),/当前环境缺少依赖/);
+    app.state.capabilities={...data,digital_pdf:{available:true,status:'available'}};
+    window.CBI18n.setLocale('en');
+    assert.match(status(),/Digital PDF table dependencies are available/);assert.match(status(),/checking against the original/);
+    assert.match(status(),/OCR/);assert.doesNotMatch(status(),/Digital PDF table parsing is unavailable/);
+    app.state.capabilities={...data,digital_pdf:undefined};
+    window.CBI18n.setLocale('zh-CN');assert.match(status(),/能力尚未核实/);
+  } finally {delete globalThis.CBI18n;window.close();}
+});
+
 test('logistics language switch keeps input, pending edits, sources and confirmation state',async()=>{
   const dom=new JSDOM(read('demo/static/logistics.html'),{url:'http://localhost/logistics',runScripts:'outside-only'});
   const {window}=dom;

@@ -10,6 +10,14 @@
 (function () {
   "use strict";
   const cbVoiceText = (source, values = {}) => window.CBI18n?.t(source, values) ?? String(source || "").replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
+  window.CBI18n?.add({
+    "正在请求准备本机识别模型…": "Requesting preparation of the local speech model…",
+    "本机识别模型准备请求失败：{detail}。未开始录音，请重试或先打字。": "Local speech model preparation request failed: {detail}. Recording did not start. Retry or type your task.",
+    "准备请求超时": "The preparation request timed out",
+    "准备请求连接失败": "The preparation request could not connect",
+    "已停止等待，未开始录音；后台准备可能仍在继续。稍后再点「语音」检查。": "Stopped waiting; recording did not start. Preparation may still be running in the background. Click Voice later to check.",
+    "识别模型准备等待已超时。已停止等待，未开始录音；后台准备可能仍在继续，请稍后重试或先打字。": "Timed out waiting for the speech model. Waiting has stopped and recording did not start. Preparation may still be running in the background; retry later or type your task."
+  });
   // Translate only the fixed ASR error contract. Unknown details and transcripts
   // may contain user data, so never pass arbitrary backend text through i18n.
   const serverErrorMessages = new Set([
@@ -32,6 +40,8 @@
   const MAX_SECONDS = 20;
   const MAX_MS = (MAX_SECONDS - 1) * 1000;
   const POLL_MS = 2000;
+  const CONTROL_REQUEST_TIMEOUT_MS = 10000;
+  const PREPARE_WAIT_MS = 900000;
   const REQUEST_TIMEOUT_MS = 90000;
   const CONSENT_KEY = "cb_voice_browser_consent_v1";
   const btn = document.getElementById("btnVoice");
@@ -54,6 +64,7 @@
   let recognition = null;
   let generation = 0;
   let activeRequest = null;
+  const controlRequests = new Set();
   let supportsCancel = false;
   const alive = (token) => token === generation;
 
@@ -61,6 +72,7 @@
     const wasActive = phase !== "idle" || activeRequest || recorder || recognition;
     generation += 1;
     const pending = activeRequest; activeRequest = null;
+    for (const request of controlRequests) request.abort();
     if (recorder) { recorder.onstop = null; recorder.ondataavailable = null; if (recorder.state !== "inactive") recorder.stop(); recorder = null; }
     if (recognition) { const old = recognition; recognition = null; old.onend = old.onresult = old.onerror = null; if (old.abort) old.abort(); else old.stop(); }
     releaseMic(); chunks = []; interim(""); setPhase("idle");
@@ -137,10 +149,22 @@
     return true;
   }
 
-  async function serverStatus() {
+  async function controlRequest(url, init = {}, timeoutMs = CONTROL_REQUEST_TIMEOUT_MS) {
+    const abort = new AbortController(); controlRequests.add(abort);
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
     try {
-      const response = await fetch("/api/asr/status");
-      if (response.ok) { const info = await response.json(); supportsCancel = info.supports_cancel === true; return info; }
+      const response = await fetch(url, { ...init, signal: abort.signal });
+      const data = await response.json().catch(() => ({}));
+      return { response, data };
+    } finally {
+      clearTimeout(timer); controlRequests.delete(abort);
+    }
+  }
+
+  async function serverStatus(timeoutMs = CONTROL_REQUEST_TIMEOUT_MS) {
+    try {
+      const { response, data: info } = await controlRequest("/api/asr/status", {}, timeoutMs);
+      if (response.ok && info && typeof info === "object") { supportsCancel = info.supports_cancel === true; return info; }
     } catch (_) {
       /* 服务未启用这个接口，或网络连接失败。 */
     }
@@ -166,21 +190,44 @@
       say(cbVoiceText("本机识别模型准备失败（") + (serverErrorText(info.load_error) || cbVoiceText("原因未知")) + cbVoiceText("）。再点一次「语音」将改用浏览器识别。"), "warn");
       return false;
     }
+    const preparationStarted = Date.now();
+    const preparationExpired = () => {
+      if (Date.now() - preparationStarted < PREPARE_WAIT_MS) return false;
+      setPhase("idle");
+      say(cbVoiceText("识别模型准备等待已超时。已停止等待，未开始录音；后台准备可能仍在继续，请稍后重试或先打字。"), "warn");
+      return true;
+    };
+    setPhase("preparing");
+    say(cbVoiceText("正在请求准备本机识别模型…"), "");
     try {
-      await fetch("/api/asr/prepare", { method: "POST" });
-    } catch (_) {
-      /* 下面的轮询会看到结果 */
+      const { response, data } = await controlRequest("/api/asr/prepare", { method: "POST" });
+      if (!alive(token)) return false;
+      if (!response.ok) {
+        const detail = typeof data?.detail === "string" ? serverErrorText(data.detail.slice(0, 500)) : "HTTP " + response.status;
+        setPhase("idle");
+        say(cbVoiceText("本机识别模型准备请求失败：{detail}。未开始录音，请重试或先打字。", { detail }), "warn");
+        return false;
+      }
+    } catch (error) {
+      if (!alive(token)) return false;
+      setPhase("idle");
+      const detail = cbVoiceText(error?.name === "AbortError" ? "准备请求超时" : "准备请求连接失败");
+      say(cbVoiceText("本机识别模型准备请求失败：{detail}。未开始录音，请重试或先打字。", { detail }), "warn");
+      return false;
     }
     if (!alive(token)) return false;
-    setPhase("preparing");
     say(info.state === "missing"
       ? cbVoiceText("第一次使用要下载本机识别模型（约 460 MB），下载好之前先不录音。可以先打字；点「取消」不影响后台下载。")
       : cbVoiceText("正在加载本机识别模型，几秒钟后开始录音。"), "");
     while (phase === "preparing" && alive(token)) {
-      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      if (preparationExpired()) return false;
+      const remaining = PREPARE_WAIT_MS - (Date.now() - preparationStarted);
+      await new Promise((resolve) => setTimeout(resolve, Math.min(POLL_MS, remaining)));
       if (phase !== "preparing" || !alive(token)) return false; // 点了「取消」
-      info = await serverStatus();
+      if (preparationExpired()) return false;
+      info = await serverStatus(Math.min(CONTROL_REQUEST_TIMEOUT_MS, PREPARE_WAIT_MS - (Date.now() - preparationStarted)));
       if (!alive(token)) return false;
+      if (preparationExpired()) return false;
       if (info && info.state === "ready") {
         setPhase("starting");
         return true;
@@ -358,7 +405,7 @@
       return;
     }
     if (phase === "preparing") {
-      cancel(cbVoiceText("已取消等待，模型在后台继续准备。准备好后再点「语音」。"));
+      cancel(cbVoiceText("已停止等待，未开始录音；后台准备可能仍在继续。稍后再点「语音」检查。"));
       return;
     }
     if (phase === "transcribing") {

@@ -6,6 +6,7 @@
 const fs = require("fs");
 const vm = require("vm");
 const path = require("path");
+const assert = require("assert/strict");
 
 const SOURCE = fs.readFileSync(process.argv[2], "utf8");
 const MESSAGES = fs.readFileSync(path.join(path.dirname(process.argv[2]), "i18n-home.js"), "utf8");
@@ -173,6 +174,108 @@ function makePage(opts) {
 
 const READY = { available: true, state: "ready", load_error: "" };
 const scenarios = {
+  async prepare_request_failure_is_visible_and_retryable() {
+    const cases = [];
+    for (const locale of ["zh-CN", "en"]) {
+      for (const [response, expected] of [
+        [[503, { detail: "本机识别子进程不可用：ModuleNotFoundError" }], locale === "en" ? "Local speech worker unavailable: ModuleNotFoundError" : "本机识别子进程不可用：ModuleNotFoundError"],
+        [[403, { detail: "custom preparation rejection" }], "custom preparation rejection"],
+        [[400, { detail: [{ message: "invalid request" }] }], "HTTP 400"],
+        ["network-error", locale === "en" ? "could not connect" : "准备请求连接失败"]
+      ]) {
+        let ready = false;
+        const p = makePage({ locale, speech: true, initialText: "retained draft", fetch: (url) =>
+          url.endsWith("/prepare") ? response : [200, ready ? READY : { available: true, state: "cached", load_error: "" }] });
+        await p.tap();
+        const after = p.snap(), requests = p.log.fetches.length;
+        assert.match(after.status, new RegExp(expected));
+        assert.equal(after.kind, "warn"); assert.equal(after.btn, "");
+        assert.equal(after.input, "retained draft"); assert.equal(p.log.gum, 0);
+        assert.equal(p.log.recStarts, 0); assert.equal(p.log.confirms, 0);
+        assert.deepEqual(p.log.events, []); assert.deepEqual(p.log.violations, []);
+        await p.advance(60000);
+        assert.equal(p.log.fetches.length, requests, "Rejected preparation must not keep polling cached state");
+        ready = true; await p.tap();
+        assert.equal(p.log.gum, 1, "A later click must discover a now-ready local model");
+        assert.equal(p.log.recStarts, 0, "A request failure must not auto-start cloud recognition");
+        p.cancel(); cases.push({ locale, expected, after, recovered: p.snap(), log: p.log });
+      }
+    }
+    return { cases };
+  },
+  async preparing_model_wait_is_bounded_without_claiming_backend_stopped() {
+    const cases = [];
+    for (const locale of ["zh-CN", "en"]) {
+      let ready = false;
+      const p = makePage({ locale, initialText: "retained draft", fetch: (url) => url.endsWith("/prepare")
+        ? [200, { ok: true, state: "loading" }] : [200, ready ? READY : { available: true, state: "loading", load_error: "" }] });
+      await p.tap(); await p.advance(899000);
+      assert.equal(p.snap().btn, locale === "en" ? "Cancel" : "取消");
+      assert.equal(p.log.gum, 0);
+      await p.advance(2000);
+      const after = p.snap(), requests = p.log.fetches.length;
+      assert.equal(after.btn, ""); assert.equal(after.kind, "warn");
+      assert.match(after.status, locale === "en" ? /Waiting has stopped/ : /已停止等待/);
+      assert.match(after.status, locale === "en" ? /may still be running/ : /后台准备可能仍在继续/);
+      assert.equal(after.input, "retained draft"); assert.equal(p.log.gum, 0);
+      assert.equal(p.log.fetches.filter((url) => url.endsWith("/prepare")).length, 1);
+      assert.deepEqual(p.log.events, []); assert.deepEqual(p.log.violations, []);
+      await p.advance(60000);
+      assert.equal(p.log.fetches.length, requests, "Waiting timeout must stop status polling");
+      ready = true; await p.tap();
+      assert.equal(p.log.gum, 1, "Background readiness can be discovered on a later explicit click");
+      p.cancel(); cases.push({ locale, after, log: p.log });
+    }
+    return { cases };
+  },
+  async pending_preparation_http_is_timed_out_or_cancelled_before_audio() {
+    const cases = [];
+    for (const locale of ["zh-CN", "en"]) for (const cancelled of [false, true]) {
+      const p = makePage({ locale, initialText: "retained draft", fetch: (url, init) => url.endsWith("/prepare")
+        ? new Promise((resolve, reject) => init.signal.addEventListener("abort", () => { const error = new Error("aborted"); error.name = "AbortError"; reject(error); }, { once: true }))
+        : [200, { available: true, state: "cached", load_error: "" }] });
+      await p.tap();
+      assert.equal(p.snap().btn, locale === "en" ? "Cancel" : "取消", "Preparing HTTP request must remain cancellable");
+      if (cancelled) await p.tap(); else await p.advance(10001);
+      const after = p.snap();
+      assert.equal(after.btn, ""); assert.equal(after.input, "retained draft");
+      assert.match(after.status, cancelled ? (locale === "en" ? /Stopped waiting/ : /已停止等待/) : (locale === "en" ? /request timed out/ : /准备请求超时/));
+      if (cancelled) assert.match(after.status, locale === "en" ? /may still be running/ : /后台准备可能仍在继续/);
+      assert.equal(p.log.requests.find((request) => request.url.endsWith("/prepare")).aborted, true);
+      assert.equal(p.log.gum, 0); assert.equal(p.log.recStarts, 0);
+      assert.deepEqual(p.log.events, []); assert.deepEqual(p.log.violations, []);
+      cases.push({ locale, cancelled, after, log: p.log });
+    }
+    return { cases };
+  },
+  async preparation_deadline_prevents_late_ready_audio() {
+    const cases = [];
+    for (const locale of ["zh-CN", "en"]) {
+      const p = makePage({ locale, initialText: "retained draft", fetch: (url, init, clock) => {
+        if (url.endsWith("/prepare")) return [200, { ok: true, state: "loading" }];
+        if (clock.now() < 898000) return [200, { available: true, state: "loading", load_error: "" }];
+        return new Promise((resolve, reject) => {
+          clock.wait(5000).then(() => resolve([200, READY]));
+          init.signal.addEventListener("abort", () => { const error = new Error("aborted"); error.name = "AbortError"; reject(error); }, { once: true });
+        });
+      }});
+      await p.tap(); await p.advance(899000);
+      assert.equal(p.snap().btn, locale === "en" ? "Cancel" : "取消");
+      assert.equal(p.log.gum, 0);
+      await p.advance(1000);
+      const after = p.snap();
+      assert.equal(after.btn, ""); assert.equal(after.kind, "warn");
+      assert.match(after.status, locale === "en" ? /Waiting has stopped/ : /已停止等待/);
+      assert.equal(p.log.requests.at(-1).aborted, true, "The final status request must respect the remaining preparation deadline");
+      await p.advance(6000);
+      assert.deepEqual(p.snap(), after, "Late readiness must not overwrite the timeout or start recording");
+      assert.equal(p.log.gum, 0); assert.equal(p.log.recStarts, 0);
+      assert.equal(after.input, "retained draft");
+      assert.deepEqual(p.log.events, []); assert.deepEqual(p.log.violations, []);
+      cases.push({ locale, after, log: p.log });
+    }
+    return { cases };
+  },
   async english_prepare_error_details() {
     const results = [];
     for (const delayed of [false, true]) {
