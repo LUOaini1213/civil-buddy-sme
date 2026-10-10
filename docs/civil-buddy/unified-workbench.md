@@ -7,14 +7,24 @@ This implementation records feature-specific evidence in the [acceptance record]
 For the Windows release ZIP, install x64 CPython 3.11, extract to a writable directory, run
 `prepare-unified-workbench.bat` once, then use `start-unified-workbench.bat`. Preparation installs
 the pinned, hash-verified base, document and logistics wheels in a package-owned versioned environment.
-Only preparation downloads dependencies; normal startup and `--check` never install anything.
+Only explicit preparation or rebuilding installs dependencies; normal startup and `--check` never install anything.
 A failed preparation leaves the previous successful selection intact. Keep project/state paths unchanged
 when upgrading and prepare a new environment in the new package; do not move a virtual environment.
 The package does not include Python, credentials, speech models or a preinstalled environment.
 
+If the selected environment has damaged packages, a missing interpreter or damaged preparation metadata,
+stop its workbench and run `prepare-unified-workbench.bat --rebuild`. This installs the same hash lock in a
+fresh generation directory and selects it only after verification. Old and failed directories are retained;
+each rebuild attempt creates a new directory. Ordinary preparation reuses the current successful selection.
+For offline preparation, pass `--wheelhouse C:/CivilBuddyWheels` containing every required locked wheel;
+this also works with `--rebuild` and never downloads missing wheels from another source.
+
 For a manually configured Python 3.11+ environment, install the project's Python dependencies plus
 `requirements-documents.txt` and `requirements-logistics.txt`. Engineering and local speech remain
-optional dependencies in their existing requirements files.
+optional dependencies in their existing requirements files. Add optional capabilities in a separate manually
+configured environment, then pass that interpreter to the unified launcher with `--python`. Do not add packages
+to the release-managed `.civil-buddy-runtime` environment. Installed package metadata alone does not verify
+native libraries, engineering solvers or speech models.
 
 ```powershell
 cargo build --release --manifest-path workbench/Cargo.toml

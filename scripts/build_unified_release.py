@@ -190,11 +190,28 @@ def release_readme(version: str, architecture: str, commit: str) -> str:
 
 先安装 **Windows x64 CPython 3.11**，完整解压本包到可写目录。双击
 `prepare-unified-workbench.bat` 完成首次准备，再双击 `start-unified-workbench.bat` 打开统一工作台。
-只有“首次准备”会联网安装；启动入口不自动安装任何依赖。准备使用
+只有显式准备或重建会安装依赖；启动入口不自动安装任何依赖。准备使用
 `requirements-unified-windows-py311.lock` 中固定版本、校验哈希的 wheel，
 覆盖基础服务、文档与物流数字 PDF；不会安装全局依赖，也不会修改工程或产品历史。
 环境保存在包内 `.civil-buddy-runtime` 的版本目录，不能随 ZIP 或升级直接搬走。
 准备失败可以重试；新的准备未成功前保留原有已准备环境的选择。
+
+如已准备环境的依赖、解释器或准备记录损坏，关闭使用该环境的工作台，再运行：
+
+```powershell
+.\\prepare-unified-workbench.bat --rebuild
+```
+
+重建使用同一版本锁，在新目录安装并完成核查后才切换选择，不修改或删除旧环境。
+失败目录会保留；再次执行 `--rebuild` 会创建另一个新目录。普通准备复用当前成功选择。
+如需离线准备，先将版本锁指定的全部 wheel 放入一个目录，再显式指定：
+
+```powershell
+.\\prepare-unified-workbench.bat --wheelhouse C:/CivilBuddyWheels
+# 离线重建可在同一命令后追加 --rebuild。
+```
+
+离线准备仍校验固定版本和哈希，不从其他来源补下载。
 
 默认通过 `py -3.11` 或 `python` 找到解释器。已有 3.11 解释器不在 PATH 时，
 可在 PowerShell 显式指定：
@@ -273,7 +290,10 @@ py -3.11 -m venv .venv
 旧启动器可能按原流程准备本地 `.venv`；统一入口不调用该安装流程。两种入口不要使用同一个端口同时运行。
 物流数字 PDF 缺依赖时会在预检单独提示；基础服务能启动不代表扫描件可识别。
 CAD、工程计算、排程、语音依赖分别见 `requirements-cad.txt`、`requirements-engineering.txt`、
-`requirements-planning.txt`、`requirements-asr.txt`，请只在同一虚拟环境内按需安装。
+`requirements-planning.txt`、`requirements-asr.txt`。需要这些能力时，请另建人工配置的虚拟环境，
+安装基础、文档和物流依赖，再安装所需可选依赖，并将该环境的解释器传给统一启动器的 `--python`。
+不要给 `.civil-buddy-runtime` 中的发布包环境补装依赖；该环境只用于固定版本的基础能力。
+可选包安装完成不代表 CAD 原生库、工程求解器或语音模型已通过实际运行验收。
 Java/JVM、Office 或 OCR 引擎均不随包提供。
 
 文档副本只是待核查草稿；PDF 正文改写/OCR、Office 排版渲染与 Excel 公式重算尚未提供。

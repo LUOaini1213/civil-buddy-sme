@@ -169,18 +169,32 @@ def powershell_quote(value: str | Path) -> str:
 
 def format_report(report: Report, root: Path) -> str:
     lines = ["Civil Buddy offline preflight / 启动前检查"]
+    # This only chooses actionable guidance; it grants no environment ownership.
+    # Resolve lexical '..' without following interpreter/venv symlinks.
+    managed = bool(report.python and Path(os.path.abspath(report.python)).is_relative_to(
+        Path(os.path.abspath(root / ".civil-buddy-runtime"))))
     if report.python:
         lines.append(f"Python: {report.python}" + (f" ({report.version})" if report.version else ""))
     for error in report.errors:
         lines.append(f"[FAIL] {error}")
     if report.missing_required:
         lines.append("[FAIL] Required packages missing or below minimum version: " + ", ".join(report.missing_required))
-        lines.append("Install with PowerShell: & " + powershell_quote(report.python) + " -m pip install -r "
-                     + powershell_quote(root / "requirements.txt") + " -r " + powershell_quote(root / "requirements-documents.txt"))
+        if managed:
+            lines.append("Explicitly rebuild in a new owned environment: & "
+                         + powershell_quote(root / "scripts/prepare-unified-workbench.bat") + " --rebuild")
+        else:
+            lines.append("Install with PowerShell: & " + powershell_quote(report.python) + " -m pip install -r "
+                         + powershell_quote(root / "requirements.txt") + " -r " + powershell_quote(root / "requirements-documents.txt"))
     for group, missing in report.missing_optional.items():
         lines.append(f"[OPTIONAL] {group}: " + ", ".join(missing) + "; base startup is not blocked.")
-        lines.append("  Install if needed: & " + powershell_quote(report.python) + " -m pip install -r "
-                     + powershell_quote(root / OPTIONAL[group][0]))
+        if managed:
+            lines.append("  Requirements for a separate manual environment: " + powershell_quote(root / OPTIONAL[group][0]))
+        else:
+            lines.append("  Install if needed: & " + powershell_quote(report.python) + " -m pip install -r "
+                         + powershell_quote(root / OPTIONAL[group][0]))
+    if managed and report.missing_optional:
+        lines.append("Keep the release-managed environment unchanged. Configure optional capabilities in a separate manual environment and use the advanced launcher; see "
+                     + powershell_quote(root / "docs/civil-buddy/unified-workbench.md") + ".")
     lines.append("[OK] Startup prerequisites passed." if report.ok else "[FAIL] Fix the required items above, then rerun --check.")
     lines.append("Offline metadata/module checks only; no product/provider started, no model downloaded. Optional native libraries/models and live service health are not verified.")
     return "\n".join(lines)

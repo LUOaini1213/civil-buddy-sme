@@ -47,6 +47,7 @@ class PreparationTests(unittest.TestCase):
         self.fail_install = False
         self.fail_check = False
         self.wrong_inventory = False
+        self.wrong_inventory_paths = set()
         self.preflight_ok = True
         self.preflight_calls = []
         self.output = io.StringIO()
@@ -71,7 +72,7 @@ class PreparationTests(unittest.TestCase):
             return SimpleNamespace(returncode=0, stdout=json.dumps(self.info(args[0])).encode(), stderr=b"")
         if setup.INVENTORY_PROBE in args:
             data = setup.lock_versions((Path(args[0]).parents[1] / "requirements.lock").read_bytes())
-            if self.wrong_inventory:
+            if self.wrong_inventory or Path(args[0]) in self.wrong_inventory_paths:
                 data["example-package"] = "999.0.0"
             return SimpleNamespace(returncode=0, stdout=json.dumps(data).encode(), stderr=b"")
         if "venv" in args:
@@ -95,6 +96,10 @@ class PreparationTests(unittest.TestCase):
     def files(self):
         return {str(p.relative_to(self.root)): hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in self.root.rglob("*") if p.is_file()}
+
+    def environment_files(self, environment):
+        return {str(p.relative_to(environment)): p.read_bytes()
+                for p in environment.rglob("*") if p.is_file()}
 
     def test_hash_lock_accepts_extras_and_rejects_unpinned_or_injected_sources(self):
         self.assertEqual(setup.lock_versions(locked()), {"example-package": "1.2.3", "uvicorn": "0.30.0"})
@@ -176,6 +181,230 @@ class PreparationTests(unittest.TestCase):
         self.assertFalse(any("install" in c or "venv" in c for c in self.calls))
         self.assertEqual(before, self.files())
 
+    def test_explicit_rebuild_uses_fresh_generation_and_retains_prior_bytes(self):
+        previous = self.prepare()
+        original = self.root / "customer-original.txt"
+        original.write_bytes(b"original material must not change")
+        previous_files = self.environment_files(previous.parents[1])
+        previous_selection = self.selected_bytes()
+        self.calls.clear()
+        selected = self.prepare(rebuild=True)
+        metadata = json.loads(self.selected_bytes())
+        self.assertRegex(metadata["generation"], r"^[a-f0-9]{32}$")
+        expected, owner = setup.env_details(self.root, hashlib.sha256(locked()).hexdigest(), metadata["generation"])
+        self.assertEqual(selected, expected / "Scripts/python.exe")
+        self.assertNotEqual(selected, previous)
+        self.assertNotEqual(self.selected_bytes(), previous_selection)
+        self.assertEqual(json.loads((expected / setup.OWNER_NAME).read_bytes()), owner)
+        self.assertEqual(json.loads((expected / "ready.json").read_bytes()), {**owner, "ready": True})
+        self.assertEqual((expected / "requirements.lock").read_bytes(), locked())
+        self.assertEqual(setup.prepared_python(self.root), selected)
+        self.assertEqual(previous_files, self.environment_files(previous.parents[1]))
+        self.assertEqual(original.read_bytes(), b"original material must not change")
+        self.assertTrue(any("venv" in c for c in self.calls))
+        install = next(c for c in self.calls if "install" in c)
+        self.assertEqual(install[-1], str(expected / "requirements.lock"))
+        self.assertIn("--require-hashes", install)
+        self.assertIn("--only-binary=:all:", install)
+
+    def test_failed_rebuild_keeps_selected_environment_and_preserves_failed_candidates(self):
+        previous = self.prepare()
+        selection = self.selected_bytes()
+        previous_files = self.environment_files(previous.parents[1])
+        candidates = []
+        for failure in ("install", "check", "preflight"):
+            self.fail_install = failure == "install"
+            self.fail_check = failure == "check"
+            self.preflight_ok = failure != "preflight"
+            self.calls.clear()
+            with self.subTest(failure=failure), self.assertRaises(setup.PreparationError):
+                self.prepare(rebuild=True)
+            self.assertEqual(selection, self.selected_bytes())
+            self.assertEqual(previous_files, self.environment_files(previous.parents[1]))
+            created = Path(next(c[-1] for c in self.calls if "venv" in c))
+            self.assertNotIn(created, candidates)
+            candidates.append(created)
+            self.assertTrue((created / setup.OWNER_NAME).is_file())
+            self.assertFalse((created / "ready.json").exists())
+            for candidate in candidates:
+                self.assertTrue(candidate.is_dir(), "failed generations must remain available for diagnosis")
+        self.fail_install = self.fail_check = False
+        self.preflight_ok = True
+        self.assertEqual(setup.prepared_python(self.root), previous)
+
+    def test_plain_prepare_reuses_rebuilt_selection_without_resurrecting_legacy(self):
+        legacy = self.prepare()
+        selected = self.prepare(rebuild=True)
+        before = self.files()
+        self.calls.clear()
+        self.assertEqual(self.prepare(), selected)
+        self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+        self.assertTrue(any("check" in c for c in self.calls))
+        self.assertEqual(before, self.files())
+        self.assertTrue(legacy.is_file())
+        self.assertEqual(setup.prepared_python(self.root), selected)
+        (self.root / setup.LOCK_NAME).write_bytes(locked("1.2.4"))
+        new_default = self.prepare()
+        environment, _ = setup.env_details(self.root, hashlib.sha256(locked("1.2.4")).hexdigest())
+        self.assertEqual(new_default, environment / "Scripts/python.exe")
+        self.assertTrue(selected.is_file())
+
+    def test_selected_generation_reuse_does_not_inspect_unused_legacy_reparse(self):
+        legacy = self.prepare()
+        selected = self.prepare(rebuild=True)
+        before = self.files()
+        original = Path.lstat
+        def attributes(path):
+            if path == legacy.parents[1]:
+                return SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0x400)
+            return original(path)
+        self.calls.clear()
+        with patch.object(Path, "lstat", attributes):
+            self.assertEqual(setup.prepared_python(self.root), selected)
+            self.assertEqual(self.prepare(), selected)
+        self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+        self.assertTrue(any("check" in c for c in self.calls))
+        self.assertEqual(before, self.files())
+
+    def test_explicit_rebuild_recovers_modified_versions_without_reinstalling_old_environment(self):
+        previous = self.prepare()
+        self.wrong_inventory_paths.add(previous)
+        before = self.files()
+        self.calls.clear()
+        with self.assertRaisesRegex(setup.PreparationError, "--rebuild"):
+            self.prepare()
+        self.assertEqual(before, self.files())
+        self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+        previous_files = self.environment_files(previous.parents[1])
+        selected = self.prepare(rebuild=True)
+        self.assertNotEqual(selected, previous)
+        self.assertEqual(previous_files, self.environment_files(previous.parents[1]))
+        self.assertEqual(setup.prepared_python(self.root), selected)
+
+    def test_missing_selected_interpreter_requires_rebuild_and_retains_old_environment(self):
+        selected = self.prepare(rebuild=True)
+        selected.unlink()
+        before = self.files()
+        previous_files = self.environment_files(selected.parents[1])
+        self.calls.clear()
+        with patch.object(setup.subprocess, "call") as call:
+            with self.assertRaisesRegex(setup.PreparationError, "--rebuild"):
+                setup.launch(self.root, ["--check"])
+            call.assert_not_called()
+        with self.assertRaisesRegex(setup.PreparationError, "--rebuild"):
+            self.prepare()
+        self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+        self.assertEqual(before, self.files())
+        replacement = self.prepare(rebuild=True)
+        self.assertNotEqual(replacement, selected)
+        self.assertFalse(selected.exists())
+        self.assertEqual(previous_files, self.environment_files(selected.parents[1]))
+        self.assertEqual(setup.prepared_python(self.root), replacement)
+
+    def test_rebuild_can_recover_invalid_selection_only_after_candidate_checks(self):
+        previous = self.prepare()
+        previous_files = self.environment_files(previous.parents[1])
+        selection = self.root / setup.RUNTIME_NAME / "selected.json"
+        selection.write_bytes(b"not valid JSON\n")
+        self.fail_install = True
+        with self.assertRaises(setup.PreparationError):
+            self.prepare(rebuild=True)
+        self.assertEqual(selection.read_bytes(), b"not valid JSON\n")
+        self.assertEqual(previous_files, self.environment_files(previous.parents[1]))
+        self.fail_install = False
+        selected = self.prepare(rebuild=True)
+        self.assertEqual(setup.prepared_python(self.root), selected)
+        self.assertEqual(previous_files, self.environment_files(previous.parents[1]))
+
+    def test_rebuild_preserves_damaged_prior_lock_and_unreadable_environment_metadata(self):
+        for filename, damaged in (("requirements.lock", locked("9.9.9")),
+                                  ("ready.json", b"invalid ready metadata\n"),
+                                  (setup.OWNER_NAME, b"invalid owner metadata\n")):
+            selected = self.prepare(rebuild=True)
+            environment = selected.parents[1]
+            (environment / filename).write_bytes(damaged)
+            previous_files = self.environment_files(environment)
+            self.calls.clear()
+            with patch.object(setup.subprocess, "call") as call:
+                with self.subTest(filename=filename), self.assertRaises(setup.PreparationError):
+                    setup.launch(self.root, ["--check"])
+                call.assert_not_called()
+            self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+            replacement = self.prepare(rebuild=True)
+            self.assertNotEqual(replacement, selected)
+            self.assertEqual(previous_files, self.environment_files(environment))
+            self.assertEqual(setup.prepared_python(self.root), replacement)
+
+    def test_generation_metadata_refuses_malformed_values_and_path_mismatches(self):
+        self.prepare(rebuild=True)
+        original = json.loads(self.selected_bytes())
+        for value in (None, 123, [], "", "../outside", "A" * 32, "a" * 31, "a" * 33, "cmd & run"):
+            record = {**original, "generation": value}
+            setup.atomic_json(self.root / setup.RUNTIME_NAME / "selected.json", record)
+            before = self.files()
+            self.calls.clear()
+            with self.subTest(value=value), self.assertRaises(setup.PreparationError):
+                setup.prepared_python(self.root)
+            with self.assertRaises(setup.PreparationError):
+                self.prepare()
+            self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+            self.assertEqual(before, self.files())
+        for record in ({key: value for key, value in original.items() if key != "generation"},
+                       {**original, "environment": ".civil-buddy-runtime/py311/outside"},
+                       {**original, "generation": "0" * 32}):
+            setup.atomic_json(self.root / setup.RUNTIME_NAME / "selected.json", record)
+            with self.subTest(record=record), self.assertRaises(setup.PreparationError):
+                setup.prepared_python(self.root)
+
+    def test_rebuild_generation_collision_never_modifies_existing_candidate(self):
+        self.prepare()
+        generation = "a" * 32
+        environment, _ = setup.env_details(self.root, hashlib.sha256(locked()).hexdigest(), generation)
+        environment.mkdir()
+        (environment / "keep.txt").write_bytes(b"unknown collision must remain intact")
+        before = self.files()
+        self.calls.clear()
+        with patch.object(setup.uuid, "uuid4", return_value=SimpleNamespace(hex=generation)):
+            with self.assertRaisesRegex(setup.PreparationError, "already exists"):
+                self.prepare(rebuild=True)
+        self.assertEqual(before, self.files())
+        self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+
+    def test_rebuild_refuses_linked_selection_or_generated_path(self):
+        self.prepare()
+        generation = "b" * 32
+        environment, _ = setup.env_details(self.root, hashlib.sha256(locked()).hexdigest(), generation)
+        selection = self.root / setup.RUNTIME_NAME / "selected.json"
+        original = Path.lstat
+        before = self.files()
+        for linked in (selection, environment):
+            def attributes(path):
+                if path == linked:
+                    return SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0x400)
+                return original(path)
+            self.calls.clear()
+            with patch.object(Path, "lstat", attributes), patch.object(setup.uuid, "uuid4", return_value=SimpleNamespace(hex=generation)):
+                with self.subTest(linked=linked), self.assertRaisesRegex(setup.PreparationError, "reparse"):
+                    self.prepare(rebuild=True)
+            self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+            self.assertEqual(before, self.files())
+
+    def test_rebuilt_selection_launch_remains_read_only_and_cli_modes_cannot_mix(self):
+        selected = self.prepare(rebuild=True)
+        before = self.files()
+        self.calls.clear()
+        with patch.object(setup.subprocess, "call", return_value=0) as call:
+            self.assertEqual(setup.launch(self.root, ["--check"]), 0)
+        self.assertEqual(call.call_args.args[0][0], str(selected))
+        self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+        self.assertEqual(before, self.files())
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            setup.main(["--check", "--rebuild"])
+        self.assertEqual(error.exception.code, 2)
+        with patch.object(setup, "ROOT", self.root), patch.object(setup, "prepare", return_value=selected) as prepare:
+            self.assertEqual(setup.main(["--rebuild", "--python", str(self.base)]), 0)
+        self.assertIs(prepare.call_args.kwargs["rebuild"], True)
+
     def test_preflight_and_pip_check_failure_retain_previous_selection(self):
         self.prepare()
         before = self.selected_bytes()
@@ -195,9 +424,10 @@ class PreparationTests(unittest.TestCase):
         runtime.mkdir()
         (runtime / "keep.txt").write_text("unowned")
         before = self.files()
-        with self.assertRaises(setup.PreparationError):
-            self.prepare()
-        self.assertEqual(before, self.files())
+        for rebuild in (False, True):
+            with self.subTest(rebuild=rebuild), self.assertRaises(setup.PreparationError):
+                self.prepare(rebuild=rebuild)
+            self.assertEqual(before, self.files())
         setup.atomic_json(runtime / "owner.json", setup.identity(self.root))
         env, _ = setup.env_details(self.root, hashlib.sha256(locked()).hexdigest())
         env.mkdir(parents=True)
@@ -207,6 +437,12 @@ class PreparationTests(unittest.TestCase):
             self.prepare()
         self.assertEqual((env / "keep.txt").read_bytes(), before_env)
         self.assertFalse((env / setup.OWNER_NAME).exists())
+        unknown_files = self.environment_files(env)
+        # A fresh generation may safely bypass an unknown baseline directory;
+        # the package-level owner is valid, and that unknown directory is untouched.
+        selected = self.prepare(rebuild=True)
+        self.assertNotEqual(selected.parents[1], env)
+        self.assertEqual(unknown_files, self.environment_files(env))
 
     def test_full_hash_collision_is_rejected_despite_short_directory_component(self):
         self.prepare()

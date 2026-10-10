@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import uuid
 
 ROOT = Path(__file__).absolute().parents[1]
 LOCK_NAME = "requirements-unified-windows-py311.lock"
@@ -143,7 +144,7 @@ def check_inventory(python: Path, root: Path, locked: bytes) -> None:
         if actual != versions:
             raise ValueError
     except (ValueError, TypeError):
-        raise PreparationError("Installed package versions do not exactly match the release lock. No new environment was selected; existing files were retained.") from None
+        raise PreparationError("Installed package versions do not exactly match the release lock. Run prepare-unified-workbench.bat --rebuild to prepare a fresh environment; existing files were retained.") from None
 
 
 def reject_tree_links(folder: Path) -> None:
@@ -189,7 +190,8 @@ def identity(root: Path) -> dict:
 
 
 def check_identity(value: dict, expected: dict) -> None:
-    if any(value.get(key) != item for key, item in expected.items()):
+    if (any(value.get(key) != item for key, item in expected.items())
+            or ("generation" in value) != ("generation" in expected)):
         raise PreparationError("This environment is not owned by this package and dependency lock; it will not be modified.")
 
 
@@ -237,30 +239,46 @@ def preparation_lock(runtime: Path):
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def env_details(root: Path, lock_hash: str) -> tuple[Path, dict]:
+def env_details(root: Path, lock_hash: str, generation: str | None = None) -> tuple[Path, dict]:
     if not isinstance(lock_hash, str) or not re.fullmatch(r"[a-f0-9]{64}", lock_hash):
         raise PreparationError("Invalid prepared environment identifier.")
+    if generation is not None and (not isinstance(generation, str) or not re.fullmatch(r"[a-f0-9]{32}", generation)):
+        raise PreparationError("Invalid prepared environment generation.")
     # Shorten only the directory component. Ownership always compares all 64 digits.
-    env = root / RUNTIME_NAME / "py311" / lock_hash[:16]
+    name = lock_hash[:16] + ("--" + generation if generation is not None else "")
+    env = root / RUNTIME_NAME / "py311" / name
     reject_links(env)
-    return env, {**identity(root), "lock_sha256": lock_hash, "environment": env.relative_to(root).as_posix()}
+    expected = {**identity(root), "lock_sha256": lock_hash, "environment": env.relative_to(root).as_posix()}
+    if generation is not None:
+        expected["generation"] = generation
+    return env, expected
+
+
+def selection_details(root: Path, selected: dict) -> tuple[Path, dict]:
+    generation = selected.get("generation")
+    # Absence selects the original directory layout. An explicit null or another
+    # malformed value must not silently turn a generation into a legacy path.
+    if "generation" in selected and generation is None:
+        raise PreparationError("Invalid prepared environment generation. Run prepare-unified-workbench.bat --rebuild to create a fresh selection.")
+    env, expected = env_details(root, selected.get("lock_sha256", ""), generation)
+    check_identity(selected, expected)
+    return env, expected
 
 
 def prepared_python(root: Path) -> Path:
     runtime = owned_runtime(root, create=False)
     selected = read_json(runtime / "selected.json")
-    env, expected = env_details(root, selected.get("lock_sha256", ""))
-    check_identity(selected, expected)
+    env, expected = selection_details(root, selected)
     check_identity(read_json(env / OWNER_NAME), expected)
     check_identity(read_json(env / "ready.json"), {**expected, "ready": True})
     snapshot = env / "requirements.lock"
     reject_links(snapshot)
     if hashlib.sha256(snapshot.read_bytes()).hexdigest() != expected["lock_sha256"]:
-        raise PreparationError("The prepared lock snapshot changed. Run explicit preparation; normal startup will not repair it.")
+        raise PreparationError("The prepared lock snapshot changed. Run prepare-unified-workbench.bat --rebuild; normal startup will not repair it.")
     python = env / "Scripts/python.exe"
     reject_links(python)
     if not python.is_file():
-        raise PreparationError("The selected interpreter is missing. Rerun explicit preparation; nothing was installed during startup.")
+        raise PreparationError("The selected interpreter is missing. Run prepare-unified-workbench.bat --rebuild; nothing was installed during startup.")
     return python
 
 
@@ -278,7 +296,7 @@ def load_preflight(root: Path):
 
 
 def prepare(root: Path, *, python: str, binary: Path, port: int | None = None,
-            wheelhouse: Path | None = None) -> Path:
+            wheelhouse: Path | None = None, rebuild: bool = False) -> Path:
     root = root.absolute()
     reject_links(root)
     locked = lock_bytes(root)
@@ -292,8 +310,26 @@ def prepare(root: Path, *, python: str, binary: Path, port: int | None = None,
             raise PreparationError("The supplied wheelhouse must be an existing regular directory.")
     runtime = owned_runtime(root, create=True)
     with preparation_lock(runtime):
-        env, expected = env_details(root, lock_hash)
+        selection = runtime / "selected.json"
+        # Rebuilding can replace invalid selection metadata, but never a linked
+        # selection file. It need not read or change any prior environment.
+        reject_links(selection)
+        target = None
+        if not rebuild and selection.exists():
+            current = read_json(selection)
+            current_env, current_expected = selection_details(root, current)
+            if current_expected["lock_sha256"] == lock_hash:
+                # Keep the successfully selected generation. A damaged selection
+                # requires explicit rebuild; never fall back to an older baseline.
+                prepared_python(root)
+                target = current_env, current_expected
+        if target is None:
+            generation = uuid.uuid4().hex if rebuild else None
+            target = env_details(root, lock_hash, generation)
+        env, expected = target
         if env.exists():
+            if rebuild:
+                raise PreparationError("The fresh environment generation already exists; no existing environment was modified. Retry --rebuild to create another generation.")
             check_identity(read_json(env / OWNER_NAME), expected)
         else:
             env.parent.mkdir(exist_ok=True)
@@ -351,7 +387,7 @@ def prepare(root: Path, *, python: str, binary: Path, port: int | None = None,
         if lock_bytes(root) != locked:
             raise PreparationError("The dependency lock changed during preparation; no new environment was selected.")
         atomic_json(ready, {**expected, "ready": True})
-        atomic_json(runtime / "selected.json", expected)
+        atomic_json(selection, expected)
         return selected
 
 
@@ -386,11 +422,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--binary", type=Path, default=ROOT / "bin/civil-workbench.exe")
         parser.add_argument("--port", type=int, help="Optional preparation probe port; ordinary startup checks its actual port")
         parser.add_argument("--wheelhouse", type=Path, help="Install exclusively from this local wheel directory; no index access")
-        parser.add_argument("--check", action="store_true", help="Check the selected environment only; do not prepare or install")
+        mode = parser.add_mutually_exclusive_group()
+        mode.add_argument("--check", action="store_true", help="Check the selected environment only; do not prepare or install")
+        mode.add_argument("--rebuild", action="store_true", help="Install the same release lock in a fresh generation; retain every prior environment and select only after successful checks")
         args = parser.parse_args(arguments)
         if args.check:
             return launch(ROOT, ["--check", "--binary", str(args.binary), "--port", str(args.port or 8765)])
-        selected = prepare(ROOT, python=args.python, binary=args.binary, port=args.port, wheelhouse=args.wheelhouse)
+        selected = prepare(ROOT, python=args.python, binary=args.binary, port=args.port, wheelhouse=args.wheelhouse,
+                           rebuild=args.rebuild)
         print("Preparation complete / 环境准备完成: " + str(selected))
         print("Open start-unified-workbench.bat to start. No product or model was started during preparation.")
         return 0

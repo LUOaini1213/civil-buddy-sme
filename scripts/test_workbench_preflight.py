@@ -79,6 +79,29 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("& '" + str(self.python) + "' -m pip install", text)
         self.assertIn("requirements-documents.txt", text)
 
+    def test_managed_runtime_hints_rebuild_and_isolate_optional_dependencies(self):
+        # These are read-only diagnostics, never installation authority.
+        managed = self.root / ".civil-buddy-runtime/py311/0123456789abcdef--generation/Scripts/python.exe"
+        report = preflight.Report(python=str(managed), missing_required=["pydantic>=2.0.0"],
+                                  missing_optional={"CAD": ["ezdxf"], "local voice": ["faster_whisper"]})
+        text = preflight.format_report(report, self.root)
+        self.assertIn("prepare-unified-workbench.bat' --rebuild", text)
+        self.assertIn("separate manual environment", text)
+        self.assertIn("requirements-asr.txt", text)
+        self.assertIn("requirements-cad.txt", text)
+        self.assertNotIn("-m pip install", text)
+        self.assertFalse(managed.exists())
+
+    def test_adjacent_or_lexically_external_environment_keeps_manual_install_guidance(self):
+        for python in (self.root / ".civil-buddy-runtime-other/Scripts/python.exe",
+                       self.root / ".civil-buddy-runtime/../manual/Scripts/python.exe"):
+            with self.subTest(python=python):
+                report = preflight.Report(python=str(python), missing_required=["pydantic>=2.0.0"],
+                                          missing_optional={"local voice": ["faster_whisper"]})
+                text = preflight.format_report(report, self.root)
+                self.assertIn("-m pip install", text)
+                self.assertNotIn("--rebuild", text)
+
     def test_optional_missing_does_not_block_base_and_has_specific_install_command(self):
         data = self.data()
         data["optional"].update(faster_whisper=False, ezdxf=False)
