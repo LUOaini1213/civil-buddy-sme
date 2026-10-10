@@ -23,6 +23,23 @@ const READINESS_LABELS = { source_hash: "副本哈希", structure: "文件结构
   layout: "版式核对", document_fields: "修订与域", formula_cache: "公式缓存", spreadsheet_errors: "错误单元格",
   recalculation: "公式重算", external_data: "外部数据", engineering_review: "专业核对" };
 const CHECK_STATUS = { pass: "已检查", review_required: "待核对", blocked: "需处理", not_applicable: "不适用" };
+const EXCEL_STATUS = { queued: "等待重算", running: "正在重算", completed: "重算副本已保存", failed: "重算未完成", cancelled: "重算已停止", interrupted: "重算在服务重启时中断" };
+const EXCEL_STAGE = { queued: "等待本机引擎", admission: "检查文件是否可安全重算", ownership: "核对专用 Excel 实例", calculation: "执行公式重算", verification: "核对重算结果与缓存", publication: "登记新副本", completed: "重算任务已结束" };
+function verifiedExcelReceipt(receipt, input, output, jobId, count) {
+  return object(receipt) && HASH.test(input || "") && HASH.test(output || "") && ID.test(jobId || "")
+    && receipt.schema_version === 1 && receipt.source_sha256 === input && receipt.output_sha256 === output && receipt.job_id === jobId
+    && receipt.engine === "Microsoft Excel" && typeof receipt.engine_version === "string" && !!receipt.engine_version
+    && typeof receipt.engine_build === "string" && !!receipt.engine_build && receipt.calculation_method === "CalculateFullRebuild"
+    && Number.isSafeInteger(receipt.calculation_version) && receipt.calculation_version >= 0
+    && receipt.calculation_state === "done" && receipt.owned_instance === true && receipt.workbook_count === 1 && receipt.cleanup_verified === true
+    && receipt.verification?.status === "pass" && receipt.verification.semantic_preserved === true && receipt.verification.persisted_formula_caches_verified === true
+    && Number.isSafeInteger(count) && count >= 0 && receipt.verification.formula_count === count
+    && Array.isArray(receipt.formula_results) && receipt.formula_results.length === count
+    && receipt.formula_results.every((value) => object(value) && typeof value.sheet === "string" && !!value.sheet
+      && typeof value.cell === "string" && /^[A-Z]{1,3}[1-9][0-9]{0,6}$/.test(value.cell)
+      && (value.type === "number" && typeof value.value === "number" && Number.isFinite(value.value)
+        || value.type === "boolean" && typeof value.value === "boolean" || value.type === "text" && typeof value.value === "string"));
+}
 function engineeringSnapshot(data, expected) {
   const value = data?.selection;
   if (!object(value) || engineeringKey(value) !== engineeringKey(expected) || !Number.isSafeInteger(value.revision) || value.revision < 1
@@ -53,8 +70,10 @@ export function createAgentWorkbench(deps) {
     seq: 0, emptyEventPages: 0, nextTurnCursor: null, turnsLoading: false, sessionListEpoch: 0, sessionsLoading: false, nextSessionCursor: null, sessionHistoryMessage: null, artifacts: new Map(), artifactChecks: new Map(), engineeringResults: new Map(), epoch: 0, workspaceEpoch: 0, fileEpoch: 0, listEpoch: 0,
     contextData: null, taskRows: [], eventRows: [], subtasks: new Map(), packingResults: new Map(), modelConfig: null, writeGateReason: null, sourceEvidence: null, modelInterpretationText: null,
     engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, engineeringStatus: null, terminalNotice: false, experts: [],
+    excelJobs: new Map(), excelActions: new Map(), excelLoading: false, excelError: "", excelTruncated: false, excelEpoch: 0,
     opening: false, submitting: false, cancelling: false, modelBusy: false, modelConfigured: false, disposed: false };
   let saved = { lastRoot: "", workspaces: {} }, timer = null, controller = null, started = false;
+  let excelTimer = null;
   try { const value = JSON.parse(storage.getItem(STORE_KEY) || "null"); if (object(value) && object(value.workspaces)) saved = value; } catch (_) { /* Storage is optional. */ }
   function persist() { try { storage.setItem(STORE_KEY, JSON.stringify(saved)); } catch (_) { /* Storage may be disabled. */ } }
   function record() { return state.workspace && saved.workspaces[state.workspace.id]; }
@@ -91,6 +110,7 @@ export function createAgentWorkbench(deps) {
     $("agentPackingSource").value = "";
     stopPolling(); state.epoch += 1; state.listEpoch += 1; state.turn = null; state.seq = 0; state.emptyEventPages = 0; state.turnsLoading = false; if (!keepHistory) { state.nextTurnCursor = null; state.taskRows = []; } state.eventRows = []; state.contextData = null; state.artifacts.clear(); state.artifactChecks.clear(); state.engineeringResults.clear();
     state.submitting = false; state.cancelling = false;
+    for (const action of state.excelActions.values()) action.confirmation = "";
     state.writeGateReason = null; paintWriteGate();
     state.sourceEvidence = null; paintSourceEvidence(null);
     $("agentEvents").replaceChildren(); $("agentArtifacts").replaceChildren(); $("agentReply").textContent = t("结果将显示在这里。");
@@ -131,6 +151,8 @@ export function createAgentWorkbench(deps) {
     $("agentPackingSource").disabled = !state.workspace || state.opening || state.submitting || !!active() || caps?.features?.packing_replan !== true;
     expertNote();
     paintEngineering();
+    paintExcelJobs();
+    updateExcelActions();
   }
   function paintCapabilities(caps) {
     state.capabilities = caps;
@@ -355,6 +377,7 @@ export function createAgentWorkbench(deps) {
     cancelVoice();
     clearEngineering();
     resetView(); const epoch = state.epoch, requestId = ++state.workspaceEpoch;
+    clearExcel();
     state.sessionListEpoch += 1; state.sessionsLoading = false; state.nextSessionCursor = null; state.sessionHistoryMessage = null;
     state.opening = true; controls(); paintSessionHistory(); notice(t("正在打开工程文件夹…"));
     try {
@@ -384,7 +407,7 @@ export function createAgentWorkbench(deps) {
       }
       $("agentWorkspacePath").value = displayPath(state.workspace.root); $("agentWorkspaceStatus").textContent = displayPath(state.workspace.root);
       paintSessions(); notice(t("工程文件夹已打开。可勾选资料后开始任务。"));
-      await Promise.all([loadFiles(), loadSessions({ preferServer: !hasLocalSessions }), loadEngineering()]);
+      await Promise.all([loadFiles(), loadSessions({ preferServer: !hasLocalSessions }), loadEngineering(), loadExcelJobs()]);
       if (!current(epoch) || requestId !== state.workspaceEpoch) return;
       await loadTurns();
       if (restoreTurn && current(epoch) && sessionRecord()?.turn) await showTurn(sessionRecord().turn);
@@ -450,7 +473,7 @@ export function createAgentWorkbench(deps) {
     if (!object(data)) return;
     const key = artifactKey(data); if (!key) return;
     const previous = state.artifacts.get(key);
-    if (previous && artifactVersion(previous) !== artifactVersion(data)) state.artifactChecks.delete(key);
+    if (previous && artifactVersion(previous) !== artifactVersion(data)) { state.artifactChecks.delete(key); state.excelActions.delete(key); }
     state.artifacts.set(key, data); paintArtifacts();
   }
   function artifactEndpoint(item, operation) {
@@ -459,6 +482,166 @@ export function createAgentWorkbench(deps) {
     const parsed = new URL(url);
     if (parsed.pathname !== `/api/agent/artifacts/${item.id}`) return "";
     return parsed.pathname + "/" + operation + "?" + new URLSearchParams({ workspace: state.workspace.id });
+  }
+  function stopExcelPolling() { if (excelTimer !== null) unschedule(excelTimer); excelTimer = null; }
+  function clearExcel() {
+    stopExcelPolling(); state.excelEpoch += 1; state.excelJobs.clear(); state.excelActions.clear(); state.excelLoading = false; state.excelError = ""; state.excelTruncated = false; paintExcelJobs();
+  }
+  function excelAvailable() { return state.capabilities?.excel_engine?.enabled === true && state.capabilities.excel_engine.available === true; }
+  function excelCurrent(scope) { return !state.disposed && scope.workspaceEpoch === state.workspaceEpoch && scope.workspace === state.workspace?.id; }
+  function validExcelJob(job) {
+    return object(job) && ID.test(job.id || "") && ID.test(job.parent_artifact_id || "") && HASH.test(job.input_sha256 || "")
+      && Object.hasOwn(EXCEL_STATUS, job.status) && typeof job.stage === "string" && job.stage.length <= 128
+      && typeof job.created_at === "string" && job.created_at.length <= 64 && Number.isFinite(Date.parse(job.created_at))
+      && typeof job.updated_at === "string" && job.updated_at.length <= 64 && Number.isFinite(Date.parse(job.updated_at))
+      && (job.error === null || object(job.error) && typeof job.error.code === "string" && typeof job.error.message === "string")
+      && (job.receipt === null || object(job.receipt)) && (job.artifact === null || object(job.artifact)
+        && ID.test(job.artifact.id || "") && job.artifact.id !== job.parent_artifact_id && HASH.test(job.artifact.output_sha256 || "")
+        && job.artifact.parent_artifact_id === job.parent_artifact_id && job.artifact.parent_output_sha256 === job.input_sha256
+        && !!artifactUrl(job.artifact.url, win.location.origin, state.workspace?.id));
+  }
+  function newerExcelJob(incoming, previous) {
+    if (!previous) return incoming;
+    if (TERMINAL.has(previous.status) && !TERMINAL.has(incoming.status)) return previous;
+    return Date.parse(previous.updated_at) > Date.parse(incoming.updated_at) ? previous : incoming;
+  }
+  function scheduleExcelPoll(delay = 2000) {
+    stopExcelPolling();
+    if (!state.disposed && state.workspace && [...state.excelJobs.values()].some(job => !TERMINAL.has(job.status)))
+      excelTimer = later(() => { excelTimer = null; return loadExcelJobs(); }, delay);
+  }
+  async function loadExcelJobs() {
+    if (!state.workspace || !object(state.capabilities?.excel_engine) || state.disposed || state.excelLoading) return;
+    stopExcelPolling();
+    const scope = { workspace: state.workspace.id, workspaceEpoch: state.workspaceEpoch }, requestId = ++state.excelEpoch, knownAtRequest = new Set(state.excelJobs.keys());
+    state.excelLoading = true; state.excelError = ""; paintExcelJobs();
+    try {
+      const result = await request("/api/agent/excel-jobs?" + new URLSearchParams({ workspace: scope.workspace }));
+      if (!excelCurrent(scope) || requestId !== state.excelEpoch) return;
+      if (!object(result) || !Array.isArray(result.jobs) || result.jobs.length > 100 || typeof result.truncated !== "boolean"
+        || result.jobs.some(job => !validExcelJob(job)) || new Set(result.jobs.map(job => job.id)).size !== result.jobs.length)
+        throw new Error(t("重算记录响应无法核对，未采用该结果。"));
+      // A list response begun before POST acceptance must not erase that new job
+      // or move an already-terminal job back to its earlier running snapshot.
+      const acceptedAfterRequest = [...state.excelJobs].filter(([id]) => !knownAtRequest.has(id) && !result.jobs.some(job => job.id === id));
+      state.excelJobs = new Map([...acceptedAfterRequest, ...result.jobs.map(job => [job.id, newerExcelJob(job, state.excelJobs.get(job.id))])]);
+      state.excelTruncated = result.truncated;
+    } catch (error) { if (excelCurrent(scope) && requestId === state.excelEpoch) state.excelError = error.message; }
+    finally {
+      if (excelCurrent(scope) && requestId === state.excelEpoch) { state.excelLoading = false; paintExcelJobs(); updateExcelActions(); scheduleExcelPoll(state.excelError ? 5000 : 2000); }
+    }
+  }
+  function excelDisabledReason(item, action) {
+    if (!object(state.capabilities?.excel_engine)) return t("当前服务未提供 Excel 重算入口。");
+    if (!excelAvailable()) return state.capabilities.excel_engine.enabled !== true ? t("本机 Excel 重算尚未启用，请按启动说明显式启用。")
+      : t("本机 Excel 重算暂不可用。请检查 Windows 桌面及 Excel 安装。");
+    if (!artifactEndpoint(item, "excel-recalculate") || !HASH.test(item.output_sha256 || "")) return t("该副本缺少可核对的注册标识或哈希。");
+    if (state.capabilities.available !== true || !Array.isArray(state.capabilities.sandbox) || !state.capabilities.sandbox.includes("workspace-write")) return t("当前服务未授权工作区写入。");
+    if (state.opening || action.busy) return t("正在提交重算请求…");
+    if ([...state.excelJobs.values()].some(job => job.parent_artifact_id === item.id && job.input_sha256 === item.output_sha256 && !TERMINAL.has(job.status))) return t("该副本已有重算任务，请查看下方记录。");
+    if ($("agentSandbox").value !== "workspace-write") return t("请先将文件权限设为允许工作区写入。");
+    return "";
+  }
+  function updateExcelActions() {
+    for (const card of doc.querySelectorAll("#agentArtifacts [data-artifact-id]")) {
+      const item = state.artifacts.get(card.dataset.artifactId), action = state.excelActions.get(card.dataset.artifactId);
+      if (!item || !action) continue;
+      const button = card.querySelector('[data-action="excel-recalculate"]'), input = card.querySelector('[data-action="excel-acknowledgement"]'), hint = card.querySelector('[data-role="excel-action-hint"]');
+      if (!button || !input || !hint) continue;
+      const reason = excelDisabledReason(item, action);
+      input.disabled = !!reason; button.disabled = !!reason || input.value !== RISK_PHRASE;
+      hint.textContent = reason || t("仅在本机 Excel 中重算已登记副本；保留重算前文件，另存新副本。");
+      input.setAttribute("aria-invalid", String(!!input.value && input.value !== RISK_PHRASE));
+    }
+  }
+  async function recalculateArtifact(key) {
+    const item = state.artifacts.get(key), action = state.excelActions.get(key);
+    if (!item || !action || excelDisabledReason(item, action) || action.confirmation !== RISK_PHRASE) return;
+    const url = artifactEndpoint(item, "excel-recalculate"), scope = { workspace: state.workspace.id, workspaceEpoch: state.workspaceEpoch, version: artifactVersion(item), epoch: state.epoch };
+    action.pendingKey ||= win.crypto.randomUUID(); action.busy = true; action.error = "";
+    const payload = { expected_sha256: item.output_sha256, idempotency_key: action.pendingKey, sandbox: "workspace-write", risk_confirmation: action.confirmation };
+    // Every submit consumes this form's acknowledgement. Neither chat nor an earlier task supplies it.
+    action.confirmation = ""; paintArtifacts();
+    try {
+      const result = await request(url, post(payload));
+      if (!excelCurrent(scope)) return;
+      if (!object(result) || !validExcelJob(result.job) || result.job.parent_artifact_id !== item.id || result.job.input_sha256 !== item.output_sha256)
+        throw new Error(t("重算响应与当前副本不匹配，未采用该结果。"));
+      state.excelJobs.set(result.job.id, newerExcelJob(result.job, state.excelJobs.get(result.job.id)));
+      action.pendingKey = "";
+    } catch (error) { if (excelCurrent(scope)) action.error = error.message; }
+    finally {
+      if (excelCurrent(scope)) {
+        action.busy = false; paintExcelJobs(); scheduleExcelPoll();
+        if (current(scope.epoch) && state.artifacts.has(key) && artifactVersion(state.artifacts.get(key)) === scope.version) paintArtifacts();
+      }
+    }
+  }
+  function paintExcelAction(card, item) {
+    if (!/\.xlsx$/i.test(item.name || "") && state.artifactChecks.get(artifactKey(item))?.result?.format !== "xlsx") return;
+    const key = artifactKey(item);
+    let action = state.excelActions.get(key); if (!action) { action = { confirmation: "", pendingKey: "", busy: false, error: "" }; state.excelActions.set(key, action); }
+    const section = node("div", undefined, "artifact-excel");
+    const hint = node("p", "", "muted"); hint.dataset.role = "excel-action-hint"; section.appendChild(hint);
+    const label = node("label", t("本次重算前，请完整输入：我明白，将由持证人员签认"));
+    const input = node("input"); input.type = "text"; input.autocomplete = "off"; input.dataset.action = "excel-acknowledgement"; input.value = action.confirmation; input.placeholder = RISK_PHRASE;
+    input.addEventListener("input", () => { action.confirmation = input.value; updateExcelActions(); }); label.appendChild(input); section.appendChild(label);
+    const button = node("button", t("重算公式并新建副本")); button.type = "button"; button.dataset.action = "excel-recalculate";
+    button.addEventListener("click", () => recalculateArtifact(key)); section.appendChild(button);
+    if (action.error) section.appendChild(node("p", t("重算请求失败：{error}", { error: action.error }), "notice error"));
+    card.appendChild(section);
+  }
+  function paintExcelJobs() {
+    const section = $("agentExcelSection"), host = $("agentExcelJobs"); if (!section || !host) return;
+    section.hidden = !object(state.capabilities?.excel_engine) && !state.excelJobs.size;
+    $("agentExcelRefresh").disabled = !state.workspace || state.opening || state.excelLoading;
+    const engine = state.capabilities?.excel_engine;
+    $("agentExcelEngineStatus").textContent = excelAvailable() ? t("本机重算入口已启用；Excel 是否能实际运行，须由本次任务回执证明。")
+      : engine?.enabled !== true ? t("本机 Excel 重算尚未启用，请按启动说明显式启用。") : t("本机 Excel 重算暂不可用。请检查 Windows 桌面及 Excel 安装。");
+    if (!excelAvailable() && typeof engine?.reason === "string" && engine.reason) $("agentExcelEngineStatus").textContent += " " + t("服务说明：{reason}", { reason: engine.reason });
+    $("agentExcelJobsStatus").textContent = state.excelError ? t("重算记录读取失败：{error}", { error: state.excelError })
+      : state.excelLoading ? t("正在读取重算记录…") : state.excelTruncated ? t("仅列出最近 100 条重算记录。") : "";
+    $("agentExcelJobsStatus").className = "small" + (state.excelError ? " notice error" : " muted");
+    host.replaceChildren();
+    if (!state.excelJobs.size) { host.appendChild(node("p", t("本工程暂无重算记录。"), "muted small")); return; }
+    for (const job of state.excelJobs.values()) {
+      const card = node("article", undefined, "excel-job"); card.dataset.excelJobId = job.id;
+      const heading = node("div", undefined, "section-title"); heading.append(node("strong", t("Excel 重算任务 {id}", { id: job.id.slice(0, 12) })), node("span", t(EXCEL_STATUS[job.status]), "status-tag")); card.appendChild(heading);
+      card.appendChild(node("p", t("执行阶段：{stage}", { stage: t(EXCEL_STAGE[job.stage] || job.stage) }), "muted"));
+      const links = node("div", undefined, "excel-downloads");
+      const parent = node("a", t("下载重算前副本")); parent.href = "/api/agent/artifacts/" + encodeURIComponent(job.parent_artifact_id) + "?" + new URLSearchParams({ workspace: state.workspace.id }); parent.download = ""; links.appendChild(parent);
+      if (job.artifact) { const child = node("a", t("下载重算后新副本：{name}", { name: job.artifact.name || job.artifact.id })); child.href = artifactUrl(job.artifact.url, win.location.origin, state.workspace.id); child.download = ""; child.dataset.action = "download-excel-copy"; links.appendChild(child); }
+      card.appendChild(links);
+      if (job.error) card.appendChild(node("p", t("重算未完成：{error}", { error: job.error.message }), "notice error"));
+      const receipt = job.receipt, verified = job.status === "completed"
+        && verifiedExcelReceipt(receipt, job.input_sha256, job.artifact?.output_sha256, job.id, receipt?.verification?.formula_count);
+      if (verified) {
+        card.appendChild(node("p", t("实际引擎：{engine} · 版本 {version} · 构建 {build}", { engine: receipt.engine, version: receipt.engine_version, build: receipt.engine_build }), "muted"));
+        card.appendChild(node("p", t("已实际重算并核对保存后的公式缓存；语义保留检查已通过。")));
+        card.appendChild(node("p", t("实际核对公式：{count}", { count: receipt.verification.formula_count }), "muted"));
+      } else if (job.status === "completed") card.appendChild(node("p", t("回执缺少可核对的重算或缓存证明，请重新核对。"), "notice warning"));
+      if (job.status === "completed") card.appendChild(node("p", t("仍需负责人员核对工程数字、结论和版式；重算不代表专业签认。"), "notice warning"));
+      if (!TERMINAL.has(job.status)) {
+        const cancel = node("button", t("停止重算")); cancel.type = "button"; cancel.dataset.action = "cancel-excel-job"; cancel.disabled = !!job.cancelling;
+        cancel.addEventListener("click", () => cancelExcelJob(job.id)); card.appendChild(cancel);
+      }
+      const raw = node("details"); raw.append(node("summary", t("完整重算记录")), node("pre", printable(job))); card.appendChild(raw); host.appendChild(card);
+    }
+  }
+  async function cancelExcelJob(id) {
+    const job = state.excelJobs.get(id); if (!job || TERMINAL.has(job.status) || job.cancelling) return;
+    const scope = { workspace: state.workspace.id, workspaceEpoch: state.workspaceEpoch }; job.cancelling = true; paintExcelJobs();
+    try {
+      const result = await request("/api/agent/excel-jobs/" + encodeURIComponent(id) + "/cancel?" + new URLSearchParams({ workspace: scope.workspace }), post({}));
+      if (!excelCurrent(scope)) return;
+      if (result.job !== undefined) {
+        if (!validExcelJob(result.job) || result.job.id !== id || result.job.parent_artifact_id !== job.parent_artifact_id || result.job.input_sha256 !== job.input_sha256)
+          throw new Error(t("重算响应与当前副本不匹配，未采用该结果。"));
+        state.excelJobs.set(id, newerExcelJob(result.job, state.excelJobs.get(id)));
+      }
+      await loadExcelJobs();
+    } catch (error) { if (excelCurrent(scope)) state.excelError = error.message; }
+    finally { if (excelCurrent(scope)) { job.cancelling = false; paintExcelJobs(); scheduleExcelPoll(); } }
   }
   function readinessCurrent(scope, key, record) {
     return current(scope.epoch) && scope.workspaceEpoch === state.workspaceEpoch && scope.workspace === state.workspace?.id
@@ -496,13 +679,14 @@ export function createAgentWorkbench(deps) {
       if (readinessCurrent(scope, key, record)) { record.loading = false; paintArtifacts(); }
     }
   }
-  function readinessHint(check) {
+  function readinessHint(check, engineVerified = false) {
     switch (check.id) {
       case "active_content": return check.status === "blocked" ? t("发现宏、脚本、嵌入对象或活动内容，需另行核对。") : t("未发现活动内容标记；未执行宏或脚本。");
       case "external_links": return check.status === "pass" ? t("未发现外部关系。") : t("存在外部链接，本次检查未打开这些链接。");
       case "document_fields": return t("存在修订记录或域，请核对最终显示内容。");
       case "external_data": return t("存在外部数据公式或连接，未打开或刷新其来源。");
-      case "formula_cache": return check.status === "blocked" ? t("公式缓存缺失或无效，请用电子表格应用重算并另存副本。")
+      case "formula_cache": return engineVerified && check.status === "pass" ? t("保存后的公式缓存与本次 Excel 重算结果一致。")
+        : check.status === "blocked" ? t("公式缓存缺失或无效，请用电子表格应用重算并另存副本。")
         : check.status === "not_applicable" ? t("未发现单元格公式。") : t("已保存的公式缓存可能过期，不能作为已重算的证明。");
       case "spreadsheet_errors": return check.status === "blocked" ? t("存在错误单元格，请处理后再交付。") : t("未发现标记为错误类型的单元格。");
       case "engineering_review": return t("请由负责人员核对来源、数字和结论；本次检查不代表人工验收。");
@@ -522,6 +706,12 @@ export function createAgentWorkbench(deps) {
       : t("交付检查失败：") + record.error.message, "notice error"));
     if (!record?.result) { card.appendChild(panel); return; }
     const result = record.result, report = result.readiness, detail = report.format_details;
+    const recalculationClaim = result.format === "xlsx" && detail.recalculation === "performed_by_excel";
+    const engineVerified = result.format === "xlsx" && item.provenance === "excel_recalculated" && ID.test(item.parent_artifact_id || "")
+      && detail.recalculation === "performed_by_excel" && detail.cached_values_status === "engine_refreshed_and_saved_verified"
+      && detail.formula_cached_count === detail.formula_count
+      && detail.formula_missing_cache_count === 0 && detail.formula_invalid_cache_count === 0 && detail.error_cell_count === 0
+      && verifiedExcelReceipt(result.engine_receipt, item.parent_output_sha256, item.output_sha256, item.excel_job_id, detail.formula_count);
     const sourceStatus = result.original_source_status;
     panel.appendChild(node("p", sourceStatus === "changed" ? t("原始来源已变化，请从新版资料重新生成副本。")
       : report.status === "blocked" ? t("发现需处理项，暂不交付。") : t("结构检查已完成，待人工核对。"), "notice" + (report.status === "blocked" || sourceStatus === "changed" ? " warning" : "")));
@@ -539,13 +729,19 @@ export function createAgentWorkbench(deps) {
       panel.appendChild(node("p", t("公式 {total}；有缓存 {cached}；缺失缓存 {missing}；无效缓存 {invalid}；错误单元格 {errors}。", {
         total: count("formula_count"), cached: count("formula_cached_count"), missing: count("formula_missing_cache_count"),
         invalid: count("formula_invalid_cache_count"), errors: count("error_cell_count") })));
-      panel.appendChild(node("p", detail.formula_count === 0 ? t("未发现单元格公式，无需公式重算。") : t("公式未实际重算；已有缓存仍未验证，自动计算标记也不是重算证明。"), "muted"));
+      panel.appendChild(node("p", engineVerified ? t("公式已由本机 Excel 实际重算，保存后的缓存已核对；仍需专业人员核对。")
+        : detail.formula_count === 0 ? t("未发现单元格公式，无需公式重算。")
+        : detail.recalculation === "performed_by_excel" ? t("重算回执与当前副本或其来源不匹配，暂不能确认实际重算和缓存验证。")
+        : t("公式未实际重算；已有缓存仍未验证，自动计算标记也不是重算证明。"), "muted"));
+      if (engineVerified) panel.appendChild(node("p", t("实际引擎：{engine} · 版本 {version} · 构建 {build}", { engine: result.engine_receipt.engine, version: result.engine_receipt.engine_version, build: result.engine_receipt.engine_build }), "muted"));
     }
     const list = node("ul");
     for (const check of report.checks) {
+      const displayCheck = recalculationClaim && !engineVerified && ["formula_cache", "recalculation"].includes(check.id) && check.status === "pass"
+        ? { ...check, status: "review_required" } : check;
       const entry = node("li"); entry.dataset.check = check.id;
-      entry.appendChild(node("strong", (Object.hasOwn(READINESS_LABELS, check.id) ? t(READINESS_LABELS[check.id]) : check.id) + " · " + t(CHECK_STATUS[check.status])));
-      const hint = readinessHint(check); if (hint) entry.appendChild(node("p", hint, "muted")); list.appendChild(entry);
+      entry.appendChild(node("strong", (Object.hasOwn(READINESS_LABELS, check.id) ? t(READINESS_LABELS[check.id]) : check.id) + " · " + t(CHECK_STATUS[displayCheck.status])));
+      const hint = readinessHint(displayCheck, engineVerified); if (hint) entry.appendChild(node("p", hint, "muted")); list.appendChild(entry);
     }
     panel.appendChild(list);
     if (result.format === "pdf" && report.preview.kind === "native_pdf" && report.preview.eligible === true
@@ -567,8 +763,9 @@ export function createAgentWorkbench(deps) {
       if (!url) card.appendChild(node("p", t("当前没有可用的工作区下载链接。"), "muted"));
       const details = node("details"), summary = node("summary", t("来源与验证记录"));
       details.append(summary, node("pre", printable({ source: item.source, source_sha256: item.source_sha256, output_sha256: item.output_sha256, validation: item.validation })));
-      card.appendChild(details); paintReadiness(card, item, state.artifactChecks.get(key)); host.appendChild(card);
+      card.appendChild(details); paintReadiness(card, item, state.artifactChecks.get(key)); paintExcelAction(card, item); host.appendChild(card);
     }
+    updateExcelActions();
   }
   const engineeringNumber = (value) => typeof value === "number" && Number.isFinite(value)
     ? value.toLocaleString(win.CBI18n?.locale === "en" ? "en-GB" : "zh-CN", { maximumSignificantDigits: 12, useGrouping: false }) : t("未返回");
@@ -924,6 +1121,7 @@ export function createAgentWorkbench(deps) {
       $("agentTurnActor").textContent = t("尚无任务发起者记录。");
     }
     for (const item of state.artifacts.values()) { paintArtifact(item); break; }
+    paintExcelJobs();
     for (const item of state.engineeringResults.values()) { paintEngineeringResult(item); break; }
     for (const item of state.packingResults.values()) { paintPackingResult(item); break; }
     const events = state.eventRows.slice(); state.eventRows = []; state.seq = 0; state.subtasks.clear(); $("agentEvents").replaceChildren();
@@ -946,7 +1144,11 @@ export function createAgentWorkbench(deps) {
     $("agentWorkspaceForm").addEventListener("submit", (event) => { event.preventDefault(); openWorkspace($("agentWorkspacePath").value, { manual: true }); });
     $("agentTaskForm").addEventListener("submit", (event) => { event.preventDefault(); send(); });
     $("agentModelForm").addEventListener("submit", (event) => { event.preventDefault(); saveModel(); });
-    $("agentMode").addEventListener("change", controls); $("agentSandbox").addEventListener("change", controls);
+    $("agentMode").addEventListener("change", controls); $("agentSandbox").addEventListener("change", () => {
+      for (const action of state.excelActions.values()) action.confirmation = "";
+      paintArtifacts(); controls();
+    });
+    $("agentExcelRefresh").addEventListener("click", loadExcelJobs);
     $("agentPackingSource").addEventListener("change", controls);
     $("agentExpert").addEventListener("change", () => { expertNote(); controls(); }); $("agentRefreshEngineering").addEventListener("click", loadEngineering);
     $("agentRiskConfirmation").addEventListener("input", controls); $("agentMessage").addEventListener("input", controls);
@@ -981,8 +1183,8 @@ export function createAgentWorkbench(deps) {
     }
     if (saved.lastRoot && state.capabilities?.available === true) await openWorkspace(saved.lastRoot);
   }
-  function dispose() { win.removeEventListener("cb:languagechange", languageChanged); cancelVoice(); state.disposed = true; state.epoch += 1; stopPolling(); }
-  return { state, start, openWorkspace, loadFiles, loadTurns, loadSessions, loadEngineering, inspectEngineering, changeSession, showTurn, send, cancel, poll, saveModel, dispose };
+  function dispose() { win.removeEventListener("cb:languagechange", languageChanged); cancelVoice(); state.disposed = true; state.epoch += 1; stopPolling(); stopExcelPolling(); }
+  return { state, start, openWorkspace, loadFiles, loadTurns, loadSessions, loadEngineering, inspectEngineering, loadExcelJobs, recalculateArtifact, cancelExcelJob, changeSession, showTurn, send, cancel, poll, saveModel, dispose };
 }
 
 if (typeof document !== "undefined" && document.getElementById("agentWorkbench")) {

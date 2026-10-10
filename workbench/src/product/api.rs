@@ -28,6 +28,7 @@ pub struct ProductState {
     pub runtime: RuntimeCore,
     pub worker: WorkerHost,
     pub auth: Arc<super::auth::InstanceAuth>,
+    pub excel: super::excel::ExcelController,
     pub(super) index: Mutex<Connection>,
     _owner: std::fs::File,
 }
@@ -65,8 +66,10 @@ impl ProductState {
         let index = Connection::open(folder.join("index.sqlite")).map_err(|e| e.to_string())?;
         index.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS workspaces(id TEXT PRIMARY KEY,root TEXT UNIQUE NOT NULL); CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,path TEXT NOT NULL,record TEXT NOT NULL);").map_err(|e|e.to_string())?;
         super::project_control::initialize(&index)?;
+        super::excel::initialize(&index)?;
         Ok(Arc::new(Self {
             worker: WorkerHost::detect(paths.repo_root.clone()),
+            excel: super::excel::ExcelController::detect(&paths.repo_root, &auth),
             paths,
             runtime,
             index: Mutex::new(index),
@@ -156,7 +159,8 @@ pub fn router(state: Arc<ProductState>) -> Router {
         .route("/api/agent/artifacts/{id}", get(artifact))
         .layer(DefaultBodyLimit::max(256 * 1024))
         .with_state(state.clone())
-        .merge(super::project_control::router(state))
+        .merge(super::project_control::router(state.clone()))
+        .merge(super::excel::router(state))
 }
 
 /// Expose only the configured provider's host, never URL credentials or parameters.
@@ -175,7 +179,7 @@ async fn capabilities(State(st): State<Arc<ProductState>>) -> Json<Value> {
         "modes":["steps","model"],"sandbox":["read-only","workspace-write"],
         "sandbox_controls":{"policy":true,"os_enforced":null,"network_confined":null,"reads_confined":null,"probe":"workspace_required"},
         "features":{"context":true,"subagents":true,"cancel":true,"documents":true,"retrieval":true,"voice":false,"session_discovery":true,"packing_replan":true},
-        "identity":st.auth.capabilities(),"unavailability_reason":null}),
+        "identity":st.auth.capabilities(),"excel_engine":st.excel.capabilities(),"unavailability_reason":null}),
     )
 }
 

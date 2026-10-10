@@ -105,7 +105,8 @@ class LauncherTests(unittest.TestCase):
                      "CB_ASR_MODEL": "small", "HF_HOME": str(self.root / "ambient models"),
                      "HUGGINGFACE_HUB_CACHE": str(self.root / "ambient hub"),
                      "XDG_CACHE_HOME": str(self.root / "ambient cache"),
-                     "PYTHONPATH": "untrusted-import-path", "CIVIL_DOMAIN_WORKSPACE": "old-ambient-folder"}
+                     "PYTHONPATH": "untrusted-import-path", "CIVIL_DOMAIN_WORKSPACE": "old-ambient-folder",
+                     "CIVIL_EXCEL_ENGINE": "windows-desktop"}
         config = {"DEEPSEEK_API_KEY": "fake-config-key", "JEV_API_KEY": "fake-config-jev",
                   "CB_ASR_MODEL": "tiny", "HF_HOME": str(self.root / "selected models"),
                   "HUGGINGFACE_HUB_CACHE": str(self.root / "selected hub"),
@@ -145,6 +146,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(env["PACKING_LLM_AGENT"], "0")
         host_env = spawned[1][1]["env"]
         self.assertEqual(host_env["CIVIL_PYTHON"], selected_python)
+        self.assertEqual(host_env["CIVIL_EXCEL_ENGINE"], "off")
         self.assertEqual(load_config.call_args.args[0], selected_python)
         self.assertEqual(host_env["DEEPSEEK_API_KEY"], "fake-config-key")
         self.assertEqual(host_env["JEV_API_KEY"], "fake-config-jev")
@@ -156,6 +158,19 @@ class LauncherTests(unittest.TestCase):
         self.assertTrue(all(process.terminated and process.waited for _, _, process in spawned))
         self.assertNotIn("fake-config-key", output.getvalue())
         self.assertNotIn("fake-parent-key", output.getvalue())
+
+    def test_excel_desktop_rejects_public_origin_before_helpers(self):
+        with patch.object(launcher.subprocess, "Popen") as start, \
+             contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            launcher.main(["--excel-engine", "windows-desktop", "--public-origin", "https://example.test"])
+        start.assert_not_called()
+
+    def test_excel_desktop_rejects_non_windows_before_helpers(self):
+        with patch.object(launcher.os, "name", "posix"), \
+             patch.object(launcher.subprocess, "Popen") as start, \
+             contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            launcher.main(["--excel-engine", "windows-desktop"])
+        start.assert_not_called()
 
     def test_ambient_asr_preferences_reach_sidecar_without_loading_env_file(self):
         binary = self.root / "host.exe"

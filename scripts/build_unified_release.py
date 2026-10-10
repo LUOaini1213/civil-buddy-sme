@@ -48,6 +48,7 @@ EXTRA = (
     "scripts/docker_smoke.sh",
     "scripts/build_workbench_release.py", "scripts/build_unified_release.py",
     "scripts/prepare_unified_workbench.py", "scripts/prepare-unified-workbench.bat",
+    "scripts/excel-desktop-broker.ps1",
     "scripts/start-unified-workbench.bat", "requirements-unified-windows-py311.lock",
     "docs/civil-buddy/architecture/implementation.md",
     "docs/civil-buddy/acceptance/2026-09-21.json",
@@ -55,6 +56,7 @@ EXTRA = (
     "docs/civil-buddy/acceptance/2026-10-03-packing-replan.json",
     "docs/civil-buddy/acceptance/2026-10-03-live-packing.json",
     "docs/civil-buddy/acceptance/2026-10-03-packing-receipts.json",
+    "docs/civil-buddy/acceptance/2026-10-10-local-excel.json",
     "docs/civil-buddy/architecture/civil-buddy-rust-architecture.md",
     "docs/civil-buddy/architecture/civil-buddy-document-skills.md",
     "docs/civil-buddy/architecture/civil-buddy-agent-infra.md",
@@ -296,7 +298,15 @@ CAD、工程计算、排程、语音依赖分别见 `requirements-cad.txt`、`re
 可选包安装完成不代表 CAD 原生库、工程求解器或语音模型已通过实际运行验收。
 Java/JVM、Office 或 OCR 引擎均不随包提供。
 
-文档副本只是待核查草稿；PDF 正文改写/OCR、Office 排版渲染与 Excel 公式重算尚未提供。
+文档副本只是待核查草稿；PDF 正文改写/OCR、Office 排版渲染尚未提供。
+已安装 Microsoft Excel 的本地 Windows 桌面可显式追加 `--excel-engine windows-desktop`。
+在 Agent 页对已登记的 XLSX 副本执行重算，每次需允许工作区写入并输入签认提示句。
+普通启动默认关闭该通道；预检不启动 Excel。公开代理模式禁止启用。
+重算前检查受支持的工作簿内容；宏、外部链接、数据连接、图表或其他不支持的功能会拒绝。
+重算只打开宿主创建的暂存副本；核对独立实例、每个公式缓存、内容和样式后才登记新副本。
+若原副本带强制重算请求标志，会另建计算暂存副本，仅清除这两个请求标志，并记录双哈希。
+若 Excel 改变默认行高等排版数据，核对失败，不发布新副本。原件和旧副本均保留。
+重算回执证明实际计算与保存缓存；不代替工程审核、专业签认或排版视觉验收。
 岗位目录不代表每个岗位都有数值求解器；任何工程结论仍需有资格的人审核签认。
 
 ## 来源与校验

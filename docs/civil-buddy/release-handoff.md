@@ -199,6 +199,15 @@ Rust 主机与固定 Python 服务的真实 HTTP 验收覆盖登录 Cookie、目
 
 ## 可复跑检查
 
+已安装 Microsoft Excel 的本地 Windows 桌面可在统一启动命令后显式追加
+`--excel-engine windows-desktop`。该通道默认关闭，禁止用于配置了公开代理地址的实例。
+预检不会启动 Office；页面能力提示只检查配置与固定脚本，成功任务回执才证明实际重算。
+在 Agent 页对已登记的 XLSX 草稿发起独立重算，每次需允许工作区写入并输入页面要求的签认句。
+内容准入、每个公式缓存、原件与旧副本哈希及支持的内容和样式均需核对通过，才登记新的子副本。
+若 Excel 修改默认行高等实际排版数据，任务失败并保留旧副本，不会发布该候选。
+详见[支持范围与限制](unified-workbench.md#optional-local-excel-recalculation)。这不替代真实工程验收、
+专业签认或 Word/Excel 的视觉排版检查。
+
 ```powershell
 # 不启动服务、不联网调用模型；先发现解释器、依赖、端口及目录问题
 & .venv/Scripts/python.exe scripts/start_unified_workbench.py --python .venv/Scripts/python.exe --binary bin/civil-workbench.exe --check

@@ -173,7 +173,7 @@ fn read_artifact_source(ws: &WorkspaceContext, source: &str) -> Result<Vec<u8>, 
     )
 }
 
-fn artifact_source_status(ws: &WorkspaceContext, record: &Value) -> &'static str {
+pub(super) fn artifact_source_status(ws: &WorkspaceContext, record: &Value) -> &'static str {
     match (record["source"].as_str(), record["source_sha256"].as_str()) {
         (Some(source), Some(expected)) => match read_artifact_source(ws, source) {
             Ok(bytes) if super::tools::sha256(&bytes) == expected => "current",
@@ -914,7 +914,7 @@ async fn snapshot(
     }).await
 }
 
-fn artifact_info(
+pub(super) fn artifact_info(
     st: &ProductState,
     workspace: &str,
     artifact_id: &str,
@@ -974,6 +974,7 @@ async fn inspect_artifact(
     result["inspected_at"] = json!(now());
     result["artifact_id"] = json!(artifact_id);
     result["original_source_status"] = json!(artifact_source_status(&ws, &record));
+    super::excel::merge_readiness(&st, &q.workspace, &record, &mut result).map_err(bad)?;
     st.index
         .lock()
         .map_err(internal)?

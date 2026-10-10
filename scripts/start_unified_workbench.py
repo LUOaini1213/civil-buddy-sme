@@ -133,10 +133,14 @@ def main(argv=None):
     parser.add_argument("--workspace", type=Path, help="One existing private job directory")
     parser.add_argument("--token-file", type=Path, help="UTF-8 file containing a random login token (at least 32 characters)")
     parser.add_argument("--public-origin", help="Optional HTTPS origin of your configured reverse proxy")
+    parser.add_argument("--excel-engine", choices=("off", "windows-desktop"), default="off",
+                        help="Explicit local desktop Excel channel; requires installed Excel and a supported registered draft")
     parser.add_argument("--stop-file", type=Path, help="Optional local shutdown sentinel for supervised runs")
     parser.add_argument("--open", action="store_true")
     parser.add_argument("--check", action="store_true", help="Offline prerequisites only; do not start services or write product state")
     args = parser.parse_args(argv)
+    if args.excel_engine != "off" and (os.name != "nt" or args.public_origin):
+        parser.error("The Excel desktop engine requires local Windows without a public origin")
     binary = args.binary or ROOT / "workbench/target/release" / ("civil-workbench.exe" if os.name == "nt" else "civil-workbench")
     environment = dict(os.environ)
     named = any((args.user_id, args.workspace, args.token_file, args.public_origin))
@@ -228,6 +232,7 @@ def main(argv=None):
                        CIVIL_JOB_ROOT=str(workspace or args.state_root / "jobs"),
                        CIVIL_STATE_ROOT=str(args.state_root), CIVIL_DEMO_ROOT=str(ROOT / "demo"),
                        CIVIL_PYTHON=python, CIVIL_UNIFIED_HOME="1",
+                       CIVIL_EXCEL_ENGINE=args.excel_engine,
                        PACKING_AGENT_URL=f"http://127.0.0.1:{domain_port}/packing")
     if named:
         environment.update(CIVIL_INSTANCE_USER=args.user_id,

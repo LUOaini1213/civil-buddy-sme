@@ -61,7 +61,7 @@ impl WorkerHost {
         let allowed = match module {
             "packing_assistant.documents.worker" => matches!(
                 operation,
-                "capabilities" | "inspect" | "read" | "preview" | "apply" | "validate" | "inspect_readiness"
+                "capabilities" | "inspect" | "read" | "preview" | "apply" | "validate" | "inspect_readiness" | "inspect_excel_engine_input" | "verify_excel_engine_output"
             ),
             "packing_assistant.engineering.worker" => {
                 matches!(operation, "frame" | "section" | "ifc_check" | "ifc_diff" | "packing_replan")

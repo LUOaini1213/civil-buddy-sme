@@ -158,6 +158,9 @@ impl InstanceAuth {
     pub fn requires_token(&self) -> bool {
         self.digest.is_some()
     }
+    pub fn public_origin_configured(&self) -> bool {
+        self.public_origin.is_some()
+    }
     pub fn capabilities(&self) -> Value {
         json!({"user_id":self.owner,"mode":if self.requires_token(){"named_single_user_instance"}else{"local_single_user"},
             "authentication_required":self.requires_token(),"multi_tenant":false,"workspace_allowlist_enforced":self.requires_token(),

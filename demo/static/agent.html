@@ -118,6 +118,12 @@
         <div id="agentArtifacts" data-i18n-skip class="artifact-list"></div>
         <details id="agentUsage" hidden><summary>实际调用用量</summary><pre id="agentUsageText"></pre></details>
       </section>
+      <section id="agentExcelSection" class="panel" aria-labelledby="agentExcelTitle" hidden>
+        <div class="section-title"><h2 id="agentExcelTitle">Excel 公式重算</h2><button id="agentExcelRefresh" type="button">刷新重算记录</button></div>
+        <p id="agentExcelEngineStatus" data-i18n-skip class="muted small"></p>
+        <p id="agentExcelJobsStatus" data-i18n-skip class="small" role="status" aria-live="polite"></p>
+        <div id="agentExcelJobs" data-i18n-skip class="excel-jobs"></div>
+      </section>
       <section class="panel" aria-labelledby="agentEventsTitle">
         <div class="section-title"><h2 id="agentEventsTitle">执行过程</h2><span class="muted small">按后端事件恢复</span></div>
         <ol id="agentEvents" data-i18n-skip class="events"></ol>

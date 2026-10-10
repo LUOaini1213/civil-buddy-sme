@@ -49,6 +49,170 @@ function deliveryRoute(artifact, route) {
 async function showDelivery(h) { await h.ready(); h.$("agentMessage").value = "查看副本"; await h.app.send(); }
 const checkButton = (h) => h.doc.querySelector('[data-action="inspect-readiness"]');
 const previewLink = (h) => h.doc.querySelector('[data-action="preview-pdf"]');
+const excelButton = (h) => h.doc.querySelector('[data-action="excel-recalculate"]');
+const excelAck = (h) => h.doc.querySelector('[data-action="excel-acknowledgement"]');
+const excelEngine = { enabled: true, available: true, reason: null, mode: "windows-desktop" };
+const riskPhrase = "我明白，将由持证人员签认";
+function excelJob(artifact = deliveryArtifact(), overrides = {}) {
+  return { id: "excel-job-1", parent_artifact_id: artifact.id, input_sha256: artifact.output_sha256,
+    status: "running", stage: "calculation", created_at: "2026-10-10T08:00:00Z", updated_at: "2026-10-10T08:00:01Z",
+    error: null, artifact: null, receipt: null, ...overrides };
+}
+function completedExcelJob(artifact = deliveryArtifact()) {
+  const child = { ...artifact, id: "recalculated-copy", name: "重算新副本.xlsx", output_sha256: "c".repeat(64),
+    parent_artifact_id: artifact.id, parent_output_sha256: artifact.output_sha256,
+    provenance: "excel_recalculated", excel_job_id: "excel-job-1",
+    url: "/api/agent/artifacts/recalculated-copy?workspace=workspace-1" };
+  return excelJob(artifact, { status: "completed", stage: "completed", artifact: child,
+    receipt: { schema_version: 1, engine: "Microsoft Excel", engine_version: "16.0", engine_build: "19127",
+      job_id: "excel-job-1",
+      calculation_version: 191029,
+      calculation_method: "CalculateFullRebuild", calculation_state: "done", source_sha256: artifact.output_sha256,
+      output_sha256: child.output_sha256, owned_instance: true, workbook_count: 1, cleanup_verified: true,
+      formula_results: [{ sheet: "Sheet1", cell: "B1", type: "number", value: 42 }, { sheet: "Sheet1", cell: "B2", type: "boolean", value: false }],
+      verification: { status: "pass", semantic_preserved: true, persisted_formula_caches_verified: true, formula_count: 2 } } });
+}
+function excelRoute(artifact, route, engine = excelEngine) {
+  const capabilities = { ...caps, excel_engine: engine };
+  return deliveryRoute(artifact, (url, init) => {
+    const custom = route?.(url, init); if (custom !== undefined) return custom;
+    if (url === "/api/agent/capabilities") return response(capabilities);
+    if (url === "/api/agent/workspaces") return response({ workspace: { id: "workspace-1", root: "C:/engineering" }, capabilities });
+    if (url.startsWith("/api/agent/excel-jobs?")) return response({ jobs: [], limit: 100, truncated: false });
+  });
+}
+function typeExcelAck(h, value = riskPhrase) { const input = excelAck(h); input.value = value; input.dispatchEvent(new h.win.Event("input")); }
+
+test("Excel UI: opt-in and per-operation acknowledgement gate preserve parent download and readiness errors", async (t) => {
+  const artifact = deliveryArtifact(); let writes = 0;
+  const h = harness(excelRoute(artifact, (url) => {
+    if (url.includes("/readiness?")) return response({ detail: "parent check unavailable" }, 503);
+    if (url.includes("/excel-recalculate?")) { writes++; return response({ job: excelJob(artifact) }, 202); }
+  }, { ...excelEngine, enabled: false, available: false })); t.after(h.close);
+  await showDelivery(h);
+  assert.equal(excelButton(h).disabled, true); assert.equal(excelAck(h).disabled, true);
+  assert.match(h.$("agentArtifacts").textContent, /尚未启用/);
+  assert.equal(writes, 0); assert.equal(h.calls.filter(call => call.init?.method === "POST" && call.url.includes("excel")).length, 0);
+  h.app.state.capabilities.excel_engine = { ...excelEngine };
+  selectValue(h, "agentSandbox", "workspace-write");
+  h.$("agentRiskConfirmation").value = riskPhrase; h.$("agentMessage").value = riskPhrase;
+  assert.equal(excelButton(h).disabled, true, "chat and task acknowledgement cannot authorize Excel");
+  typeExcelAck(h, " " + riskPhrase); assert.equal(excelButton(h).disabled, true);
+  typeExcelAck(h); assert.equal(excelButton(h).disabled, false);
+  checkButton(h).click(); await settle();
+  assert.match(h.$("agentArtifacts").textContent, /parent check unavailable/);
+  assert.equal(excelAck(h).value, riskPhrase, "readiness repaint preserves this form's typed acknowledgement");
+  await h.app.recalculateArtifact(artifact.id);
+  assert.equal(writes, 1); assert.equal(excelAck(h).value, ""); assert.equal(excelButton(h).disabled, true);
+  assert.match(h.$("agentArtifacts").textContent, /parent check unavailable/);
+  assert.ok(h.$("agentArtifacts").querySelector('a[href*="/artifacts/deliverable-1?"]'));
+  const call = h.calls.find(call => call.url.includes("/excel-recalculate?"));
+  assert.equal(call.url, "/api/agent/artifacts/deliverable-1/excel-recalculate?workspace=workspace-1");
+  assert.deepEqual(Object.keys(call.body).sort(), ["expected_sha256", "idempotency_key", "risk_confirmation", "sandbox"]);
+  assert.equal(call.body.expected_sha256, artifact.output_sha256); assert.equal(call.body.risk_confirmation, riskPhrase); assert.equal(call.body.sandbox, "workspace-write");
+  assert.match(call.body.idempotency_key, /^[a-f0-9-]{36}$/i);
+  assert.doesNotMatch([...h.saved.values.values()].join(""), /我明白|excel-job/);
+});
+
+test("Excel UI: ambiguous POST retries keep their idempotency key but require fresh acknowledgement", async (t) => {
+  const artifact = deliveryArtifact(); let posts = 0;
+  const h = harness(excelRoute(artifact, (url) => {
+    if (url.includes("/excel-recalculate?")) { if (++posts === 1) throw new Error("connection lost after send"); return response({ job: excelJob(artifact) }, 202); }
+  })); t.after(h.close); await showDelivery(h); selectValue(h, "agentSandbox", "workspace-write");
+  typeExcelAck(h); await h.app.recalculateArtifact(artifact.id);
+  assert.match(h.$("agentArtifacts").textContent, /connection lost after send/);
+  assert.equal(excelAck(h).value, ""); await h.app.recalculateArtifact(artifact.id); assert.equal(posts, 1);
+  typeExcelAck(h); await h.app.recalculateArtifact(artifact.id);
+  const calls = h.calls.filter(call => call.url.includes("/excel-recalculate?"));
+  assert.equal(calls[0].body.idempotency_key, calls[1].body.idempotency_key);
+  selectValue(h, "agentSandbox", "read-only"); selectValue(h, "agentSandbox", "workspace-write");
+  assert.equal(excelAck(h).value, "");
+});
+
+test("Excel UI: persistent jobs recover on reload and remain scoped across sessions, with bound engine evidence", async (t) => {
+  const artifact = deliveryArtifact(); let job = excelJob(artifact);
+  const route = excelRoute(artifact, (url) => url.startsWith("/api/agent/excel-jobs?") ? response({ jobs: [job], limit: 100, truncated: false }) : undefined);
+  const h = harness(route); t.after(h.close); await h.ready();
+  assert.match(h.$("agentExcelJobs").textContent, /正在重算/); assert.equal(h.timers.size, 1);
+  assert.equal(h.calls.filter(call => call.url.includes("excel-recalculate")).length, 0);
+  await h.app.changeSession("", true); assert.match(h.$("agentExcelJobs").textContent, /正在重算/);
+  job = completedExcelJob(artifact); await h.tick();
+  assert.equal(h.timers.size, 0); assert.match(h.$("agentExcelJobs").textContent, /16.0.*19127/);
+  assert.match(h.$("agentExcelJobs").textContent, /已实际重算并核对/); assert.match(h.$("agentExcelJobs").textContent, /不代表专业签认/);
+  assert.ok(h.doc.querySelector('[data-action="download-excel-copy"]'));
+  assert.equal(h.doc.querySelector('[data-action="download-excel-copy"]').href, "http://localhost/api/agent/artifacts/recalculated-copy?workspace=workspace-1");
+  const reload = harness(route); t.after(reload.close); await reload.ready();
+  assert.match(reload.$("agentExcelJobs").textContent, /重算副本已保存/);
+  assert.equal(reload.calls.filter(call => call.init?.method === "POST" && call.url.includes("excel")).length, 0);
+  job.receipt.source_sha256 = "d".repeat(64); await reload.app.loadExcelJobs();
+  assert.match(reload.$("agentExcelJobs").textContent, /缺少可核对/);
+  assert.doesNotMatch(reload.$("agentExcelJobs").textContent.split("完整重算记录")[0], /已实际重算并核对/);
+});
+
+test("Excel UI: late records and POST results never cross workspace, and malformed downloads keep verified records", async (t) => {
+  const artifact = deliveryArtifact(); let delayed, mode = "normal";
+  const h = harness(excelRoute(artifact, (url, init) => {
+    if (url === "/api/agent/workspaces" && JSON.parse(init.body).path === "C:/second") return response({ workspace: { id: "workspace-2", root: "C:/second" }, capabilities: { ...caps, excel_engine: excelEngine } });
+    if (url.startsWith("/api/agent/excel-jobs?")) {
+      const workspace = new URL(url, "http://localhost").searchParams.get("workspace");
+      if (workspace === "workspace-2") return response({ jobs: [], limit: 100, truncated: false });
+      if (mode === "delay") return new Promise(resolve => { delayed = resolve; });
+      const job = completedExcelJob(artifact); if (mode === "invalid") job.artifact.url = "https://evil.invalid/download.xlsx";
+      return response({ jobs: [job], limit: 100, truncated: false });
+    }
+  })); t.after(h.close); await h.ready();
+  mode = "invalid"; await h.app.loadExcelJobs();
+  assert.match(h.$("agentExcelJobsStatus").textContent, /响应无法核对/);
+  assert.ok(h.doc.querySelector('[data-action="download-excel-copy"]'), "previous verified download survives failed refresh");
+  mode = "delay"; const old = h.app.loadExcelJobs(); await settle();
+  await h.app.openWorkspace("C:/second"); delayed(response({ jobs: [completedExcelJob(artifact)], limit: 100, truncated: false })); await old;
+  assert.equal(h.app.state.workspace.id, "workspace-2"); assert.equal(h.app.state.excelJobs.size, 0); assert.equal(h.doc.querySelector('[data-action="download-excel-copy"]'), null);
+});
+
+test("Excel UI: cancellation reports server state and bilingual repaint preserves filenames and fresh input", async (t) => {
+  const artifact = deliveryArtifact(); let job = null;
+  const h = harness(excelRoute(artifact, (url) => {
+    if (url.startsWith("/api/agent/excel-jobs?")) return response({ jobs: job ? [job] : [], limit: 100, truncated: false });
+    if (url.includes("/excel-recalculate?")) { job = excelJob(artifact); return response({ job }, 202); }
+    if (url.includes("/excel-job-1/cancel?")) { job = excelJob(artifact, { status: "cancelled", error: { code: "cancelled", message: "Stopped by user" } }); return response({ job }); }
+  })); t.after(h.close); installLanguage(h); await showDelivery(h); selectValue(h, "agentSandbox", "workspace-write"); typeExcelAck(h);
+  h.win.CBI18n.setLocale("en");
+  assert.equal(excelButton(h).textContent, "Recalculate formulas in a new copy"); assert.equal(excelAck(h).value, riskPhrase);
+  assert.match(h.$("agentArtifacts").textContent, /原始工程副本.xlsx/);
+  await h.app.recalculateArtifact(artifact.id); assert.match(h.$("agentExcelJobs").textContent, /Recalculating/);
+  await h.app.cancelExcelJob(job.id); assert.match(h.$("agentExcelJobs").textContent, /Recalculation stopped/);
+  assert.equal(h.doc.querySelector('[data-action="cancel-excel-job"]'), null); assert.equal(h.timers.size, 0);
+  assert.equal(excelAck(h).value, "");
+});
+
+test("Excel UI: late POST acceptance cannot add another project's job or consume its confirmation", async (t) => {
+  const artifact = deliveryArtifact(); let finish;
+  const h = harness(excelRoute(artifact, (url, init) => {
+    if (url.includes("/excel-recalculate?")) return new Promise(resolve => { finish = resolve; });
+    if (url === "/api/agent/workspaces" && JSON.parse(init.body).path === "C:/second") return response({ workspace: { id: "workspace-2", root: "C:/second" }, capabilities: { ...caps, excel_engine: excelEngine } });
+  })); t.after(h.close); await showDelivery(h); selectValue(h, "agentSandbox", "workspace-write"); typeExcelAck(h);
+  const posting = h.app.recalculateArtifact(artifact.id); await settle();
+  assert.equal(excelAck(h).value, ""); await h.app.openWorkspace("C:/second");
+  finish(response({ job: excelJob(artifact) }, 202)); await posting;
+  assert.equal(h.app.state.workspace.id, "workspace-2"); assert.equal(h.app.state.excelJobs.size, 0); assert.equal(h.app.state.excelActions.size, 0);
+  assert.doesNotMatch(h.$("agentExcelJobs").textContent, /excel-job-1/);
+});
+
+test("Excel UI: an older job-list snapshot cannot erase POST acceptance or undo terminal cancellation", async (t) => {
+  const artifact = deliveryArtifact(); let finish, delay = false, job = null;
+  const h = harness(excelRoute(artifact, (url) => {
+    if (url.startsWith("/api/agent/excel-jobs?")) return delay ? new Promise(resolve => { finish = resolve; }) : response({ jobs: job ? [job] : [], limit: 100, truncated: false });
+    if (url.includes("/excel-recalculate?")) { job = excelJob(artifact); return response({ job }, 202); }
+    if (url.includes("/excel-job-1/cancel?")) { job = excelJob(artifact, { status: "cancelled" }); return response({ job }); }
+  })); t.after(h.close); await showDelivery(h); selectValue(h, "agentSandbox", "workspace-write"); typeExcelAck(h);
+  delay = true; const listing = h.app.loadExcelJobs(); await settle();
+  await h.app.recalculateArtifact(artifact.id); finish(response({ jobs: [], limit: 100, truncated: false })); await listing;
+  assert.equal(h.app.state.excelJobs.get("excel-job-1").status, "running");
+  const earlier = h.app.loadExcelJobs(); await settle(); await h.app.cancelExcelJob("excel-job-1");
+  assert.equal(h.app.state.excelJobs.get("excel-job-1").status, "cancelled");
+  finish(response({ jobs: [excelJob(artifact)], limit: 100, truncated: false })); await earlier;
+  assert.equal(h.app.state.excelJobs.get("excel-job-1").status, "cancelled"); assert.equal(h.timers.size, 0);
+});
 
 function sourceReceipt(references = []) {
   return { schema_version: 1, origin: "host", scope: "this_turn_source_quotes", attempted: true,
@@ -846,6 +1010,70 @@ test("Deliverable checks: source names remain literal while bilingual layout and
   assert.match(h.$("agentArtifacts").textContent, /原始工程资料.xlsx/);
   h.win.CBI18n.setLocale("zh-CN"); assert.equal(checkButton(h).textContent, "重新检查交付");
   assert.equal(h.calls.filter((call) => call.url.includes("/readiness?")).length, 1);
+});
+
+function recalculatedReadiness(job) {
+  const result = readinessResult(job.artifact);
+  result.engine_receipt = structuredClone(job.receipt);
+  Object.assign(result.readiness.format_details, { formula_cached_count: 2, formula_missing_cache_count: 0,
+    recalculation: "performed_by_excel", cached_values_status: "engine_refreshed_and_saved_verified" });
+  result.readiness.checks.push({ id: "formula_cache", status: "pass" }, { id: "recalculation", status: "pass" });
+  return result;
+}
+
+test("Deliverable checks: a host-bound Excel child shows verified fresh caches in both languages and retains professional review", async (t) => {
+  const job = completedExcelJob(), child = job.artifact, report = recalculatedReadiness(job);
+  const h = harness(deliveryRoute(child, (url) => url.includes("/readiness?") ? response(report) : undefined));
+  t.after(h.close); installLanguage(h); await showDelivery(h); checkButton(h).click(); await settle();
+  const panel = () => h.doc.querySelector(".artifact-readiness").textContent;
+  assert.match(panel(), /公式已由本机 Excel 实际重算，保存后的缓存已核对/);
+  assert.match(panel(), /保存后的公式缓存与本次 Excel 重算结果一致/);
+  assert.match(panel(), /实际引擎：Microsoft Excel · 版本 16.0 · 构建 19127/);
+  assert.match(panel(), /待人工核对/); assert.match(panel(), /仍需专业人员核对/); assert.match(panel(), /不代表人工验收/);
+  assert.doesNotMatch(panel(), /公式未实际重算|已有缓存仍未验证|已保存的公式缓存可能过期/);
+  h.win.CBI18n.setLocale("en");
+  assert.match(panel(), /Formulas were recalculated in local Excel and their saved caches checked/);
+  assert.match(panel(), /The saved formula caches match this Excel recalculation/);
+  assert.match(panel(), /Actual engine: Microsoft Excel.*Version 16.0.*Build 19127/);
+  assert.match(panel(), /Professional review is still required/); assert.match(panel(), /does not constitute human acceptance/);
+  assert.doesNotMatch(panel(), /Formulas have not been recalculated|Stored formula caches may be stale/);
+  assert.equal(h.$("agentArtifacts").querySelector("a").textContent, child.name);
+  assert.equal(report.readiness.status, "review_required"); assert.equal(report.readiness.automatic_acceptance, false);
+  assert.equal(h.calls.filter((call) => call.url.includes("/readiness?")).length, 1);
+  assert.equal(h.calls.filter((call) => call.url.includes("excel-recalculate")).length, 0);
+});
+
+test("Deliverable checks: malformed or stale Excel receipts cannot establish recalculation or cache verification", async (t) => {
+  const cases = {
+    "missing full receipt": (_, result) => { result.engine_receipt = null; },
+    "stale output hash": (_, result) => { result.engine_receipt.output_sha256 = "d".repeat(64); },
+    "stale parent hash": (_, result) => { result.engine_receipt.source_sha256 = "d".repeat(64); },
+    "another operation": (_, result) => { result.engine_receipt.job_id = "another-job"; },
+    "missing formula results": (_, result) => { delete result.engine_receipt.formula_results; },
+    "wrong typed formula result": (_, result) => { result.engine_receipt.formula_results[0].value = "42"; },
+    "incomplete cache count": (_, result) => { result.readiness.format_details.formula_cached_count = 1; },
+    "cleanup not verified": (_, result) => { result.engine_receipt.cleanup_verified = false; },
+    "host verification failed": (_, result) => { result.engine_receipt.verification.status = "fail"; },
+    "formula count mismatch": (_, result) => { result.engine_receipt.verification.formula_count = 1; },
+    "unregistered provenance": (child) => { child.provenance = "model_proposed"; },
+    "missing parent binding": (child) => { delete child.parent_output_sha256; },
+  };
+  for (const [name, mutate] of Object.entries(cases)) await t.test(name, async (t) => {
+    const job = completedExcelJob(), child = job.artifact, result = recalculatedReadiness(job); mutate(child, result);
+    const h = harness(deliveryRoute(child, (url) => url.includes("/readiness?") ? response(result) : undefined));
+    t.after(h.close); installLanguage(h); await showDelivery(h); checkButton(h).click(); await settle();
+    const panel = () => h.doc.querySelector(".artifact-readiness").textContent;
+    assert.match(panel(), /暂不能确认实际重算和缓存验证/);
+    assert.doesNotMatch(panel(), /公式已由本机 Excel 实际重算|保存后的公式缓存与本次 Excel 重算结果一致|实际引擎：/);
+    assert.equal(h.doc.querySelector('[data-check="recalculation"] strong').textContent, "公式重算 · 待核对");
+    assert.equal(h.doc.querySelector('[data-check="formula_cache"] strong').textContent, "公式缓存 · 待核对");
+    assert.match(panel(), /不代表人工验收/);
+    h.win.CBI18n.setLocale("en");
+    assert.match(panel(), /Recalculation and cache verification cannot be confirmed/);
+    assert.doesNotMatch(panel(), /Formulas were recalculated in local Excel|The saved formula caches match|Actual engine:/);
+    assert.equal(h.doc.querySelector('[data-check="recalculation"] strong').textContent, "Formula recalculation · Review required");
+    assert.ok(h.$("agentArtifacts").querySelector("a"), "malformed proof does not remove the registered download");
+  });
 });
 
 test("Deliverable checks: changed, unavailable and unrecorded original sources never appear current", async (t) => {

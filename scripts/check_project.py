@@ -59,6 +59,7 @@ CHECKS = (
     Check("logistics-i18n", ("scripts/test_logistics_language.cjs",), "node"),
     Check("document-worker", ("scripts/test_document_worker.py",)),
     Check("document-readiness", ("scripts/test_document_readiness.py",)),
+    Check("excel-engine", ("scripts/test_excel_engine.py",)),
     Check("source-retrieval", ("scripts/test_source_retrieval.py",)),
     Check("host-worker", ("scripts/test_host_worker.py",)),
     Check("packing-replan-worker", ("scripts/test_packing_replan_worker.py",), timeout=300),

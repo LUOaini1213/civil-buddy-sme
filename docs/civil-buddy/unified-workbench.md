@@ -84,7 +84,7 @@ provenance verification. The legacy Python reply guard is a separate implementat
   identity receipts at the stated time, not proof that every model sentence is supported; model-written prose
   cannot create a verified card. Original quotations are preserved when switching the interface language.
 - Document patches require matching original hashes, expected old values and a successful identical preview. The returned preview_id can apply the cached patch without asking the model to reproduce it. Added numbers need preserved original values, explicit user input or verified source quotations. Saved files remain model proposals.
-- PDF body rewriting/OCR, Office visual rendering and spreadsheet formula recalculation are not provided by this worker. Results report these limitations explicitly.
+- PDF body rewriting/OCR and Office visual rendering are not provided by this worker. The optional desktop Excel channel below runs separately from ordinary Python workers.
 
 The product's ordinary tests use scripted local models. `scripts/unified_acceptance.py --live` is separate
 opt-in acceptance against an already configured local server. It requires `--expected-model` and
@@ -196,7 +196,64 @@ A same-machine upgrade and restore check made a complete offline backup, verifie
 
 Separate Office quality checks then used the existing synthetic live-model artifacts. Microsoft Word 16.0 opened the DOCX read-only, repaginated it and exported a one-page PDF. Poppler rendered the PDF at 150 dpi; the page was visually reviewed with no clipping, overlap, missing text or text errors observed, and extracted PDF text matched the source paragraphs. Microsoft Excel 16.0 ran `CalculateFullRebuild` and saved a separate XLSX copy. Reading that saved copy with `openpyxl` in `data_only` mode confirmed the cached value `D2 = 12`; the formula remained `=B2*2` with `B2 = 6`. The original source files and registered artifacts retained their hashes, and no new model request was made.
 
-These are actual application-level rendering and recalculation checks on simple synthetic files. Word and Excel automation remain outside the product's deliverable-inspection tools; the existing tool limitations above still apply. Complex real-project pagination and formula recalculation, and cross-computer installation and restore, still require acceptance. The Office report, exported PDF and recalculated copy are under `work/practical-office-acceptance-20260930/` outside the repository; the [acceptance record](acceptance/2026-09-30-practical.json) includes their bounded results and output hashes.
+These are historical application-level rendering and recalculation checks on simple synthetic files. At that time, Word and Excel automation were outside the product's deliverable-inspection tools. The optional Excel channel below is a later implementation. Complex real-project pagination and formula recalculation, and cross-computer installation and restore, still require acceptance. The Office report, exported PDF and recalculated copy are under `work/practical-office-acceptance-20260930/` outside the repository; the [acceptance record](acceptance/2026-09-30-practical.json) includes their bounded results and output hashes.
+
+## Optional local Excel recalculation
+
+The [2026-10-10 feature acceptance record](acceptance/2026-10-10-local-excel.json) records 37 actual
+same-machine HTTP checks through Agent preview/apply, native Excel, immutable child download,
+cancellation and restart. The parent turn used a loopback scripted model; these checks do not constitute
+real-project, paid-model or second-computer acceptance. Earlier failed attempts remain in local evidence.
+
+On an interactive Windows desktop with Microsoft Excel installed, explicitly add
+`--excel-engine windows-desktop` to the unified launcher. Normal startup defaults to `off`, including
+when an inherited environment variable requests the engine. `--check` never activates Office.
+The launcher and Rust host reject this channel when a public origin is configured. The capability
+response checks configuration and the fixed broker file; only a completed job attests an actual Excel run.
+Excel, its licensing and desktop session are not included in the ZIP.
+
+In the Agent page, inspect a registered XLSX draft, permit workspace writes, and enter the displayed
+acknowledgment for this operation. Click the recalculation action to create a persistent job.
+This action is separate from model tools: a model cannot start Office or supply paths, scripts or formulas.
+Job records survive refresh and restart; unfinished jobs become interrupted and are not silently repeated.
+An idempotency key prevents a lost response from producing a second calculation. Cancellation must stop
+the owned broker before a running job becomes cancelled.
+
+The host first checks exact source and parent-copy hashes, then the fixed read-only Python worker admits
+the workbook. Profile `civil-xlsx-engine-v1` supports ordinary XLSX worksheets, static A1 references and
+a parsed allowlist of common arithmetic, conditional, lookup and aggregate functions. Limits include
+32 sheets, 100,000 cells, 5,000 formulas and 2,048 characters per formula. Unknown features fail closed.
+External relationships, macros/XLM, data connections, embedded objects, charts, unsupported formula
+surfaces and executable/network/dynamic-reference functions are rejected before Office activation.
+
+The compiled Rust host binds the fixed PowerShell broker's bytes, starts a dedicated STA process,
+verifies a newly created Excel process by a held native handle and creation time, and permits only one
+host-created staging workbook. The broker disables events/macros, opens read-only with `UpdateLinks=0`,
+runs `CalculateFullRebuild`, captures every typed formula result and saves another copy. Cleanup uses
+the owned process/job handles rather than terminating all Excel processes. Existing user workbooks are
+never attached. Office automation is a dedicated desktop channel; it does not inherit the ordinary
+worker's process sandbox and is not a server-side Office service.
+
+When admitted bytes request `forceFullCalc` or `fullCalcOnLoad`, the broker creates a separate calculation
+input and clears only those two request flags before opening it. Some installed Excel builds remain
+`xlPending` if those flags were true at open, even after a full rebuild; changing COM properties afterward
+did not resolve the observed failure. The retained input stays byte-for-byte unchanged. The receipt records
+both input hashes and the changed flags, and a completed job still requires the engine's actual `xlDone`
+state plus every saved result. This consumes a calculation request; it does not replace calculation with
+an XML flag or modify formula/input/style data.
+
+Before publication, the worker verifies the saved package's inputs, formulas, resolved styles, names,
+merges and supported layout semantics, and compares every persisted formula cache with the captured
+Excel value. The host rechecks provenance and registers a new child artifact with hashes and the engine
+receipt; the original and parent copy remain unchanged. Genuine layout changes cause failure: for
+example, installed Excel changed an openpyxl fixture's default row height from 15 to 14.4, so its output
+was rejected even though the formula values were correct. A successful calculation is still a draft
+requiring professional review; it does not certify design correctness or visual layout.
+
+Microsoft documents that disabling VBA macros does not disable Excel 4.0 macros, which is why the
+package admission step is required. See [AutomationSecurity](https://learn.microsoft.com/en-us/office/vba/api/excel.application.automationsecurity),
+[Workbooks.Open](https://learn.microsoft.com/en-us/office/vba/api/excel.workbooks.open), and
+[CalculateFullRebuild](https://learn.microsoft.com/en-us/office/vba/api/excel.application.calculatefullrebuild).
 
 ## Live read-only delegation follow-up (2026-09-30)
 
