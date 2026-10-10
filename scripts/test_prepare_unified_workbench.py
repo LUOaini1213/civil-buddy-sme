@@ -11,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -62,7 +63,7 @@ class PreparationTests(unittest.TestCase):
         is_base = selected == self.base
         prefix = self.root / "base" if is_base else selected.parents[1]
         return dict(implementation="cpython", version=[3, 11, 9], platform="win32", bits=64,
-                    machine="AMD64", executable=str(selected), prefix=str(prefix), base_prefix=str(self.root / "base"))
+                    build_platform="win-amd64", executable=str(selected), prefix=str(prefix), base_prefix=str(self.root / "base"))
 
     def command(self, args, root, **kwargs):
         self.calls.append(list(args))
@@ -299,13 +300,43 @@ class PreparationTests(unittest.TestCase):
         self.assertNotIn("private-output", str(error.exception) + self.output.getvalue())
 
     def test_wrong_architecture_or_python_version_fails_before_writing(self):
-        for changed in ({"bits": 32}, {"version": [3, 12, 0]}, {"platform": "linux"}, {"implementation": "pypy"}):
+        for changed in ({"bits": 32}, {"build_platform": "win32"},
+                        {"build_platform": "win-arm64", "machine": "AMD64"},
+                        {"build_platform": "win-arm32"}, {"build_platform": ""},
+                        {"version": [3, 12, 0]}, {"platform": "linux"}, {"implementation": "pypy"}):
             data = {**self.info(str(self.base)), **changed}
             with self.subTest(changed=changed), patch.object(setup, "run_command", return_value=SimpleNamespace(
                     returncode=0, stdout=json.dumps(data).encode(), stderr=b"")):
                 with self.assertRaisesRegex(setup.PreparationError, "CPython 3.11"):
                     self.prepare()
                 self.assertFalse((self.root / setup.RUNTIME_NAME).exists())
+
+
+class InterpreterProbeTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows interpreter-build probe integration")
+    def test_windows_probe_uses_build_metadata_with_processor_environment_removed(self):
+        # platform.machine() reads PROCESSOR_ARCHITECTURE on Windows; the
+        # installer intentionally strips it along with caller configuration.
+        # Exercise the real isolated subprocess, rather than its JSON fixture.
+        with tempfile.TemporaryDirectory(prefix="civil-probe-") as temp:
+            with patch.dict(os.environ, {"PROCESSOR_ARCHITECTURE": "ARM64",
+                                         "PROCESSOR_ARCHITEW6432": "ARM64",
+                                         "DEEPSEEK_API_KEY": "never-forward-probe-fixture"}):
+                env = setup.clean_environment()
+                for key in ("PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432", "DEEPSEEK_API_KEY"):
+                    self.assertNotIn(key, env)
+                result = setup.run_command([sys.executable, "-I", "-B", "-c", setup.PROBE],
+                                           Path(temp), timeout=20)
+                self.assertEqual(result.returncode, 0, "isolated interpreter probe failed")
+                data = json.loads(result.stdout)
+                self.assertEqual(data["build_platform"], sysconfig.get_platform())
+                self.assertNotIn("never-forward-probe-fixture", result.stdout.decode("utf-8"))
+                if sys.version_info[:2] == (3, 11) and sysconfig.get_platform() == "win-amd64":
+                    self.assertEqual(setup.interpreter_info(sys.executable, Path(temp))["build_platform"],
+                                     "win-amd64")
+                else:
+                    with self.assertRaises(setup.PreparationError):
+                        setup.interpreter_info(sys.executable, Path(temp))
 
 
 class BatchEntryTests(unittest.TestCase):

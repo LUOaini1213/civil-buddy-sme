@@ -20,9 +20,9 @@ LOCK_NAME = "requirements-unified-windows-py311.lock"
 RUNTIME_NAME = ".civil-buddy-runtime"
 OWNER_NAME = "civil-buddy-environment.json"
 PRODUCT = "civil-buddy-unified-python"
-PROBE = """import json,platform,struct,sys
+PROBE = """import json,struct,sys,sysconfig
 print(json.dumps(dict(implementation=sys.implementation.name,version=list(sys.version_info[:3]),
-platform=sys.platform,bits=struct.calcsize('P')*8,machine=platform.machine(),
+platform=sys.platform,bits=struct.calcsize('P')*8,build_platform=sysconfig.get_platform(),
 executable=sys.executable,prefix=sys.prefix,base_prefix=sys.base_prefix)))
 """
 INVENTORY_PROBE = """import importlib.metadata as m,json,sys
@@ -78,9 +78,12 @@ def interpreter_info(python: str, root: Path) -> dict:
         if result.returncode or len(result.stdout) > 8192:
             raise ValueError
         data = json.loads(result.stdout)
+        # On Windows, sysconfig uses interpreter build metadata (sys.version),
+        # while platform.machine() reads caller environment variables that the
+        # installer deliberately strips. Require the x64 build and pointer width.
         if (data["implementation"] != "cpython" or data["version"][:2] != [3, 11]
                 or data["platform"] != "win32" or data["bits"] != 64
-                or data["machine"].lower() not in {"amd64", "x86_64"}):
+                or data["build_platform"] != "win-amd64"):
             raise ValueError
         if not Path(data["executable"]).is_absolute():
             raise ValueError
