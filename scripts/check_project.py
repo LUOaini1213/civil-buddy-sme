@@ -68,6 +68,7 @@ CHECKS = (
     Check("workbench-preflight", ("scripts/test_workbench_preflight.py",)),
     Check("unified-preparation", ("scripts/test_prepare_unified_workbench.py",)),
     Check("optional-preparation", ("scripts/test_optional_preparation.py",)),
+    Check("instance-backup", ("scripts/test_instance_backup.py",), timeout=300),
     Check("domain-service", ("scripts/test_domain_service.py",), timeout=300),
     Check("unified-packing", ("scripts/test_unified_packing.py",)),
     # Windows temporary Git fixtures and extracted-package reads exceeded 180s under load.

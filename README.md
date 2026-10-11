@@ -248,6 +248,12 @@ The [handoff guide](docs/civil-buddy/release-handoff.md) (in Chinese) covers log
 remaining real-business acceptance. The [SME integration record](docs/civil-buddy/sme-integration.md)
 distinguishes this source from the older competition repository and archived evaluation figures.
 
+For personal named-instance backups, use `scripts/instance_backup.py backup`, `verify` and
+`restore` after stopping the instance. The tool checks both host locks, ownership and complete
+file hashes; restore requires the original user and paths and never overwrites a non-empty target.
+See the [backup guide](docs/civil-buddy/instance-backup.md). These private backups include execution
+history and are separate from colleague project handoff packages.
+
 ## Documents
 
 - [docs/submission/nus-iss-technical.md](docs/submission/nus-iss-technical.md) — the technical

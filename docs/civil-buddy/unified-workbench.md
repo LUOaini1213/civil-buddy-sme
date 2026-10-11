@@ -65,6 +65,12 @@ The launcher binds both services to loopback, starts `/static/agent.html`, and s
 
 The default view offers a model-free structural check and a model task. Configure the model in the page or through environment variables. A model task with `read-only` cannot apply a document patch. `workspace-write` permits new draft copies; original files cannot be replaced.
 
+Named instances also have a standard-library offline backup tool: `scripts/instance_backup.py`
+with `backup`, `verify` and `restore` commands. It preserves the job plus its exact instance state,
+checks identity and complete file hashes, and refuses an active managed-launcher lock or a non-empty
+restore target. Restore requires the original user and absolute paths. See the
+[personal backup guide](instance-backup.md); private instance backups are not colleague handoff packages.
+
 ## Provider configuration
 
 For a named account and a single private job directory, use the launcher options `--user-id`, `--workspace` and `--token-file` together. The full [release and handoff guide](release-handoff.md) describes state ownership, login, project-package transfer, restart recovery and outstanding real-world acceptance. Named instances isolate users by separate processes and physical workspaces; they are not a shared-process multi-tenant service.
@@ -97,6 +103,12 @@ free-form request was fulfilled, and ordinary explanatory replies do not receive
 provenance verification. The legacy Python reply guard is a separate implementation.
 
 - Events persist before the page sees them. Refresh reconnects from the last sequence; restart marks unfinished tasks interrupted and never silently repeats writes.
+- If a start response is lost, an explicit retry of the same complete request uses its original
+  submission key. A reload only looks for a uniquely matching server task after the saved history
+  boundary, within 500 records; it never automatically resubmits. Recovery metadata contains hashes
+  and identifiers, not the request body, write permissions or high-risk acknowledgement. If recovery
+  is ambiguous, inspect execution history. To run against changed file contents, create a new session
+  and select the files again. Recovered tasks retain their original source-check times.
 - A task tree shares input/output/call budgets. At most two read-only children run together, four children in total, depth one; cancellation propagates.
 - Context occupancy is a conservative serialized-byte estimate, separately shown from model billed usage and task stages. It never silently removes the current request or half a tool interaction.
 - Fixed Python workers establish the requested OS sandbox before reading their request. The default `CIVIL_WORKER_SANDBOX=os` fails closed. Explicit `app` is a diagnostic/application-policy mode and must never be reported as OS isolation.

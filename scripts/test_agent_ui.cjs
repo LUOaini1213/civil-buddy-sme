@@ -29,6 +29,11 @@ function installLanguage(h, locale = "zh-CN") {
 }
 const event = (seq, kind, data = {}) => ({ seq, kind, data });
 const settle = () => new Promise((resolve) => setImmediate(resolve));
+async function waitFor(predicate) {
+  const deadline = Date.now() + 2000;
+  while (!predicate() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(predicate(), "asynchronous browser operation reached its observable boundary");
+}
 const deliveryArtifact = (format = "xlsx") => ({ id: "deliverable-1", name: `原始工程副本.${format}`,
   url: "/api/agent/artifacts/deliverable-1?workspace=workspace-1", source: `原始工程资料.${format}`,
   source_sha256: "a".repeat(64), output_sha256: "b".repeat(64), provenance: "model_proposed" });
@@ -266,6 +271,214 @@ function harness(route = () => undefined, saved = storage()) {
     close() { app.dispose(); dom.window.close(); } };
   return h;
 }
+
+// Offline HTTP-contract fixture: counters represent registered work, not live
+// provider acceptance. The separate package acceptance uses the real host.
+function submissionServer(options = {}) {
+  const identity = { mode: "named_single_user_instance", user_id: "alice" };
+  const capabilities = { ...caps, identity, models: { configured: true }, ...options.capabilities };
+  const records = [], keys = new Map(), stats = { posts: 0, tasks: 0, model: 0, artifacts: 0 };
+  let lost = false;
+  const route = async (url, init) => {
+    if (url === "/api/agent/capabilities") return response(capabilities);
+    if (url === "/api/agent/workspaces" && init) {
+      const second = JSON.parse(init.body).path === "C:/second";
+      return response({ workspace: { id: second ? "workspace-2" : "workspace-1", root: second ? "C:/second" : "C:/engineering" }, capabilities });
+    }
+    if (url.startsWith("/api/agent/turns?")) {
+      const query = new URL(url, "http://localhost").searchParams;
+      return response({ workspace: query.get("workspace"), session_id: query.get("session_id"),
+        turns: records.filter(row => row.request.workspace === query.get("workspace") && row.session_id === query.get("session_id")), next_cursor: null });
+    }
+    if (url === "/api/agent/turns" && init) {
+      stats.posts++;
+      const { idempotency_key: key, ...payload } = JSON.parse(init.body), serialized = JSON.stringify(payload);
+      let saved = keys.get(key); const replayed = !!saved;
+      if (saved && saved.serialized !== serialized) return response({ detail: "idempotency conflict" }, 422);
+      if (!saved) {
+        const id = `registered-${++stats.tasks}`;
+        if (payload.mode === "model") stats.model++;
+        stats.artifacts++;
+        const artifact = { ...deliveryArtifact("docx"), id: `copy-${stats.tasks}`,
+          url: `/api/agent/artifacts/copy-${stats.tasks}?workspace=${payload.workspace}` };
+        const turn = { turn_id: id, session_id: payload.session_id, actor_id: capabilities.identity.user_id, status: "completed", last_seq: 0,
+          request: { planning_action: "inspect", packing_sources: [], ...payload, actor_id: capabilities.identity.user_id,
+            ...(payload.packing_sources ? { packing_sources: payload.packing_sources.map(row => ({ ...row, source_sha256: "a".repeat(64) })) } : {}) },
+          result: { reply: "已登记的工具结果", artifacts: [artifact] } };
+        records.unshift(turn); saved = { serialized, turn }; keys.set(key, saved);
+      }
+      if (options.delay) return options.delay(saved.turn);
+      if (!lost && options.loseFirst !== false) { lost = true; throw new Error("response lost after registration"); }
+      return response({ turn_id: saved.turn.turn_id, session_id: payload.session_id, replayed }, replayed ? 200 : 202);
+    }
+    const match = /\/api\/agent\/turns\/([^/?]+)(\/events)?\?/.exec(url);
+    if (match) {
+      const turn = records.find(row => row.turn_id === match[1]);
+      if (turn) return response({ turn, ...(match[2] ? { events: [] } : {}) });
+    }
+  };
+  return { route, records, keys, stats, capabilities };
+}
+
+test("Submission recovery: response lost after registration reuses the exact request key and does not register work twice", async (t) => {
+  const server = submissionServer(), h = harness(server.route); t.after(h.close); await h.ready();
+  selectValue(h, "agentMode", "model"); h.selectFirst(); h.$("agentMessage").value = "请读取原文并制作新副本，保留原件";
+  await h.app.send();
+  assert.deepEqual(server.stats, { posts: 1, tasks: 1, model: 1, artifacts: 1 });
+  assert.match(h.$("agentNotice").textContent, /结果尚不确定/); assert.equal(h.$("agentSubmissionRecovery").hidden, false);
+  const first = h.calls.find(call => call.url === "/api/agent/turns" && call.init).body;
+  assert.match(first.idempotency_key, /^turn-[a-f0-9]{32}$/);
+  const metadata = JSON.parse(h.saved.getItem("cb_agent_pending_submissions_v1"));
+  assert.deepEqual(Object.keys(metadata[0]).sort(), ["after_turn", "created_at", "fingerprint", "key", "scope"]);
+  assert.doesNotMatch(JSON.stringify(metadata), /请读取|sandbox|risk_confirmation|workspace-write/);
+  await h.app.send();
+  const posts = h.calls.filter(call => call.url === "/api/agent/turns" && call.init);
+  assert.deepEqual(posts[1].body, posts[0].body);
+  assert.deepEqual(server.stats, { posts: 2, tasks: 1, model: 1, artifacts: 1 });
+  assert.equal(h.app.state.turn.turn_id, "registered-1"); assert.equal(h.app.state.artifacts.size, 1);
+  assert.match(h.$("agentNotice").textContent, /已找回此前提交的任务，未重复执行/);
+  assert.match(h.$("agentNotice").textContent, /更新后的文件.*新会话/);
+  installLanguage(h); h.win.CBI18n.setLocale("en");
+  assert.match(h.$("agentNotice").textContent, /previously submitted task was recovered without running it again/);
+  assert.match(h.$("agentNotice").textContent, /updated files.*New session/);
+  assert.equal(h.$("agentSubmissionRecovery").hidden, true); assert.deepEqual(JSON.parse(h.saved.getItem("cb_agent_pending_submissions_v1")), []);
+  h.$("agentMessage").value = first.message; await h.app.send();
+  assert.notEqual(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).at(-1).body.idempotency_key, first.idempotency_key, "a completed task does not lock a later intentional request");
+  assert.equal(server.stats.tasks, 2);
+  assert.doesNotMatch(h.$("agentNotice").textContent, /previously submitted task|未重复执行/);
+});
+
+test("Submission recovery: ambiguous high-risk write consumes acknowledgement and an explicit identical retry requires retyping it", async (t) => {
+  const server = submissionServer(), h = harness(server.route); t.after(h.close); await h.ready();
+  selectValue(h, "agentExpert", "plans"); selectValue(h, "agentSandbox", "workspace-write");
+  h.$("agentMessage").value = "修改方案并保存副本"; h.$("agentRiskConfirmation").value = riskPhrase; h.$("agentRiskConfirmation").dispatchEvent(new h.win.Event("input"));
+  await h.app.send(); assert.equal(h.$("agentRiskConfirmation").value, ""); assert.equal(h.$("agentSend").disabled, true);
+  await h.app.send(); assert.equal(server.stats.posts, 1);
+  assert.doesNotMatch([...h.saved.values.values()].join(""), /我明白|修改方案|workspace-write/);
+  h.$("agentRiskConfirmation").value = riskPhrase; h.$("agentRiskConfirmation").dispatchEvent(new h.win.Event("input"));
+  await h.app.send(); const posts = h.calls.filter(call => call.url === "/api/agent/turns" && call.init);
+  assert.deepEqual(posts[1].body, posts[0].body); assert.equal(server.stats.tasks, 1); assert.equal(h.$("agentRiskConfirmation").value, "");
+});
+
+test("Submission recovery: reload uses only GET records, excludes earlier identical work, and never restores write permissions", async (t) => {
+  const saved = storage(), server = submissionServer(), first = harness(server.route, saved); t.after(first.close); await first.ready();
+  selectValue(first, "agentMode", "model"); selectValue(first, "agentExpert", "plans"); selectValue(first, "agentSandbox", "workspace-write"); first.selectFirst();
+  first.$("agentMessage").value = "核对并保存方案副本"; first.$("agentRiskConfirmation").value = riskPhrase; first.$("agentRiskConfirmation").dispatchEvent(new first.win.Event("input"));
+  const oldRequest = { workspace: "workspace-1", session_id: first.app.state.session, message: first.$("agentMessage").value, locale: "zh-CN", mode: "model", sandbox: "workspace-write",
+    files: ["方案.docx"], engineering: [], packing_sources: [], planning_action: "inspect", expert_id: "plans", risk_confirmation: riskPhrase, actor_id: "alice" };
+  server.records.push({ turn_id: "earlier-identical", session_id: oldRequest.session_id, actor_id: "alice", request: oldRequest, status: "completed", last_seq: 0, result: {} });
+  await first.app.send(); const key = first.app.state.pendingSubmission.key;
+  assert.equal(first.app.state.pendingSubmission.after_turn, "earlier-identical");
+  first.close(); const second = harness(server.route, saved); t.after(second.close); await second.ready();
+  assert.equal(second.app.state.turn.turn_id, "registered-1"); assert.equal(second.app.state.artifacts.size, 1);
+  assert.equal(second.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+  assert.equal(second.$("agentSandbox").value, "read-only"); assert.equal(second.$("agentRiskConfirmation").value, ""); assert.equal(second.$("agentExpert").value, ""); assert.equal(second.$("agentMessage").value, "");
+  assert.equal(JSON.parse(saved.getItem("cb_agent_pending_submissions_v1")).some(item => item.key === key), false);
+  assert.deepEqual(server.stats, { posts: 1, tasks: 1, model: 1, artifacts: 1 });
+  assert.match(second.$("agentNotice").textContent, /恢复，未重新执行/);
+});
+
+test("Submission recovery: changes to request, session, workspace or actor always get fresh keys", async (t) => {
+  for (const change of ["text", "files", "permission", "locale", "session", "workspace", "actor"]) await t.test(change, async (t) => {
+    const server = submissionServer(), h = harness(server.route); t.after(h.close); await h.ready(); h.selectFirst();
+    h.$("agentMessage").value = "查看相同资料"; await h.app.send();
+    const original = h.calls.find(call => call.url === "/api/agent/turns" && call.init).body;
+    if (change === "text") h.$("agentMessage").value = "查看其他事项";
+    if (change === "files") { const checkbox = h.doc.querySelector("#agentFiles input"); checkbox.checked = false; checkbox.dispatchEvent(new h.win.Event("change")); }
+    if (change === "permission") selectValue(h, "agentSandbox", "workspace-write");
+    if (change === "locale") { installLanguage(h); h.win.CBI18n.setLocale("en"); }
+    if (change === "session") await h.app.changeSession("", true);
+    if (change === "workspace") await h.app.openWorkspace("C:/second");
+    if (change === "actor") { server.capabilities.identity = { ...server.capabilities.identity, user_id: "bob" }; await h.app.openWorkspace("C:/engineering", { restoreTurn: false }); }
+    if (change !== "text") h.$("agentMessage").value = original.message;
+    await h.app.send();
+    const latest = h.calls.filter(call => call.url === "/api/agent/turns" && call.init).at(-1).body;
+    assert.notEqual(latest.idempotency_key, original.idempotency_key); assert.equal(server.stats.tasks, 2);
+  });
+});
+
+test("Submission recovery: missing, ambiguous or unreadable history never replays a request and preserves bilingual recovery guidance", async (t) => {
+  for (const failure of ["missing", "multiple", "unreadable", "missing-boundary"]) await t.test(failure, async (t) => {
+    const saved = storage(), server = submissionServer(), first = harness(server.route, saved); t.after(first.close); await first.ready();
+    first.$("agentMessage").value = "需要核对的原始请求";
+    if (failure === "missing-boundary") server.records.push({ turn_id: "before-boundary", session_id: first.app.state.session, actor_id: "alice",
+      request: { workspace: "workspace-1", session_id: first.app.state.session }, status: "completed" });
+    await first.app.send(); const pending = first.app.state.pendingSubmission; first.close();
+    if (failure === "missing") server.records.length = 0;
+    if (failure === "multiple") server.records.push({ ...server.records[0], turn_id: "another-identical" });
+    if (failure === "missing-boundary") server.records.splice(1);
+    const route = async (url, init) => { if (failure === "unreadable" && url.startsWith("/api/agent/turns?")) throw new Error("offline history"); return server.route(url, init); };
+    const second = harness(route, saved); t.after(second.close); installLanguage(second); await second.ready();
+    assert.equal(second.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+    assert.equal(second.app.state.turn, null); assert.equal(second.app.state.pendingSubmission.key, pending.key);
+    assert.equal(second.$("agentRiskConfirmation").value, ""); assert.equal(second.$("agentSandbox").value, "read-only");
+    assert.match(second.$("agentSubmissionRecovery").textContent, failure === "multiple" ? /多个相同请求/ : failure === "unreadable" ? /不会自动执行/ : /尚未找到/);
+    second.win.CBI18n.setLocale("en");
+    assert.match(second.$("agentSubmissionRecovery").textContent, failure === "multiple" ? /Several matching requests/ : failure === "unreadable" ? /never automatically submitted/ : /No unique task/);
+    assert.equal(second.$("agentRecoverSubmission").textContent, "Check submitted task");
+  });
+});
+
+test("Submission recovery: a late accepted POST cannot paint or consume input in another session or workspace", async (t) => {
+  for (const change of ["session", "workspace"]) await t.test(change, async (t) => {
+    let release; const server = submissionServer({ delay: turn => new Promise(resolve => { release = () => resolve(response({ turn_id: turn.turn_id, session_id: turn.session_id })); }) });
+    const h = harness(server.route); t.after(h.close); await h.ready(); h.$("agentMessage").value = "旧范围请求";
+    const posting = h.app.send(); await waitFor(() => typeof release === "function");
+    if (change === "session") await h.app.changeSession("", true); else await h.app.openWorkspace("C:/second");
+    h.$("agentMessage").value = "保留新范围未发送的草稿"; h.$("agentRiskConfirmation").value = "保留新范围输入";
+    release(); await posting;
+    assert.equal(h.app.state.turn, null); assert.equal(h.app.state.artifacts.size, 0); assert.equal(h.$("agentSubmissionRecovery").hidden, true);
+    assert.equal(h.$("agentMessage").value, "保留新范围未发送的草稿"); assert.equal(h.$("agentRiskConfirmation").value, "保留新范围输入");
+    assert.equal(h.calls.filter(call => call.url.includes("/registered-1/events?")).length, 0);
+  });
+});
+
+test("Submission recovery: server-captured packing hashes and absent UI defaults still recover the exact saved task", async (t) => {
+  const saved = storage(), server = submissionServer({ capabilities: { features: { ...caps.features, packing_replan: true } } });
+  const route = (url, init) => url.startsWith("/api/agent/files?") ? response({ files: [{ path: "箱单.json", name: "箱单.json" }] }) : server.route(url, init);
+  const first = harness(route, saved); t.after(first.close); await first.ready(); first.selectFirst();
+  first.$("agentPackingSource").value = "箱单.json"; first.$("agentMessage").value = "只读重排已选箱单"; await first.app.send();
+  const sent = first.calls.find(call => call.url === "/api/agent/turns" && call.init).body;
+  assert.equal(Object.hasOwn(sent, "planning_action"), false); assert.deepEqual(sent.packing_sources, [{ source: "箱单.json" }]);
+  assert.deepEqual(server.records[0].request.packing_sources, [{ source: "箱单.json", source_sha256: "a".repeat(64) }]);
+  first.close(); const second = harness(route, saved); t.after(second.close); await second.ready();
+  assert.equal(second.app.state.turn.turn_id, "registered-1"); assert.equal(second.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+  assert.equal(second.$("agentPackingSource").value, "", "recovery does not auto-select a new replan request");
+  assert.deepEqual(server.stats, { posts: 1, tasks: 1, model: 0, artifacts: 1 });
+});
+
+test("Submission recovery: imported metadata cannot persist or restore request text, keys or permissions", async (t) => {
+  const saved = storage(), server = submissionServer(), first = harness(server.route, saved); t.after(first.close); await first.ready();
+  first.$("agentMessage").value = "尚未确认的请求"; await first.app.send(); first.close(); server.records.length = 0;
+  const metadata = JSON.parse(saved.getItem("cb_agent_pending_submissions_v1"));
+  Object.assign(metadata[0], { message: "private imported request", api_key: "private imported value", risk_confirmation: riskPhrase, sandbox: "workspace-write" });
+  saved.setItem("cb_agent_pending_submissions_v1", JSON.stringify(metadata));
+  const second = harness(server.route, saved); t.after(second.close); await second.ready();
+  assert.equal(second.app.state.pendingSubmission.key, metadata[0].key);
+  assert.deepEqual(Object.keys(second.app.state.pendingSubmission).sort(), ["after_turn", "created_at", "fingerprint", "key", "scope"]);
+  assert.doesNotMatch(saved.getItem("cb_agent_pending_submissions_v1"), /private imported|api_key|risk_confirmation|sandbox|我明白/);
+  assert.equal(second.$("agentMessage").value, ""); assert.equal(second.$("agentRiskConfirmation").value, ""); assert.equal(second.$("agentSandbox").value, "read-only");
+  assert.equal(second.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+});
+
+test("Submission recovery: a delayed read-only match cannot open an old task across a scope change", async (t) => {
+  for (const change of ["session", "workspace"]) await t.test(change, async (t) => {
+    const server = submissionServer(); let delay = false, release;
+    const route = async (url, init) => {
+      if (delay && url.startsWith("/api/agent/turns?") && new URL(url, "http://localhost").searchParams.get("workspace") === "workspace-1") {
+        delay = false; const value = await server.route(url, init); return new Promise(resolve => { release = () => resolve(value); });
+      }
+      return server.route(url, init);
+    };
+    const h = harness(route); t.after(h.close); await h.ready(); h.$("agentMessage").value = "原范围任务"; await h.app.send();
+    delay = true; const recovering = h.app.recoverSubmission(); await waitFor(() => typeof release === "function");
+    if (change === "session") await h.app.changeSession("", true); else await h.app.openWorkspace("C:/second");
+    h.$("agentMessage").value = "新范围草稿"; release(); await recovering;
+    assert.equal(h.app.state.turn, null); assert.equal(h.app.state.artifacts.size, 0); assert.equal(h.$("agentMessage").value, "新范围草稿");
+    assert.equal(h.$("agentSubmissionRecovery").hidden, true); assert.equal(server.stats.posts, 1);
+    assert.equal(h.calls.filter(call => call.url.includes("/registered-1?") || call.url.includes("/registered-1/events?")).length, 0);
+  });
+});
 
 test("Agent packing: only explicitly selected JSON is authorized for one turn", async (t) => {
   const h = harness((url, init) => {
@@ -1377,7 +1590,7 @@ test("Agent reply provenance: new task clears the prior model label before a ste
   const label = h.$("agentReplyProvenance");
   assert.equal(label.hidden, false);
   h.$("agentMode").value = "steps"; h.$("agentMode").dispatchEvent(new h.win.Event("change"));
-  h.$("agentMessage").value = "检查资料"; const pending = h.app.send(); await settle();
+  h.$("agentMessage").value = "检查资料"; const pending = h.app.send(); await waitFor(() => typeof release === "function");
   assert.equal(typeof release, "function");
   assert.equal(label.hidden, true); assert.equal(label.textContent, "");
   release(); await pending;
@@ -1447,7 +1660,7 @@ test("Agent packing receipt: changing task and session clears prior model claims
   }); t.after(h.close); installLanguage(h); await h.ready(); await h.app.showTurn(first.turn_id);
   const details = h.$("agentModelInterpretation"), body = h.$("agentModelInterpretationText");
   assert.equal(details.hidden, false); details.open = true;
-  h.$("agentMessage").value = "检查下一任务"; const pending = h.app.send(); await settle();
+  h.$("agentMessage").value = "检查下一任务"; const pending = h.app.send(); await waitFor(() => typeof release === "function");
   assert.equal(typeof release, "function"); assert.equal(details.hidden, true); assert.equal(details.open, false); assert.equal(body.textContent, "");
   h.win.CBI18n.setLocale("en"); assert.equal(details.hidden, true); assert.equal(body.textContent, "");
   release(); await pending;
@@ -1688,4 +1901,35 @@ test("History recovery: task pages reject wrong outer workspace or session witho
     assert.deepEqual(h.app.state.taskRows.map(row => row.turn_id), ["own-turn"]);
     assert.equal(h.app.state.nextTurnCursor, "own-cursor");
   }
+});
+
+test("Submission recovery: a later history selection in the same session keeps its own outcome", async (t) => {
+  let delay = false, release;
+  const server = submissionServer();
+  const h = harness(async (url, init) => {
+    if (delay && url.startsWith("/api/agent/turns/registered-1?")) {
+      delay = false;
+      const result = await server.route(url, init);
+      return new Promise(resolve => { release = () => resolve(result); });
+    }
+    return server.route(url, init);
+  });
+  t.after(h.close);
+  await h.ready();
+  h.$("agentMessage").value = "First ambiguous request";
+  await h.app.send();
+  server.records.push({ ...server.records[0], turn_id: "different-history-task",
+    request: { ...server.records[0].request, message: "Other old request" },
+    result: { reply: "Different selected task" } });
+  delay = true;
+  const recovery = h.app.recoverSubmission();
+  await waitFor(() => typeof release === "function");
+  await h.app.showTurn("different-history-task");
+  const notice = h.$("agentNotice").textContent;
+  release();
+  assert.equal(await recovery, false);
+  assert.equal(h.app.state.turn.turn_id, "different-history-task");
+  assert.notEqual(h.app.state.submissionOutcome, "recovered");
+  assert.equal(h.$("agentNotice").textContent, notice);
+  assert.equal(server.stats.tasks, 1);
 });

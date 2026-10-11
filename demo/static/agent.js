@@ -2,6 +2,23 @@ import { createAuth } from "./modules/auth.js";
 import { renderAgentMarkdown } from "./modules/agent-markdown.js";
 
 const STORE_KEY = "cb_agent_workspaces_v1";
+const SUBMISSION_KEY = "cb_agent_pending_submissions_v1";
+const SUBMISSION_MESSAGES = {
+  "上次提交结果尚不确定。相同请求重试会沿用原标识；修改内容、资料或权限会作为新任务。": "The previous submission is uncertain. Retrying the same request keeps its ID; changing its text, materials or permissions starts a new task.",
+  "已保留上次提交的恢复标识。这里只读取服务器记录，不会自动执行任务或恢复写入授权。": "The previous recovery ID is retained. Only server records are read; tasks are never automatically submitted and write permission is not restored.",
+  "核对已提交任务": "Check submitted task",
+  "正在核对已提交任务…": "Checking the submitted task…",
+  "尚未找到可唯一确认的任务。可继续核对记录；重新填写完全相同的请求后，明确发送才会沿用原标识。": "No unique task could be confirmed. Check the records again, or explicitly send the complete same request to reuse its ID.",
+  "存在多个相同请求，无法确认本次提交。请在执行历史中核对，页面不会自动重发。": "Several matching requests exist, so this submission cannot be identified. Review the task history; this page will not resend it automatically.",
+  "恢复记录读取失败：{error}": "Could not read recovery records: {error}",
+  "任务已从服务器记录恢复，未重新执行。": "The task was recovered from server records without running it again.",
+  "已找回此前提交的任务，未重复执行。": "The previously submitted task was recovered without running it again.",
+  "要基于更新后的文件重新执行，请点击「新会话」，再选择资料并开始任务。": "To run again using updated files, click New session, select the materials and start a task.",
+  "任务提交结果尚不确定：{error}。可核对服务器记录，或明确重试相同请求。": "The submission result is uncertain: {error}. Check server records or explicitly retry the same request.",
+  "正在提交新任务；此前不确定的提交仍可在执行历史中核对。": "Submitting a new task; the earlier uncertain submission can still be checked in task history.",
+  "任务恢复记录无法核对，请刷新执行历史。": "Recovery records could not be validated. Refresh the task history.",
+  "浏览器无法生成安全的任务恢复标识，请使用支持安全上下文的浏览器。": "This browser cannot generate a secure recovery ID. Use a browser with secure-context support."
+};
 const RISK_PHRASE = "我明白，将由持证人员签认";
 const confirmedMessage = (text) => String(text || "").trim() === RISK_PHRASE;
 const TERMINAL = new Set(["completed", "succeeded", "failed", "cancelled", "interrupted"]);
@@ -81,13 +98,136 @@ export function createAgentWorkbench(deps) {
     contextData: null, taskRows: [], eventRows: [], subtasks: new Map(), packingResults: new Map(), modelConfig: null, writeGateReason: null, sourceEvidence: null, modelInterpretationText: null,
     engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, engineeringStatus: null, pendingPlanning: null, terminalNotice: false, experts: [],
     excelJobs: new Map(), excelActions: new Map(), excelLoading: false, excelError: "", excelTruncated: false, excelEpoch: 0,
-    opening: false, submitting: false, cancelling: false, modelBusy: false, modelConfigured: false, disposed: false };
+    opening: false, submitting: false, cancelling: false, modelBusy: false, modelConfigured: false, disposed: false,
+    pendingSubmission: null, submissionScope: "", submissionRecovery: "", recoveringSubmission: false, submissionOutcome: null };
   let saved = { lastRoot: "", workspaces: {} }, timer = null, controller = null, started = false;
   let excelTimer = null;
+  let submissionI18n = null, pendingSubmissions = [];
+  const crypto = deps.crypto || (win.crypto?.subtle ? win.crypto : globalThis.crypto);
+  const validPending = (item) => object(item) && /^turn-[a-f0-9]{32}$/.test(item.key || "") && HASH.test(item.scope || "")
+    && HASH.test(item.fingerprint || "") && (item.after_turn === null || typeof item.after_turn === "string" && ID.test(item.after_turn))
+    && Number.isSafeInteger(item.created_at) && item.created_at > 0;
+  const submissionMetadata = (item) => ({ key: item.key, scope: item.scope, fingerprint: item.fingerprint, after_turn: item.after_turn, created_at: item.created_at });
+  try {
+    const raw = storage.getItem(SUBMISSION_KEY);
+    const value = raw && raw.length <= 32 * 1024 ? JSON.parse(raw) : null;
+    if (Array.isArray(value)) { pendingSubmissions = value.filter(validPending).slice(-32).map(submissionMetadata); persistSubmissions(); }
+  } catch (_) { /* Recovery metadata is optional; no request text or permission is stored. */ }
   try { const value = JSON.parse(storage.getItem(STORE_KEY) || "null"); if (object(value) && object(value.workspaces)) saved = value; } catch (_) { /* Storage is optional. */ }
   function persist() { try { storage.setItem(STORE_KEY, JSON.stringify(saved)); } catch (_) { /* Storage may be disabled. */ } }
   function record() { return state.workspace && saved.workspaces[state.workspace.id]; }
   function sessionRecord() { return record() && record().sessions.find((item) => item.id === state.session); }
+  function persistSubmissions() { try { storage.setItem(SUBMISSION_KEY, JSON.stringify(pendingSubmissions.slice(-32).map(submissionMetadata))); } catch (_) { /* In-memory explicit retry remains available. */ } }
+  function actorScope() { return JSON.stringify([state.capabilities?.identity?.mode || "undeclared", state.capabilities?.identity?.user_id || ""]); }
+  function submissionCurrent(scope) {
+    return current(scope.epoch) && scope.workspaceEpoch === state.workspaceEpoch && scope.workspace === state.workspace?.id
+      && scope.session === state.session && scope.actor === actorScope();
+  }
+  function submissionSnapshot() { return { epoch: state.epoch, workspaceEpoch: state.workspaceEpoch, workspace: state.workspace?.id, session: state.session, actor: actorScope() }; }
+  async function digest(value) {
+    if (!crypto?.subtle || !crypto?.getRandomValues) throw new Error(t("浏览器无法生成安全的任务恢复标识，请使用支持安全上下文的浏览器。"));
+    const bytes = new TextEncoder().encode(JSON.stringify(value));
+    return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
+  }
+  // Fixed request projection includes every UI request field. The server adds
+  // actor receipts/defaults and captures packing hashes, none of which the UI sent.
+  function submissionRequest(value) {
+    return { workspace: value.workspace, session_id: value.session_id, message: value.message, locale: value.locale || "zh-CN",
+      mode: value.mode || "model", sandbox: value.sandbox || "read-only", files: value.files || [],
+      engineering: (value.engineering || []).map(item => ({ kind: item.kind, project_id: item.project_id, revision: item.revision,
+        source_sha256: item.source_sha256 ?? null, inputs_sha256: item.inputs_sha256, confirmed_solid: item.confirmed_solid === true })),
+      planning_action: value.planning_action || "inspect", packing_sources: (value.packing_sources || []).map(item => ({ source: item.source })),
+      expert_id: value.expert_id || "", risk_confirmation: value.risk_confirmation || "" };
+  }
+  async function scopeDigest(scope) { return digest([win.location.origin, scope.actor, scope.workspace, scope.session]); }
+  function clearSubmissionView() { state.pendingSubmission = null; state.submissionScope = ""; state.submissionRecovery = ""; state.recoveringSubmission = false; paintSubmissionRecovery(); }
+  function consumeSubmission(item) {
+    pendingSubmissions = pendingSubmissions.filter(row => row.key !== item.key); persistSubmissions();
+    if (state.pendingSubmission?.key === item.key) { state.pendingSubmission = null; state.submissionRecovery = ""; paintSubmissionRecovery(); }
+  }
+  function paintSubmissionRecovery() {
+    if (win.CBI18n && submissionI18n !== win.CBI18n) { submissionI18n = win.CBI18n; win.CBI18n.add(SUBMISSION_MESSAGES); }
+    let panel = $("agentSubmissionRecovery");
+    if (!panel) {
+      panel = node("div", undefined, "notice warning"); panel.id = "agentSubmissionRecovery"; panel.setAttribute("aria-live", "polite");
+      const text = node("p"); text.id = "agentSubmissionRecoveryText";
+      const hint = node("p"); hint.id = "agentSubmissionRecoveryHint";
+      const button = node("button"); button.id = "agentRecoverSubmission"; button.type = "button";
+      button.addEventListener("click", () => recoverSubmission()); panel.append(text, hint, button); $("agentTaskForm").appendChild(panel);
+    }
+    panel.hidden = !state.pendingSubmission;
+    $("agentSubmissionRecoveryText").textContent = t(state.submissionRecovery || "上次提交结果尚不确定。相同请求重试会沿用原标识；修改内容、资料或权限会作为新任务。");
+    $("agentSubmissionRecoveryHint").textContent = t("要基于更新后的文件重新执行，请点击「新会话」，再选择资料并开始任务。");
+    $("agentRecoverSubmission").textContent = t(state.recoveringSubmission ? "正在核对已提交任务…" : "核对已提交任务");
+    $("agentRecoverSubmission").disabled = state.opening || state.submitting || state.recoveringSubmission || !!active();
+  }
+  async function bindSubmission() {
+    const scope = submissionSnapshot(), hash = await scopeDigest(scope);
+    if (!submissionCurrent(scope)) return;
+    state.submissionScope = hash;
+    state.pendingSubmission = pendingSubmissions.filter(item => item.scope === hash).at(-1) || null;
+    state.submissionRecovery = state.pendingSubmission ? "已保留上次提交的恢复标识。这里只读取服务器记录，不会自动执行任务或恢复写入授权。" : "";
+    paintSubmissionRecovery();
+  }
+  function validRecoveryPage(data, scope, cursor) {
+    return object(data) && (data.workspace === undefined || data.workspace === scope.workspace)
+      && (data.session_id === undefined || data.session_id === scope.session) && Array.isArray(data.turns) && data.turns.length <= 100
+      && data.turns.every(item => object(item) && ID.test(idOf(item)) && (!item.session_id || item.session_id === scope.session))
+      && (data.next_cursor == null || typeof data.next_cursor === "string" && data.next_cursor.length > 0 && data.next_cursor.length <= 2048 && data.next_cursor !== cursor);
+  }
+  async function recoveryPage(scope, cursor = null) {
+    const query = new URLSearchParams({ workspace: scope.workspace, session_id: scope.session, limit: "100" }); if (cursor) query.set("cursor", cursor);
+    const data = await request("/api/agent/turns?" + query);
+    if (!validRecoveryPage(data, scope, cursor)) throw new Error(t("任务恢复记录无法核对，请刷新执行历史。"));
+    return data;
+  }
+  async function recoverSubmission() {
+    const item = state.pendingSubmission; if (!item || state.submitting || state.recoveringSubmission || active()) return false;
+    const scope = submissionSnapshot(); state.recoveringSubmission = true; paintSubmissionRecovery();
+    try {
+      let cursor = null, boundaryFound = item.after_turn === null, finished = false; const matches = [], seen = new Set();
+      for (let page = 0; page < 5; page++) {
+        const data = await recoveryPage(scope, cursor);
+        if (!submissionCurrent(scope) || state.pendingSubmission !== item) return false;
+        for (const turn of data.turns) {
+          if (idOf(turn) === item.after_turn) { boundaryFound = true; finished = true; break; }
+          if (seen.has(idOf(turn))) throw new Error(t("任务恢复记录无法核对，请刷新执行历史。")); seen.add(idOf(turn));
+          const req = turn.request, actor = state.capabilities?.identity?.user_id;
+          if (object(req) && req.workspace === scope.workspace && req.session_id === scope.session
+            && (!actor || (turn.actor_id || req.actor_id) === actor) && typeof req.message === "string"
+            && Array.isArray(req.files) && Array.isArray(req.engineering) && Array.isArray(req.packing_sources)
+            && await digest(submissionRequest(req)) === item.fingerprint) matches.push(idOf(turn));
+        }
+        if (finished || !data.next_cursor) { finished = true; break; }
+        cursor = data.next_cursor;
+      }
+      if (!submissionCurrent(scope) || state.pendingSubmission !== item) return false;
+      if (boundaryFound && finished && matches.length === 1) {
+        consumeSubmission(item); sessionRecord().turn = matches[0]; persist();
+        const opening = showTurn(matches[0]), viewEpoch = state.epoch;
+        await opening;
+        if (!current(viewEpoch) || idOf(state.turn) !== matches[0]) return false;
+        if (state.workspace?.id === scope.workspace && state.session === scope.session && actorScope() === scope.actor) {
+          state.submissionOutcome = "recovered";
+          if (TERMINAL.has(state.turn?.status)) terminalNotice();
+          else notice(t("任务已从服务器记录恢复，未重新执行。") + " " + t("要基于更新后的文件重新执行，请点击「新会话」，再选择资料并开始任务。"));
+        }
+        return true;
+      }
+      state.submissionRecovery = matches.length > 1 ? "存在多个相同请求，无法确认本次提交。请在执行历史中核对，页面不会自动重发。"
+        : "尚未找到可唯一确认的任务。可继续核对记录；重新填写完全相同的请求后，明确发送才会沿用原标识。";
+    } catch (error) {
+      if (submissionCurrent(scope) && state.pendingSubmission === item) {
+        state.submissionRecovery = "已保留上次提交的恢复标识。这里只读取服务器记录，不会自动执行任务或恢复写入授权。";
+        notice(t("恢复记录读取失败：{error}", { error: error.message }), true);
+      }
+    } finally {
+      if (state.workspaceEpoch === scope.workspaceEpoch && state.workspace?.id === scope.workspace && state.session === scope.session && actorScope() === scope.actor) {
+        state.recoveringSubmission = false; paintSubmissionRecovery();
+      }
+    }
+    return false;
+  }
   function notice(text, error = false, terminal = false) { state.terminalNotice = terminal; $("agentNotice").textContent = text; $("agentNotice").className = "notice" + (error ? " error" : ""); }
   function turnStatus(turn) {
     return ["completed", "succeeded"].includes(turn?.status) && turn.result?.partial === true
@@ -95,7 +235,9 @@ export function createAgentWorkbench(deps) {
   }
   function terminalNotice() {
     notice(turnStatus(state.turn) + (state.turn.result?.partial === true && !["completed", "succeeded"].includes(state.turn.status)
-      ? t("，部分工作尚未完成。") : (win.CBI18n?.locale === "en" ? "." : "。")), state.turn.status === "failed", true);
+      ? t("，部分工作尚未完成。") : (win.CBI18n?.locale === "en" ? "." : "。")) + (state.submissionOutcome
+      ? " " + t(state.submissionOutcome === "replayed" ? "已找回此前提交的任务，未重复执行。" : "任务已从服务器记录恢复，未重新执行。")
+        + " " + t("要基于更新后的文件重新执行，请点击「新会话」，再选择资料并开始任务。") : ""), state.turn.status === "failed", true);
   }
   function engineeringStatus(key, values = {}, detail = "") {
     state.engineeringStatus = { key, values, detail };
@@ -115,6 +257,7 @@ export function createAgentWorkbench(deps) {
   const post = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   function stopPolling() { if (timer !== null) unschedule(timer); timer = null; if (controller) controller.abort(); controller = null; }
   function resetView({ keepHistory = false } = {}) {
+    state.submissionOutcome = null;
     state.subtasks.clear();
     state.packingResults.clear();
     $("agentPackingSource").value = "";
@@ -163,9 +306,12 @@ export function createAgentWorkbench(deps) {
     paintEngineering();
     paintExcelJobs();
     updateExcelActions();
+    paintSubmissionRecovery();
   }
   function paintCapabilities(caps) {
+    const previousActor = actorScope();
     state.capabilities = caps;
+    if (previousActor !== actorScope()) clearSubmissionView();
     const identity = caps.identity || {};
     $("agentIdentity").textContent = identity.mode === "named_single_user_instance"
       ? t("当前身份：{user} · 独立用户与工程实例（非共享多人服务）", { user: identity.user_id })
@@ -405,6 +551,7 @@ export function createAgentWorkbench(deps) {
     cancelVoice();
     clearEngineering();
     resetView(); const epoch = state.epoch, requestId = ++state.workspaceEpoch;
+    clearSubmissionView();
     clearExcel();
     state.sessionListEpoch += 1; state.sessionsLoading = false; state.nextSessionCursor = null; state.sessionHistoryMessage = null;
     state.opening = true; controls(); paintSessionHistory(); notice(t("正在打开工程文件夹…"));
@@ -437,8 +584,11 @@ export function createAgentWorkbench(deps) {
       paintSessions(); notice(t("工程文件夹已打开。可勾选资料后开始任务。"));
       await Promise.all([loadFiles(), loadSessions({ preferServer: !hasLocalSessions }), loadEngineering(), loadExcelJobs()]);
       if (!current(epoch) || requestId !== state.workspaceEpoch) return;
+      await bindSubmission();
+      if (!current(epoch) || requestId !== state.workspaceEpoch) return;
       await loadTurns();
-      if (restoreTurn && current(epoch) && sessionRecord()?.turn) await showTurn(sessionRecord().turn);
+      const recovered = restoreTurn && current(epoch) && state.pendingSubmission ? await recoverSubmission() : false;
+      if (!recovered && restoreTurn && current(epoch) && sessionRecord()?.turn) await showTurn(sessionRecord().turn);
     } catch (error) { if (current(epoch)) notice(t("打开失败：") + error.message, true); }
     finally { if (requestId === state.workspaceEpoch) { state.opening = false; controls(); } }
   }
@@ -485,8 +635,10 @@ export function createAgentWorkbench(deps) {
     cancelVoice();
     clearEngineering();
     resetView(); const epoch = state.epoch; state.session = id; record().current = id; persist(); paintSessions(); $("agentMessage").value = ""; $("agentRiskConfirmation").value = ""; controls();
+    clearSubmissionView(); await bindSubmission(); if (!current(epoch)) return;
     notice(t("已切换会话；此前启动的任务继续由服务端管理。"));
-    await loadTurns(); if (current(epoch) && sessionRecord()?.turn) await showTurn(sessionRecord().turn);
+    await loadTurns(); const recovered = current(epoch) && state.pendingSubmission ? await recoverSubmission() : false;
+    if (!recovered && current(epoch) && sessionRecord()?.turn) await showTurn(sessionRecord().turn);
   }
   function paintContext(data) {
     state.contextData = data;
@@ -1117,20 +1269,43 @@ export function createAgentWorkbench(deps) {
     const packingSource = $("agentPackingSource").value;
     const message = $("agentMessage").value.trim(); resetView({ keepHistory: true }); state.submitting = true; controls();
     const epoch = state.epoch;
+    const scope = submissionSnapshot(); let submitted = false;
     notice(t("正在提交任务…"));
     try {
       if (!(await verifyEngineering(epoch))) return;
+      if (!submissionCurrent(scope)) return;
       const payload = { workspace: state.workspace.id, session_id: state.session, message, locale: win.CBI18n?.locale || "zh-CN", mode: $("agentMode").value, sandbox: $("agentSandbox").value, files: [...state.selected],
         ...(state.capabilities?.features?.packing_replan === true ? { packing_sources: packingSource && state.selected.has(packingSource) ? [{ source: packingSource }] : [] } : {}),
         ...(state.capabilities?.features?.saved_planning === true ? { planning_action: $("agentMode").value === "steps" && $("agentPlanningRecalculate")?.checked && state.engineeringRows.some(row => row.selected && row.kind === "saved_planning") ? "calculate" : "inspect" } : {}),
         expert_id: $("agentExpert").value, risk_confirmation: $("agentRiskConfirmation").value.trim(), engineering: state.engineeringRows.filter((row) => row.selected).map((row) => ({ ...row.snapshot, confirmed_solid: row.kind === "cad_section" && row.confirmed })) };
-      const data = await request("/api/agent/turns", post(payload));
-      if (!current(epoch)) return;
-      if (!data.turn_id || data.session_id !== state.session) throw new Error(t("任务响应缺少本会话的执行标识"));
+      // Consume this attempt's acknowledgement before waiting. Neither recovery
+      // metadata nor a late response can restore a permission/confirmation grant.
+      $("agentRiskConfirmation").value = ""; if (confirmedMessage(message)) $("agentMessage").value = ""; controls();
+      const [scopeHash, fingerprint] = await Promise.all([scopeDigest(scope), digest(submissionRequest(payload))]);
+      if (!submissionCurrent(scope)) return;
+      let pending = pendingSubmissions.find(item => item.scope === scopeHash && item.fingerprint === fingerprint);
+      if (!pending) {
+        const before = await recoveryPage(scope); if (!submissionCurrent(scope)) return;
+        const key = "turn-" + Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, "0")).join("");
+        pending = { key, scope: scopeHash, fingerprint, after_turn: before.turns.length ? idOf(before.turns[0]) : null, created_at: Date.now() };
+        if (state.pendingSubmission) notice(t("正在提交新任务；此前不确定的提交仍可在执行历史中核对。"));
+        pendingSubmissions.push(pending); pendingSubmissions = pendingSubmissions.slice(-32); persistSubmissions();
+      }
+      state.pendingSubmission = pending; state.submissionScope = scopeHash; state.submissionRecovery = ""; paintSubmissionRecovery();
+      submitted = true;
+      const data = await request("/api/agent/turns", post({ ...payload, idempotency_key: pending.key }));
+      if (!submissionCurrent(scope)) return;
+      if (!ID.test(data.turn_id || "") || data.session_id !== scope.session) throw new Error(t("任务响应缺少本会话的执行标识"));
+      consumeSubmission(pending);
       sessionRecord().turn = data.turn_id; persist(); state.turn = { turn_id: data.turn_id, status: "queued" };
-      $("agentMessage").value = ""; $("agentRiskConfirmation").value = ""; notice(t("任务已提交，正在接收执行事件。")); await poll();
-    } catch (error) { if (current(epoch)) notice(t("任务提交失败：") + error.message, true); }
-    finally { if (current(epoch)) { state.submitting = false; controls(); } }
+      state.submissionOutcome = data.replayed === true ? "replayed" : null;
+      if ($("agentMessage").value.trim() === message) $("agentMessage").value = "";
+      notice(data.replayed === true ? t("已找回此前提交的任务，未重复执行。") + " " + t("要基于更新后的文件重新执行，请点击「新会话」，再选择资料并开始任务。")
+        : t("任务已提交，正在接收执行事件。")); await poll();
+    } catch (error) { if (submissionCurrent(scope)) notice(submitted
+      ? t("任务提交结果尚不确定：{error}。可核对服务器记录，或明确重试相同请求。", { error: error.message })
+      : t("任务提交失败：") + error.message, true); }
+    finally { if (submissionCurrent(scope)) { state.submitting = false; controls(); } }
   }
   async function cancel() {
     if (!active() || state.cancelling || $("agentCancel").hidden) return;
@@ -1243,7 +1418,7 @@ export function createAgentWorkbench(deps) {
     if (saved.lastRoot && state.capabilities?.available === true) await openWorkspace(saved.lastRoot);
   }
   function dispose() { win.removeEventListener("cb:languagechange", languageChanged); cancelVoice(); state.disposed = true; state.epoch += 1; stopPolling(); stopExcelPolling(); }
-  return { state, start, openWorkspace, loadFiles, loadTurns, loadSessions, loadEngineering, inspectEngineering, loadExcelJobs, recalculateArtifact, cancelExcelJob, changeSession, showTurn, send, cancel, poll, saveModel, dispose };
+  return { state, start, openWorkspace, loadFiles, loadTurns, loadSessions, loadEngineering, inspectEngineering, loadExcelJobs, recalculateArtifact, cancelExcelJob, changeSession, showTurn, send, recoverSubmission, cancel, poll, saveModel, dispose };
 }
 
 if (typeof document !== "undefined" && document.getElementById("agentWorkbench")) {

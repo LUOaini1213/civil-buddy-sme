@@ -54,6 +54,7 @@ EXTRA = (
     "requirements-unified-windows-py311-planning.lock",
     "requirements-unified-windows-py311-speech-planning.lock",
     "scripts/check_optional_preparation.py", "docs/voice-input.md",
+    "scripts/instance_backup.py", "docs/civil-buddy/instance-backup.md",
     "docs/civil-buddy/architecture/implementation.md",
     "docs/civil-buddy/acceptance/2026-09-21.json",
     "docs/civil-buddy/acceptance/2026-09-30-practical.json",
@@ -307,8 +308,10 @@ py -3.11 -m venv .venv
 每次传最初的 `--state-root` 基础目录；启动器会追加 `accounts/<user>/projects/<root-hash>/`，
 不要把终端 `State:` 显示的叶目录再次传入。若旧实例最初用了 `runtime/unified`，新版必须继续
 指向旧程序目录中该基础目录的绝对路径，不能复制到新版目录后直接重新绑定。
-个人完整备份需先停止两个服务，再复制整个工程与状态基础目录到新的空备份目录；
-恢复只允许原绝对路径且目标不存在或为空，遇到非空目录拒绝覆盖。交接指南提供可执行步骤。
+个人完整备份需先停止两个服务，再使用 `scripts/instance_backup.py backup` 保存工程和
+对应实例状态；`verify` 核对完整清单及逐文件哈希，`restore` 只写入原归属、原绝对路径
+下不存在或为空的目标。操作独占启动器和 Rust 主机锁，遇到非空目录拒绝覆盖。
+具体命令、范围和限制见 `docs/civil-buddy/instance-backup.md`。
 完整个人备份含归属数据库，不能交给同事；同事使用支持导入的业务项目包建立新副本，
 这不会迁移 Rust Agent 的完整执行历史，也不会继承签认。
 
