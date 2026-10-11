@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import socket
 import subprocess
 import sys
@@ -119,7 +120,8 @@ class PreflightTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertEqual(report.missing_required, ["pydantic>=2.0.0", "uvicorn>=0.27.0"])
         text = preflight.format_report(report, self.root)
-        self.assertIn("& '" + str(self.python) + "' -m pip install", text)
+        self.assertIn(preflight.manual_install_command(str(self.python), [self.root / "requirements.txt",
+                                                                        self.root / "requirements-documents.txt"]), text)
         self.assertIn("requirements-documents.txt", text)
 
     def test_managed_runtime_hints_rebuild_and_isolate_optional_dependencies(self):
@@ -128,12 +130,87 @@ class PreflightTests(unittest.TestCase):
         report = preflight.Report(python=str(managed), missing_required=["pydantic>=2.0.0"],
                                   missing_optional={"CAD": ["ezdxf"], "local voice": ["faster_whisper"]})
         text = preflight.format_report(report, self.root)
-        self.assertIn("prepare-unified-workbench.bat' --rebuild", text)
-        self.assertIn("separate manual environment", text)
-        self.assertIn("requirements-asr.txt", text)
+        if os.name == "nt":
+            self.assertIn("prepare-unified-workbench.bat' --rebuild", text)
+            self.assertIn("prepare-unified-workbench.bat' --profile speech", text)
+            self.assertIn("separate manual environment", text)
+            self.assertNotIn("requirements-asr.txt", text)
+            self.assertNotIn("-m pip install", text)
+        else:
+            self.assertIn("requirements-asr.txt", text)
+            self.assertIn("-m pip install", text)
+            self.assertNotIn("prepare-unified-workbench.bat", text)
         self.assertIn("requirements-cad.txt", text)
-        self.assertNotIn("-m pip install", text)
         self.assertFalse(managed.exists())
+
+    def test_resource_planning_and_java_formats_are_independent_optional_capabilities(self):
+        self.assertEqual(preflight.OPTIONAL["resource planning"],
+                         ("requirements-planning.txt", ("ortools", "networkx", "defusedxml")))
+        self.assertEqual(preflight.OPTIONAL["Java project formats"],
+                         ("requirements-planning.txt", ("mpxj", "jpype")))
+        data = self.data()
+        data["optional"].update(mpxj=False, jpype=False)
+        report, _ = self.probe(data)
+        self.assertTrue(report.ok)
+        self.assertEqual(report.missing_optional, {"Java project formats": ["mpxj", "jpype"]})
+        self.assertNotIn("[OPTIONAL] resource planning:", preflight.format_report(report, self.root))
+        data = self.data()
+        data["optional"].update(ortools=False, networkx=False, defusedxml=False)
+        report, _ = self.probe(data)
+        self.assertTrue(report.ok)
+        self.assertEqual(report.missing_optional, {"resource planning": ["ortools", "networkx", "defusedxml"]})
+
+    def test_managed_speech_and_resource_planning_offer_profiles_without_manual_env_requirement(self):
+        managed = self.root / ".civil-buddy-runtime/py311/0123456789abcdef/Scripts/python.exe"
+        report = preflight.Report(python=str(managed), missing_optional={"resource planning": ["ortools"],
+                                                                         "local voice": ["faster_whisper"]})
+        text = preflight.format_report(report, self.root)
+        if os.name == "nt":
+            self.assertIn("prepare-unified-workbench.bat' --profile planning", text)
+            self.assertIn("prepare-unified-workbench.bat' --profile speech", text)
+            self.assertIn("--profile speech-planning", text)
+            self.assertIn("does not download a voice model", text)
+            self.assertNotIn("separate manual environment", text)
+            self.assertNotIn("-m pip install", text)
+        else:
+            self.assertIn("requirements-planning.txt", text)
+            self.assertIn("requirements-asr.txt", text)
+            self.assertIn("-m pip install", text)
+            self.assertNotIn("--profile", text)
+            self.assertNotIn("prepare-unified-workbench.bat", text)
+        self.assertIn("isolated native imports (xxhash, pydantic_core, numpy) only", text)
+        self.assertIn("Optional native libraries/models and live service health are not verified", text)
+        self.assertEqual(preflight.NATIVE_IMPORTS, ("xxhash", "pydantic_core", "numpy"))
+        self.assertFalse(managed.exists())
+
+    def test_java_cad_and_engineering_stay_separate_from_managed_profiles(self):
+        managed = self.root / ".civil-buddy-runtime/py311/0123456789abcdef/Scripts/python.exe"
+        report = preflight.Report(python=str(managed), missing_optional={"Java project formats": ["jpype"],
+                                                                         "CAD": ["ezdxf"],
+                                                                         "engineering": ["ifcopenshell"]})
+        text = preflight.format_report(report, self.root)
+        for filename in ("requirements-planning.txt", "requirements-cad.txt", "requirements-engineering.txt"):
+            self.assertIn(filename, text)
+        self.assertNotIn("--profile planning", text)
+        self.assertNotIn("--profile speech", text)
+        if os.name == "nt":
+            self.assertIn("separate manual environment", text)
+            self.assertIn("advanced launcher", text)
+            self.assertNotIn("-m pip install", text)
+        else:
+            self.assertIn("-m pip install", text)
+            self.assertNotIn("prepare-unified-workbench.bat", text)
+
+    def test_posix_manual_command_round_trips_interpreter_and_requirement_paths(self):
+        python = str(self.root / "manual user's env" / "bin/python")
+        requirements = [self.root / "requirements planning.txt", self.root / "another user's file.txt"]
+        command = preflight.manual_install_command(python, requirements, windows=False)
+        self.assertEqual(shlex.split(command), [python, "-m", "pip", "install", "-r", str(requirements[0]),
+                                               "-r", str(requirements[1])])
+        self.assertFalse(command.startswith("& "))
+        windows = preflight.manual_install_command(python, requirements, windows=True)
+        self.assertTrue(windows.startswith("& "))
+        self.assertIn("user''s", windows)
 
     def test_adjacent_or_lexically_external_environment_keeps_manual_install_guidance(self):
         for python in (self.root / ".civil-buddy-runtime-other/Scripts/python.exe",

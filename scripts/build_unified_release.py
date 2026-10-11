@@ -50,6 +50,10 @@ EXTRA = (
     "scripts/prepare_unified_workbench.py", "scripts/prepare-unified-workbench.bat",
     "scripts/excel-desktop-broker.ps1",
     "scripts/start-unified-workbench.bat", "requirements-unified-windows-py311.lock",
+    "requirements-unified-windows-py311-speech.lock",
+    "requirements-unified-windows-py311-planning.lock",
+    "requirements-unified-windows-py311-speech-planning.lock",
+    "scripts/check_optional_preparation.py", "docs/voice-input.md",
     "docs/civil-buddy/architecture/implementation.md",
     "docs/civil-buddy/acceptance/2026-09-21.json",
     "docs/civil-buddy/acceptance/2026-09-30-practical.json",
@@ -201,6 +205,25 @@ Windows 深目录可能导致 DLL 加载失败；遇到加载提示，应核对�
 或将新的程序包解压到另一个短目录并重新准备，保留原环境、工程和状态。
 准备失败可以重试；新的准备未成功前保留原有已准备环境的选择。
 
+本地语音和资源排程可通过固定依赖方案准备。例如，需要两种能力时执行：
+
+```powershell
+.\\prepare-unified-workbench.bat --profile speech-planning
+.\\start-unified-workbench.bat
+```
+
+`core` 是基础、文档和物流；`speech` 增加 CPU 本地语音；`planning` 增加 CP-SAT
+资源排程、图算法和安全 XML 读取；`speech-planning` 包含后两种能力。每个方案都有
+完整的固定版本和 wheel 哈希锁，核心依赖版本不变。切换方案会使用另一份专用环境，
+不会向原环境补装。依赖、原生库及固定求解器检查通过后才选取新环境。
+省略 `--profile` 时，新包采用 `core`，已准备的包沿用当前方案；`--rebuild` 也沿用
+已知方案。准备记录损坏时，应显式指定 `--rebuild --profile <所需方案>`。
+如需切回基础环境，使用 `--profile core`。离线准备的 wheel 目录需包含所选方案的全部文件。
+
+依赖准备不会下载或加载语音模型。启动后在语音入口显式准备模型，核对转录文本后再发送。
+准备失败后，再次点击语音会重新检查并允许重试。CAD、IFC、OCR 和 Java 项目格式等
+其他可选能力仍需单独配置，以上方案不包含其完整运行环境。
+
 如已准备环境的依赖、解释器或准备记录损坏，关闭使用该环境的工作台，再运行：
 
 ```powershell
@@ -294,10 +317,11 @@ py -3.11 -m venv .venv
 原 Python CLI `python -m packing_assistant.civil` 和 `start-workbench.bat` 保留。
 旧启动器可能按原流程准备本地 `.venv`；统一入口不调用该安装流程。两种入口不要使用同一个端口同时运行。
 物流数字 PDF 缺依赖时会在预检单独提示；基础服务能启动不代表扫描件可识别。
-CAD、工程计算、排程、语音依赖分别见 `requirements-cad.txt`、`requirements-engineering.txt`、
-`requirements-planning.txt`、`requirements-asr.txt`。需要这些能力时，请另建人工配置的虚拟环境，
+本地语音及资源排程可使用前述固定方案。其他 CAD、工程计算、项目格式等依赖见
+`requirements-cad.txt`、`requirements-engineering.txt`、`requirements-planning.txt`。需要其他
+可选能力时，请另建人工配置的虚拟环境，
 安装基础、文档和物流依赖，再安装所需可选依赖，并将该环境的解释器传给统一启动器的 `--python`。
-不要给 `.civil-buddy-runtime` 中的发布包环境补装依赖；该环境只用于固定版本的基础能力。
+不要直接给 `.civil-buddy-runtime` 中的发布包环境补装依赖；更换能力时重新选择受支持方案。
 可选包安装完成不代表 CAD 原生库、工程求解器或语音模型已通过实际运行验收。
 Java/JVM、Office 或 OCR 引擎均不随包提供。
 

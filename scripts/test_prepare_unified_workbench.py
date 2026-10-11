@@ -36,19 +36,26 @@ class PreparationTests(unittest.TestCase):
         self.root = Path(self.temp.name) / "中文 package with spaces"
         self.root.mkdir()
         (self.root / setup.LOCK_NAME).write_bytes(locked())
+        for profile, version in (("speech", "2.0.0"), ("planning", "3.0.0"), ("speech-planning", "4.0.0")):
+            (self.root / setup.PROFILE_LOCKS[profile]).write_bytes(locked(version))
         (self.root / "scripts").mkdir()
         (self.root / "scripts/start_unified_workbench.py").write_text("# never executed fixture\n")
+        (self.root / "scripts/check_optional_preparation.py").write_text("# never executed native checker fixture\n")
         (self.root / "bin").mkdir()
         self.binary = self.root / "bin/civil-workbench.exe"
         self.binary.write_bytes(b"unexecuted binary fixture")
         self.base = self.root / "base python.exe"
         self.base.write_bytes(b"unexecuted interpreter fixture")
         self.calls = []
+        self.command_options = []
         self.fail_install = False
         self.fail_check = False
         self.wrong_inventory = False
         self.wrong_inventory_paths = set()
         self.preflight_ok = True
+        self.native_ok = True
+        self.native_result = None
+        self.native_failure_paths = set()
         self.preflight_calls = []
         self.output = io.StringIO()
         self.addCleanup(self.output.close)
@@ -68,6 +75,7 @@ class PreparationTests(unittest.TestCase):
 
     def command(self, args, root, **kwargs):
         self.calls.append(list(args))
+        self.command_options.append((list(args), dict(kwargs)))
         if setup.PROBE in args:
             return SimpleNamespace(returncode=0, stdout=json.dumps(self.info(args[0])).encode(), stderr=b"")
         if setup.INVENTORY_PROBE in args:
@@ -75,6 +83,14 @@ class PreparationTests(unittest.TestCase):
             if self.wrong_inventory or Path(args[0]) in self.wrong_inventory_paths:
                 data["example-package"] = "999.0.0"
             return SimpleNamespace(returncode=0, stdout=json.dumps(data).encode(), stderr=b"")
+        if str(self.root / "scripts/check_optional_preparation.py") in args:
+            if self.native_result is not None:
+                return self.native_result
+            profile = args[args.index("--profile") + 1]
+            passed = self.native_ok and Path(args[0]) not in self.native_failure_paths
+            return SimpleNamespace(returncode=0 if passed else 2,
+                                   stdout=json.dumps({"passed": passed, "profile": profile}).encode(),
+                                   stderr=b"private-native-output-not-shown")
         if "venv" in args:
             environment = Path(args[-1])
             (environment / "Scripts").mkdir(exist_ok=True)
@@ -124,6 +140,37 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(json.loads(self.selected_bytes())["lock_sha256"], digest)
         self.assertNotEqual(self.preflight_calls[-1]["port"], 8765)
         self.assertFalse((self.root / "demo/data").exists())
+
+    def test_dependency_commands_use_fixed_target_only_after_build_validation(self):
+        selected = self.prepare(profile="speech-planning")
+        dependency_calls = [(args, options) for args, options in self.command_options
+                            if "install" in args or "check" in args or setup.INVENTORY_PROBE in args]
+        self.assertTrue(dependency_calls)
+        self.assertTrue(all(options.get("windows_x64") is True for args, options in dependency_calls))
+        for args, options in self.command_options:
+            if setup.PROBE in args or "venv" in args or str(self.root / "scripts/check_optional_preparation.py") in args:
+                self.assertFalse(options.get("windows_x64", False))
+        first_install = next(index for index, args in enumerate(self.calls) if "install" in args)
+        self.assertTrue(any(args[0] == str(selected) and setup.PROBE in args for args in self.calls[:first_install]))
+        self.command_options.clear()
+        self.assertEqual(setup.prepared_python(self.root), selected)
+        inventory_index = next(index for index, pair in enumerate(self.command_options) if setup.INVENTORY_PROBE in pair[0])
+        self.assertTrue(any(setup.PROBE in args and not options.get("windows_x64", False)
+                            for args, options in self.command_options[:inventory_index]))
+        self.assertIs(self.command_options[inventory_index][1]["windows_x64"], True)
+
+    def test_inventory_does_not_override_an_unverified_interpreter_build(self):
+        selected = self.prepare()
+        for changed in ({"build_platform": "win-arm64"}, {"bits": 32}, {"platform": "linux"}):
+            data = {**self.info(str(selected)), **changed}
+            self.command_options.clear()
+            with self.subTest(changed=changed), patch.object(setup, "run_command", return_value=SimpleNamespace(
+                    returncode=0, stdout=json.dumps(data).encode(), stderr=b"")) as command:
+                with self.assertRaisesRegex(setup.PreparationError, "CPython 3.11"):
+                    setup.check_inventory(selected, self.root, locked())
+            self.assertEqual(command.call_count, 1)
+            self.assertIn(setup.PROBE, command.call_args.args[0])
+            self.assertFalse(command.call_args.kwargs.get("windows_x64", False))
 
     def test_ready_environment_reuses_without_venv_creation_or_install(self):
         self.prepare()
@@ -306,13 +353,20 @@ class PreparationTests(unittest.TestCase):
         previous_files = self.environment_files(previous.parents[1])
         selection = self.root / setup.RUNTIME_NAME / "selected.json"
         selection.write_bytes(b"not valid JSON\n")
+        before = self.files()
+        for rebuild in (False, True):
+            self.calls.clear()
+            with self.subTest(rebuild=rebuild), self.assertRaises(setup.PreparationError):
+                self.prepare(rebuild=rebuild)
+            self.assertEqual(before, self.files())
+            self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
         self.fail_install = True
         with self.assertRaises(setup.PreparationError):
-            self.prepare(rebuild=True)
+            self.prepare(rebuild=True, profile="core")
         self.assertEqual(selection.read_bytes(), b"not valid JSON\n")
         self.assertEqual(previous_files, self.environment_files(previous.parents[1]))
         self.fail_install = False
-        selected = self.prepare(rebuild=True)
+        selected = self.prepare(rebuild=True, profile="core")
         self.assertEqual(setup.prepared_python(self.root), selected)
         self.assertEqual(previous_files, self.environment_files(previous.parents[1]))
 
@@ -547,8 +601,258 @@ class PreparationTests(unittest.TestCase):
                     self.prepare()
                 self.assertFalse((self.root / setup.RUNTIME_NAME).exists())
 
+    def test_each_profile_uses_fixed_lock_and_typed_identity(self):
+        previous = None
+        for profile, filename in setup.PROFILE_LOCKS.items():
+            self.calls.clear()
+            selected = self.prepare(profile=profile)
+            data = json.loads(self.selected_bytes())
+            source = (self.root / filename).read_bytes()
+            self.assertEqual(data["profile"], profile)
+            self.assertEqual(data["lock_sha256"], hashlib.sha256(source).hexdigest())
+            self.assertEqual((selected.parents[1] / "requirements.lock").read_bytes(), source)
+            for name in (setup.OWNER_NAME, "ready.json"):
+                self.assertEqual(json.loads((selected.parents[1] / name).read_bytes())["profile"], profile)
+            native = next(c for c in self.calls if str(self.root / "scripts/check_optional_preparation.py") in c)
+            self.assertEqual(native[0], str(selected))
+            self.assertEqual(native[-2:], ["--profile", profile])
+            self.assertIn("-I", native)
+            self.assertIn("-B", native)
+            install = next(c for c in self.calls if "install" in c)
+            self.assertIn("--require-hashes", install)
+            self.assertIn("--only-binary=:all:", install)
+            self.assertEqual(setup.prepared_python(self.root, profile=profile), selected)
+            if previous is not None:
+                self.assertTrue(previous.is_file())
+            previous = selected
+
+    def test_omitted_profile_preserves_optional_reuse_and_rebuild(self):
+        for profile in ("speech", "planning", "speech-planning"):
+            selected = self.prepare(profile=profile)
+            previous_files = self.environment_files(selected.parents[1])
+            before = self.selected_bytes()
+            self.calls.clear()
+            self.assertEqual(self.prepare(), selected)
+            self.assertEqual(before, self.selected_bytes())
+            self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+            rebuilt = self.prepare(rebuild=True)
+            self.assertNotEqual(rebuilt, selected)
+            self.assertEqual(json.loads(self.selected_bytes())["profile"], profile)
+            self.assertEqual(previous_files, self.environment_files(selected.parents[1]))
+            self.calls.clear()
+            self.assertEqual(self.prepare(), rebuilt)
+            self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+
+    def test_legacy_absent_profile_selects_only_core_and_remains_compatible(self):
+        selected = self.prepare()
+        environment = selected.parents[1]
+        selection = self.root / setup.RUNTIME_NAME / "selected.json"
+        for path in (selection, environment / setup.OWNER_NAME, environment / "ready.json"):
+            value = json.loads(path.read_bytes())
+            value.pop("profile")
+            setup.atomic_json(path, value)
+        before = self.files()
+        self.calls.clear()
+        self.assertEqual(setup.prepared_python(self.root), selected)
+        self.assertEqual(self.prepare(), selected)
+        self.assertEqual(before, self.files())
+        self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+        replacement = self.prepare(rebuild=True)
+        self.assertNotEqual(replacement, selected)
+        self.assertEqual(json.loads(self.selected_bytes())["profile"], "core")
+        self.assertTrue(selected.is_file())
+
+    def test_profile_metadata_rejects_unknown_null_or_mismatched_fields_without_downgrade(self):
+        selected = self.prepare(profile="speech")
+        original = json.loads(self.selected_bytes())
+        path = self.root / setup.RUNTIME_NAME / "selected.json"
+        for profile in (None, "", "unknown", "SPEECH", 123, [], {}, "../core", "core", "planning"):
+            setup.atomic_json(path, {**original, "profile": profile})
+            before = self.files()
+            self.calls.clear()
+            with self.subTest(profile=profile):
+                with patch.object(setup.subprocess, "call") as call:
+                    with self.assertRaises(setup.PreparationError):
+                        setup.launch(self.root, ["--check"])
+                    call.assert_not_called()
+                with self.assertRaises(setup.PreparationError):
+                    self.prepare()
+                with self.assertRaises(setup.PreparationError):
+                    self.prepare(rebuild=True)
+            self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+            self.assertEqual(before, self.files())
+        setup.atomic_json(path, {key: value for key, value in original.items() if key != "profile"})
+        with self.assertRaises(setup.PreparationError):
+            setup.prepared_python(self.root)
+        self.assertTrue(selected.is_file())
+
+    def test_explicit_profile_rebuild_recovers_unknown_selection_after_native_checks(self):
+        previous = self.prepare(profile="speech")
+        prior_files = self.environment_files(previous.parents[1])
+        path = self.root / setup.RUNTIME_NAME / "selected.json"
+        setup.atomic_json(path, {**json.loads(path.read_bytes()), "profile": None})
+        previous_selection = path.read_bytes()
+        self.native_ok = False
+        with self.assertRaisesRegex(setup.PreparationError, "native dependencies"):
+            self.prepare(rebuild=True, profile="planning")
+        self.assertEqual(path.read_bytes(), previous_selection)
+        candidate = Path(next(c[-1] for c in reversed(self.calls) if "venv" in c))
+        self.assertFalse((candidate / "ready.json").exists())
+        self.native_ok = True
+        selected = self.prepare(rebuild=True, profile="planning")
+        self.assertEqual(json.loads(self.selected_bytes())["profile"], "planning")
+        self.assertEqual(setup.prepared_python(self.root), selected)
+        self.assertEqual(prior_files, self.environment_files(previous.parents[1]))
+        self.assertTrue(candidate.is_dir(), "failed optional environments must remain available for diagnosis")
+
+    def test_native_failure_cannot_ready_candidate_or_start_selected_profile(self):
+        previous = self.prepare()
+        selection = self.selected_bytes()
+        self.native_ok = False
+        self.calls.clear()
+        with self.assertRaisesRegex(setup.PreparationError, "native dependencies") as error:
+            self.prepare(profile="speech-planning")
+        candidate = Path(next(c[-1] for c in self.calls if "venv" in c))
+        self.assertFalse((candidate / "ready.json").exists())
+        self.assertEqual(selection, self.selected_bytes())
+        self.assertTrue(previous.is_file())
+        self.assertNotIn("private-native-output", str(error.exception) + self.output.getvalue())
+        self.native_ok = True
+        optional = self.prepare(profile="speech")
+        self.native_failure_paths.add(optional)
+        before = self.files()
+        self.calls.clear()
+        with patch.object(setup.subprocess, "call") as call:
+            with self.assertRaisesRegex(setup.PreparationError, "native dependencies"):
+                setup.launch(self.root, ["--check"])
+            call.assert_not_called()
+        self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+        self.assertEqual(before, self.files())
+        replacement = self.prepare(rebuild=True)
+        self.assertNotEqual(replacement, optional)
+        self.assertEqual(json.loads(self.selected_bytes())["profile"], "speech")
+
+    def test_native_report_requires_bounded_matching_json_and_never_exposes_raw_output(self):
+        selected = self.prepare(profile="planning")
+        values = (b"private-native-output-invalid", b"x" * 65537,
+                  json.dumps({"passed": 1, "profile": "planning"}).encode(),
+                  json.dumps({"passed": True, "profile": "core"}).encode(),
+                  json.dumps({"passed": False, "profile": "planning"}).encode(),
+                  b"null", b"[]")
+        for value in values:
+            self.native_result = SimpleNamespace(returncode=0, stdout=value, stderr=b"private-native-error")
+            with self.subTest(value=value[:60]), self.assertRaises(setup.PreparationError) as error:
+                setup.prepared_python(self.root)
+            self.assertNotIn("private-native", str(error.exception) + self.output.getvalue())
+        self.native_result = None
+        self.assertEqual(setup.prepared_python(self.root), selected)
+        with patch.object(setup, "run_command", wraps=self.command) as command:
+            setup.check_native_profile(selected, self.root, "planning")
+        self.assertEqual(command.call_args.kwargs["timeout"], 120)
+
+    def test_missing_native_checker_cannot_select_or_launch_an_environment(self):
+        selected = self.prepare(profile="planning")
+        previous = self.selected_bytes()
+        checker = self.root / "scripts/check_optional_preparation.py"
+        checker.unlink()
+        self.calls.clear()
+        with self.assertRaisesRegex(setup.PreparationError, "native dependency check is missing"):
+            self.prepare(profile="speech")
+        candidate = Path(next(c[-1] for c in self.calls if "venv" in c))
+        self.assertFalse((candidate / "ready.json").exists())
+        self.assertEqual(previous, self.selected_bytes())
+        before = self.files()
+        self.calls.clear()
+        with patch.object(setup.subprocess, "call") as call:
+            with self.assertRaisesRegex(setup.PreparationError, "native dependency check is missing"):
+                setup.launch(self.root, ["--check"])
+            call.assert_not_called()
+        self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+        self.assertEqual(before, self.files())
+        self.assertTrue(selected.is_file())
+
+    def test_offline_optional_failure_preserves_selection_and_never_adds_index(self):
+        previous = self.prepare(profile="planning")
+        before = self.selected_bytes()
+        prior_files = self.environment_files(previous.parents[1])
+        wheelhouse = self.root / "partial offline wheels"
+        wheelhouse.mkdir()
+        self.fail_install = True
+        self.calls.clear()
+        with self.assertRaisesRegex(setup.PreparationError, "previous selected"):
+            self.prepare(profile="speech-planning", wheelhouse=wheelhouse)
+        install = next(c for c in self.calls if "install" in c)
+        self.assertIn("--no-index", install)
+        self.assertIn("--find-links", install)
+        self.assertIn("--require-hashes", install)
+        self.assertIn("--only-binary=:all:", install)
+        self.assertNotIn("--index-url", install)
+        self.assertNotIn("--extra-index-url", install)
+        self.assertEqual(self.selected_bytes(), before)
+        self.assertEqual(prior_files, self.environment_files(previous.parents[1]))
+
+    def test_current_packaged_profile_lock_is_authoritative_for_read_only_launch(self):
+        selected = self.prepare(profile="speech")
+        snapshot = (selected.parents[1] / "requirements.lock").read_bytes()
+        (self.root / setup.PROFILE_LOCKS["speech"]).write_bytes(locked("2.0.1"))
+        before = self.files()
+        self.calls.clear()
+        with patch.object(setup.subprocess, "call") as call:
+            with self.assertRaisesRegex(setup.PreparationError, "no longer matches this release"):
+                setup.launch(self.root, ["--check"])
+            call.assert_not_called()
+        self.assertEqual(before, self.files())
+        self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+        replacement = self.prepare()
+        self.assertNotEqual(selected, replacement)
+        self.assertEqual(json.loads(self.selected_bytes())["profile"], "speech")
+        self.assertEqual((selected.parents[1] / "requirements.lock").read_bytes(), snapshot)
+
+    def test_consistently_retyped_profile_cannot_reinterpret_another_packaged_lock(self):
+        selected = self.prepare(profile="speech")
+        paths = (self.root / setup.RUNTIME_NAME / "selected.json",
+                 selected.parents[1] / setup.OWNER_NAME, selected.parents[1] / "ready.json")
+        for path in paths:
+            data = json.loads(path.read_bytes())
+            data["profile"] = "core"
+            setup.atomic_json(path, data)
+        before = self.files()
+        self.calls.clear()
+        with self.assertRaisesRegex(setup.PreparationError, "profile does not match"):
+            setup.prepared_python(self.root)
+        with self.assertRaisesRegex(setup.PreparationError, "profile does not match"):
+            self.prepare()
+        self.assertFalse(any("venv" in c or "install" in c for c in self.calls))
+        self.assertEqual(before, self.files())
+
+    def test_invalid_requested_profiles_fail_before_runtime_creation_and_check_cannot_switch(self):
+        for value in ("bad", "", 123, [], {}, "../core"):
+            with self.subTest(value=value), self.assertRaises(setup.PreparationError):
+                self.prepare(profile=value)
+            self.assertFalse((self.root / setup.RUNTIME_NAME).exists())
+        selected = self.prepare(profile="planning")
+        before = self.files()
+        self.calls.clear()
+        with patch.object(setup.subprocess, "call") as call:
+            with self.assertRaisesRegex(setup.PreparationError, "different profile"):
+                setup.launch(self.root, ["--check"], profile="speech")
+            call.assert_not_called()
+        self.assertEqual(before, self.files())
+        self.assertEqual(setup.prepared_python(self.root, profile="planning"), selected)
+        with patch.object(setup, "ROOT", self.root), patch.object(setup, "prepare", return_value=selected) as prepare:
+            self.assertEqual(setup.main(["--profile", "speech-planning", "--rebuild", "--python", str(self.base)]), 0)
+        self.assertEqual(prepare.call_args.kwargs["profile"], "speech-planning")
+        with patch.object(setup, "ROOT", self.root), patch.object(setup, "launch", return_value=0) as launch:
+            self.assertEqual(setup.main(["--check", "--profile", "planning"]), 0)
+        self.assertEqual(launch.call_args.kwargs["profile"], "planning")
+
 
 class InterpreterProbeTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "Non-Windows target environment refusal")
+    def test_non_windows_host_cannot_claim_canonical_windows_dependency_environment(self):
+        with self.assertRaisesRegex(setup.PreparationError, "unavailable on this platform"):
+            setup.clean_environment(windows_x64=True)
+
     @unittest.skipUnless(os.name == "nt", "Windows interpreter-build probe integration")
     def test_windows_probe_uses_build_metadata_with_processor_environment_removed(self):
         # platform.machine() reads PROCESSOR_ARCHITECTURE on Windows; the
@@ -573,6 +877,39 @@ class InterpreterProbeTests(unittest.TestCase):
                 else:
                     with self.assertRaises(setup.PreparationError):
                         setup.interpreter_info(sys.executable, Path(temp))
+
+    @unittest.skipUnless(os.name == "nt", "Windows pip target marker integration")
+    def test_verified_windows_target_restores_conditional_dependency_markers_without_inheriting_architecture(self):
+        if sys.version_info[:2] != (3, 11) or sysconfig.get_platform() != "win-amd64":
+            self.skipTest("Requires the actual CPython 3.11 Windows x64 preparation target")
+        probe = """import json,os,platform
+from pip._vendor.packaging.markers import Marker
+print(json.dumps(dict(machine=platform.machine(),architecture=os.environ.get('PROCESSOR_ARCHITECTURE'),
+conditional=Marker('platform_system == "Windows" and platform_machine == "AMD64"').evaluate())))
+"""
+        with tempfile.TemporaryDirectory(prefix="civil-marker-") as temp:
+            with patch.dict(os.environ, {"PROCESSOR_ARCHITECTURE": "ARM64",
+                                         "PROCESSOR_ARCHITEW6432": "ARM64",
+                                         "DEEPSEEK_API_KEY": "never-forward-marker-fixture"}):
+                root = Path(temp)
+                # The architecture variable is absent while interpreter_info
+                # validates the real build. The dependency environment opts in
+                # only after that authoritative validation succeeds.
+                self.assertEqual(setup.interpreter_info(sys.executable, root)["build_platform"], "win-amd64")
+                ordinary = setup.run_command([sys.executable, "-I", "-B", "-c", probe], root, timeout=20)
+                target = setup.run_command([sys.executable, "-I", "-B", "-c", probe], root, timeout=20,
+                                           windows_x64=True)
+                self.assertEqual(ordinary.returncode, 0, "ordinary marker probe failed")
+                self.assertEqual(target.returncode, 0, "canonical marker probe failed")
+                original_data, target_data = json.loads(ordinary.stdout), json.loads(target.stdout)
+                self.assertFalse(original_data["conditional"])
+                self.assertIsNone(original_data["architecture"])
+                self.assertEqual(target_data, {"machine": "AMD64", "architecture": "AMD64", "conditional": True})
+                env = setup.clean_environment(windows_x64=True)
+                self.assertEqual(env["PROCESSOR_ARCHITECTURE"], "AMD64")
+                self.assertNotIn("PROCESSOR_ARCHITEW6432", env)
+                self.assertNotIn("DEEPSEEK_API_KEY", env)
+                self.assertNotIn("never-forward-marker-fixture", target.stdout.decode("utf-8"))
 
 
 class BatchEntryTests(unittest.TestCase):

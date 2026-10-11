@@ -12,6 +12,29 @@ A failed preparation leaves the previous successful selection intact. Keep proje
 when upgrading and prepare a new environment in the new package; do not move a virtual environment.
 The package does not include Python, credentials, speech models or a preinstalled environment.
 
+For reproducible optional preparation, choose a fixed profile explicitly:
+
+```powershell
+.\prepare-unified-workbench.bat --profile speech-planning
+.\start-unified-workbench.bat
+```
+
+`core` provides base services, documents and logistics. `speech` adds the CPU speech runtime;
+`planning` adds the CP-SAT resource solver, graph algorithms and safe XML reading;
+`speech-planning` includes both. Every profile has a complete exact-version, hash-verified
+Windows x64/CPython 3.11 wheel lock with the same core versions. Profiles use separate owned
+environments, selected only after inventory, native-library and fixed-solver checks pass.
+Failure preserves the previous successful environment. Native speech checks do not load or
+download model weights, and are not microphone acceptance. Prepare the speech model explicitly
+from the voice control after launching.
+
+When `--profile` is omitted, a new package selects `core`; a prepared package retains its trusted
+current profile, including during `--rebuild`. If the selection cannot be read or its profile is
+invalid, explicitly choose `--rebuild --profile <profile>` rather than guessing its capabilities.
+Use `--profile core` to return to the base runtime. Offline wheelhouses must contain every wheel
+in the selected profile's lock. MPXJ/Java interchange, CAD, IFC and OCR remain separate optional
+runtimes, and are not included in these speech/resource-planning profiles.
+
 If the selected environment has damaged packages, a missing interpreter or damaged preparation metadata,
 stop its workbench and run `prepare-unified-workbench.bat --rebuild`. This installs the same hash lock in a
 fresh generation directory and selects it only after verification. Old and failed directories are retained;
@@ -20,8 +43,9 @@ For offline preparation, pass `--wheelhouse C:/CivilBuddyWheels` containing ever
 this also works with `--rebuild` and never downloads missing wheels from another source.
 
 For a manually configured Python 3.11+ environment, install the project's Python dependencies plus
-`requirements-documents.txt` and `requirements-logistics.txt`. Engineering and local speech remain
-optional dependencies in their existing requirements files. Add optional capabilities in a separate manually
+`requirements-documents.txt` and `requirements-logistics.txt`. Additional engineering capabilities remain
+optional dependencies in their existing requirements files. Beyond the managed speech/resource-planning
+profiles above, add optional capabilities in a separate manually
 configured environment, then pass that interpreter to the unified launcher with `--python`. Do not add packages
 to the release-managed `.civil-buddy-runtime` environment. Installed package metadata alone does not verify
 native libraries, engineering solvers or speech models.

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import shlex
 import socket
 import subprocess
 
@@ -34,9 +35,11 @@ OPTIONAL = {
     "logistics PDF": ("requirements-logistics.txt", ("pdfplumber", "PIL")),
     "CAD": ("requirements-cad.txt", ("ezdxf", "shapely", "trimesh", "mapbox_earcut")),
     "engineering": ("requirements-engineering.txt", ("Pynite", "sectionproperties", "ifcopenshell", "ifctester", "ifcdiff")),
-    "planning": ("requirements-planning.txt", ("ortools", "networkx", "defusedxml", "mpxj", "jpype")),
+    "resource planning": ("requirements-planning.txt", ("ortools", "networkx", "defusedxml")),
+    "Java project formats": ("requirements-planning.txt", ("mpxj", "jpype")),
     "local voice": ("requirements-asr.txt", ("faster_whisper",)),
 }
+MANAGED_OPTIONAL_PROFILES = {"resource planning": "planning", "local voice": "speech"}
 PROBE_TIMEOUT = 20
 NATIVE_IMPORTS = ("xxhash", "pydantic_core", "numpy")
 NATIVE_FAILURES = {"missing_module", "import_error", "os_error", "load_error"}
@@ -200,11 +203,20 @@ def powershell_quote(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def manual_install_command(python: str | None, requirements: list[Path], *, windows: bool | None = None) -> str:
+    """Format a command only; diagnostics never execute an installer."""
+    if windows is None:
+        windows = os.name == "nt"
+    quote = powershell_quote if windows else lambda value: shlex.quote(str(value))
+    return ("& " if windows else "") + quote(python) + " -m pip install" + "".join(
+        " -r " + quote(path) for path in requirements)
+
+
 def format_report(report: Report, root: Path) -> str:
     lines = ["Civil Buddy offline preflight / 启动前检查"]
     # This only chooses actionable guidance; it grants no environment ownership.
     # Resolve lexical '..' without following interpreter/venv symlinks.
-    managed = bool(report.python and Path(os.path.abspath(report.python)).is_relative_to(
+    managed = os.name == "nt" and bool(report.python and Path(os.path.abspath(report.python)).is_relative_to(
         Path(os.path.abspath(root / ".civil-buddy-runtime"))))
     if report.python:
         lines.append(f"Python: {report.python}" + (f" ({report.version})" if report.version else ""))
@@ -220,17 +232,26 @@ def format_report(report: Report, root: Path) -> str:
             lines.append("Explicitly rebuild in a new owned environment: & "
                          + powershell_quote(root / "scripts/prepare-unified-workbench.bat") + " --rebuild")
         else:
-            lines.append("Install with PowerShell: & " + powershell_quote(report.python) + " -m pip install -r "
-                         + powershell_quote(root / "requirements.txt") + " -r " + powershell_quote(root / "requirements-documents.txt"))
+            lines.append("Install with the selected interpreter: " + manual_install_command(
+                report.python, [root / "requirements.txt", root / "requirements-documents.txt"]))
+    separate_optional = False
+    managed_optional = False
     for group, missing in report.missing_optional.items():
         lines.append(f"[OPTIONAL] {group}: " + ", ".join(missing) + "; base startup is not blocked.")
-        if managed:
+        if managed and group in MANAGED_OPTIONAL_PROFILES:
+            managed_optional = True
+            lines.append("  Explicitly prepare this managed capability: & "
+                         + powershell_quote(root / "scripts/prepare-unified-workbench.bat")
+                         + " --profile " + MANAGED_OPTIONAL_PROFILES[group])
+        elif managed:
+            separate_optional = True
             lines.append("  Requirements for a separate manual environment: " + powershell_quote(root / OPTIONAL[group][0]))
         else:
-            lines.append("  Install if needed: & " + powershell_quote(report.python) + " -m pip install -r "
-                         + powershell_quote(root / OPTIONAL[group][0]))
-    if managed and report.missing_optional:
-        lines.append("Keep the release-managed environment unchanged. Configure optional capabilities in a separate manual environment and use the advanced launcher; see "
+            lines.append("  Install if needed: " + manual_install_command(report.python, [root / OPTIONAL[group][0]]))
+    if managed_optional:
+        lines.append("Use --profile speech-planning when both local voice and resource planning are needed. Profile preparation does not download a voice model.")
+    if separate_optional:
+        lines.append("Configure the capabilities listed with separate requirements in a separate manual environment and use the advanced launcher; see "
                      + powershell_quote(root / "docs/civil-buddy/unified-workbench.md") + ".")
     lines.append("[OK] Startup prerequisites passed." if report.ok else "[FAIL] Fix the required items above, then rerun --check.")
     lines.append("Offline metadata/module checks and isolated native imports (xxhash, pydantic_core, numpy) only; no product/provider started, no model downloaded. Optional native libraries/models and live service health are not verified.")

@@ -18,6 +18,12 @@ import uuid
 
 ROOT = Path(__file__).absolute().parents[1]
 LOCK_NAME = "requirements-unified-windows-py311.lock"
+PROFILE_LOCKS = {
+    "core": LOCK_NAME,
+    "speech": "requirements-unified-windows-py311-speech.lock",
+    "planning": "requirements-unified-windows-py311-planning.lock",
+    "speech-planning": "requirements-unified-windows-py311-speech-planning.lock",
+}
 RUNTIME_NAME = ".civil-buddy-runtime"
 OWNER_NAME = "civil-buddy-environment.json"
 PRODUCT = "civil-buddy-unified-python"
@@ -51,7 +57,7 @@ def reject_links(path: Path) -> None:
             raise PreparationError("A preparation path traverses a link or reparse point; choose a regular local directory.")
 
 
-def clean_environment() -> dict[str, str]:
+def clean_environment(*, windows_x64: bool = False) -> dict[str, str]:
     keep = {"PATH", "SYSTEMROOT", "WINDIR", "PATHEXT", "TEMP", "TMP", "APPDATA",
             "LOCALAPPDATA", "USERPROFILE", "HOME", "LANG"}
     env = {key: value for key, value in os.environ.items() if key.upper() in keep}
@@ -61,12 +67,20 @@ def clean_environment() -> dict[str, str]:
                PIP_KEYRING_PROVIDER="disabled", NETRC=os.devnull, NO_PROXY="*",
                PYTHONNOUSERSITE="1", PYTHONUTF8="1", PYTHONDONTWRITEBYTECODE="1",
                PYTHON_DOTENV_DISABLED="1", CIVIL_DOTENV_DISABLED="1")
+    if windows_x64:
+        if os.name != "nt":
+            raise PreparationError("The canonical Windows x64 dependency environment is unavailable on this platform.")
+        # platform.machine(), including pip's target dependency markers, reads
+        # this on Windows. Only verified win-amd64 callers opt in; never inherit
+        # an untrusted architecture value or use it to verify the interpreter.
+        env["PROCESSOR_ARCHITECTURE"] = "AMD64"
     return env
 
 
-def run_command(command: list[str], root: Path, *, timeout: int = 900) -> subprocess.CompletedProcess:
+def run_command(command: list[str], root: Path, *, timeout: int = 900,
+                windows_x64: bool = False) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(command, cwd=root, env=clean_environment(), stdin=subprocess.DEVNULL,
+        return subprocess.run(command, cwd=root, env=clean_environment(windows_x64=windows_x64), stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
                               creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     except (OSError, subprocess.TimeoutExpired):
@@ -123,8 +137,20 @@ def lock_versions(data: bytes) -> dict[str, str]:
     return versions
 
 
-def lock_bytes(root: Path) -> bytes:
-    source = root / LOCK_NAME
+def profile_name(value: str) -> str:
+    if not isinstance(value, str) or value not in PROFILE_LOCKS:
+        raise PreparationError("Invalid preparation profile. Choose core, speech, planning or speech-planning; no environment was selected.")
+    return value
+
+
+def selected_profile(selected: dict) -> str:
+    # Releases preceding typed profiles prepared only core. Explicit null must
+    # not acquire the meaning of an absent, legacy core field.
+    return profile_name(selected["profile"]) if "profile" in selected else "core"
+
+
+def lock_bytes(root: Path, profile: str = "core") -> bytes:
+    source = root / PROFILE_LOCKS[profile_name(profile)]
     reject_links(source)
     try:
         data = source.read_bytes()
@@ -136,7 +162,11 @@ def lock_bytes(root: Path) -> bytes:
 
 def check_inventory(python: Path, root: Path, locked: bytes) -> None:
     versions = lock_versions(locked)
-    result = run_command([str(python), "-I", "-B", "-c", INVENTORY_PROBE, json.dumps(list(versions))], root, timeout=30)
+    # Launch/check reaches this path too. Verify build metadata without marker
+    # overrides before selecting the fixed Windows target environment.
+    interpreter_info(str(python), root)
+    result = run_command([str(python), "-I", "-B", "-c", INVENTORY_PROBE, json.dumps(list(versions))], root, timeout=30,
+                         windows_x64=True)
     try:
         if result.returncode or len(result.stdout) > 65536:
             raise ValueError
@@ -145,6 +175,23 @@ def check_inventory(python: Path, root: Path, locked: bytes) -> None:
             raise ValueError
     except (ValueError, TypeError):
         raise PreparationError("Installed package versions do not exactly match the release lock. Run prepare-unified-workbench.bat --rebuild to prepare a fresh environment; existing files were retained.") from None
+
+
+def check_native_profile(python: Path, root: Path, profile: str) -> None:
+    profile = profile_name(profile)
+    script = root / "scripts/check_optional_preparation.py"
+    reject_links(script)
+    if not script.is_file():
+        raise PreparationError("The native dependency check is missing. Extract the complete release; normal startup never installs packages.")
+    result = run_command([str(python), "-I", "-B", str(script), "--profile", profile], root, timeout=120)
+    try:
+        if result.returncode or len(result.stdout) > 65536:
+            raise ValueError
+        report = json.loads(result.stdout)
+        if not isinstance(report, dict) or report.get("passed") is not True or report.get("profile") != profile:
+            raise ValueError
+    except (ValueError, TypeError):
+        raise PreparationError("The selected profile's native dependencies did not pass. Run prepare-unified-workbench.bat --rebuild to prepare a fresh environment; existing files were retained.") from None
 
 
 def reject_tree_links(folder: Path) -> None:
@@ -191,7 +238,8 @@ def identity(root: Path) -> dict:
 
 def check_identity(value: dict, expected: dict) -> None:
     if (any(value.get(key) != item for key, item in expected.items())
-            or ("generation" in value) != ("generation" in expected)):
+            or ("generation" in value) != ("generation" in expected)
+            or ("profile" in value) != ("profile" in expected)):
         raise PreparationError("This environment is not owned by this package and dependency lock; it will not be modified.")
 
 
@@ -239,7 +287,11 @@ def preparation_lock(runtime: Path):
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def env_details(root: Path, lock_hash: str, generation: str | None = None) -> tuple[Path, dict]:
+def env_details(root: Path, lock_hash: str, generation: str | None = None, *,
+                profile: str = "core", legacy_profile: bool = False) -> tuple[Path, dict]:
+    profile = profile_name(profile)
+    if legacy_profile and profile != "core":
+        raise PreparationError("Legacy preparation metadata can select only the core profile.")
     if not isinstance(lock_hash, str) or not re.fullmatch(r"[a-f0-9]{64}", lock_hash):
         raise PreparationError("Invalid prepared environment identifier.")
     if generation is not None and (not isinstance(generation, str) or not re.fullmatch(r"[a-f0-9]{32}", generation)):
@@ -249,36 +301,68 @@ def env_details(root: Path, lock_hash: str, generation: str | None = None) -> tu
     env = root / RUNTIME_NAME / "py311" / name
     reject_links(env)
     expected = {**identity(root), "lock_sha256": lock_hash, "environment": env.relative_to(root).as_posix()}
+    if not legacy_profile:
+        expected["profile"] = profile
     if generation is not None:
         expected["generation"] = generation
     return env, expected
 
 
 def selection_details(root: Path, selected: dict) -> tuple[Path, dict]:
+    profile = selected_profile(selected)
     generation = selected.get("generation")
     # Absence selects the original directory layout. An explicit null or another
     # malformed value must not silently turn a generation into a legacy path.
     if "generation" in selected and generation is None:
         raise PreparationError("Invalid prepared environment generation. Run prepare-unified-workbench.bat --rebuild to create a fresh selection.")
-    env, expected = env_details(root, selected.get("lock_sha256", ""), generation)
+    env, expected = env_details(root, selected.get("lock_sha256", ""), generation,
+                                profile=profile, legacy_profile="profile" not in selected)
     check_identity(selected, expected)
+    packaged = lock_bytes(root, profile)
+    if hashlib.sha256(packaged).hexdigest() != expected["lock_sha256"]:
+        # A prior release's same-profile lock may legitimately be upgraded by
+        # explicit preparation. A lock belonging to another current profile
+        # cannot be reinterpreted as an upgrade or a silent downgrade, even by
+        # an omitted-profile rebuild of otherwise damaged metadata.
+        for other, filename in PROFILE_LOCKS.items():
+            if (other != profile and (root / filename).exists()
+                    and hashlib.sha256(lock_bytes(root, other)).hexdigest() == expected["lock_sha256"]):
+                raise PreparationError("The selected profile does not match its dependency lock. Use an explicitly named --profile with --rebuild; existing files were retained.")
     return env, expected
 
 
-def prepared_python(root: Path) -> Path:
-    runtime = owned_runtime(root, create=False)
-    selected = read_json(runtime / "selected.json")
+def selected_environment(root: Path, selected: dict) -> tuple[Path, dict, bytes]:
+    """Validate ownership and snapshot without interpreting a stale package lock."""
     env, expected = selection_details(root, selected)
     check_identity(read_json(env / OWNER_NAME), expected)
     check_identity(read_json(env / "ready.json"), {**expected, "ready": True})
     snapshot = env / "requirements.lock"
     reject_links(snapshot)
-    if hashlib.sha256(snapshot.read_bytes()).hexdigest() != expected["lock_sha256"]:
+    locked = snapshot.read_bytes()
+    if hashlib.sha256(locked).hexdigest() != expected["lock_sha256"]:
         raise PreparationError("The prepared lock snapshot changed. Run prepare-unified-workbench.bat --rebuild; normal startup will not repair it.")
+    lock_versions(locked)
+    return env, expected, locked
+
+
+def prepared_python(root: Path, *, profile: str | None = None) -> Path:
+    if profile is not None:
+        profile_name(profile)
+    runtime = owned_runtime(root, create=False)
+    selected = read_json(runtime / "selected.json")
+    actual_profile = selected_profile(selected)
+    if profile is not None and profile != actual_profile:
+        raise PreparationError("The selected environment uses a different profile. Explicit preparation is required to switch profiles; normal startup never installs packages.")
+    env, expected, locked = selected_environment(root, selected)
+    packaged = lock_bytes(root, actual_profile)
+    if packaged != locked or hashlib.sha256(packaged).hexdigest() != expected["lock_sha256"]:
+        raise PreparationError("The selected profile's lock no longer matches this release. Run prepare-unified-workbench.bat --rebuild; normal startup will not repair it.")
     python = env / "Scripts/python.exe"
     reject_links(python)
     if not python.is_file():
         raise PreparationError("The selected interpreter is missing. Run prepare-unified-workbench.bat --rebuild; nothing was installed during startup.")
+    check_inventory(python, root, packaged)
+    check_native_profile(python, root, actual_profile)
     return python
 
 
@@ -296,11 +380,12 @@ def load_preflight(root: Path):
 
 
 def prepare(root: Path, *, python: str, binary: Path, port: int | None = None,
-            wheelhouse: Path | None = None, rebuild: bool = False) -> Path:
+            wheelhouse: Path | None = None, rebuild: bool = False,
+            profile: str | None = None) -> Path:
     root = root.absolute()
     reject_links(root)
-    locked = lock_bytes(root)
-    lock_hash = hashlib.sha256(locked).hexdigest()
+    if profile is not None:
+        profile_name(profile)
     base = interpreter_info(python, root)
     base_python = base["executable"]
     if wheelhouse is not None:
@@ -311,21 +396,31 @@ def prepare(root: Path, *, python: str, binary: Path, port: int | None = None,
     runtime = owned_runtime(root, create=True)
     with preparation_lock(runtime):
         selection = runtime / "selected.json"
-        # Rebuilding can replace invalid selection metadata, but never a linked
-        # selection file. It need not read or change any prior environment.
+        # An explicitly named rebuild may recover unreadable metadata. Without
+        # a named profile, retain the typed selected profile; never downgrade a
+        # damaged or unknown optional selection to core.
         reject_links(selection)
-        target = None
-        if not rebuild and selection.exists():
+        current = None
+        current_details = None
+        if selection.exists() and not (rebuild and profile is not None):
             current = read_json(selection)
-            current_env, current_expected = selection_details(root, current)
-            if current_expected["lock_sha256"] == lock_hash:
+            current_details = selection_details(root, current)
+            if not rebuild:
+                selected_environment(root, current)
+        chosen_profile = profile if profile is not None else (selected_profile(current) if current is not None else "core")
+        locked = lock_bytes(root, chosen_profile)
+        lock_hash = hashlib.sha256(locked).hexdigest()
+        target = None
+        if not rebuild and current_details is not None:
+            current_env, current_expected = current_details
+            if selected_profile(current) == chosen_profile and current_expected["lock_sha256"] == lock_hash:
                 # Keep the successfully selected generation. A damaged selection
                 # requires explicit rebuild; never fall back to an older baseline.
-                prepared_python(root)
+                prepared_python(root, profile=chosen_profile)
                 target = current_env, current_expected
         if target is None:
             generation = uuid.uuid4().hex if rebuild else None
-            target = env_details(root, lock_hash, generation)
+            target = env_details(root, lock_hash, generation, profile=chosen_profile)
         env, expected = target
         if env.exists():
             if rebuild:
@@ -366,13 +461,15 @@ def prepare(root: Path, *, python: str, binary: Path, port: int | None = None,
                 command += ["--index-url", "https://pypi.org/simple"]
             else:
                 command += ["--no-index", "--find-links", str(wheelhouse)]
-            result = run_command(command + ["-r", str(snapshot)], root)
+            result = run_command(command + ["-r", str(snapshot)], root, windows_x64=True)
             if result.returncode:
                 raise PreparationError("Locked dependency installation failed. Check network/wheelhouse and available space, then retry preparation. The previous selected environment is unchanged.")
         check_inventory(selected, root, locked)
-        result = run_command([str(selected), "-I", "-B", "-m", "pip", "--require-virtualenv", "--disable-pip-version-check", "check"], root)
+        result = run_command([str(selected), "-I", "-B", "-m", "pip", "--require-virtualenv", "--disable-pip-version-check", "check"], root,
+                             windows_x64=True)
         if result.returncode:
             raise PreparationError("Dependency consistency check failed. No new environment was selected.")
+        check_native_profile(selected, root, chosen_profile)
         preflight = load_preflight(root)
         if port is None:
             # Preparation checks dependencies, not whether a running workbench's
@@ -384,19 +481,18 @@ def prepare(root: Path, *, python: str, binary: Path, port: int | None = None,
         print(preflight.format_report(report, root), flush=True)
         if not report.ok:
             raise PreparationError("Startup prerequisites did not pass. Fix the reported items and retry; the previous selection is unchanged.")
-        if lock_bytes(root) != locked:
+        if lock_bytes(root, chosen_profile) != locked:
             raise PreparationError("The dependency lock changed during preparation; no new environment was selected.")
         atomic_json(ready, {**expected, "ready": True})
         atomic_json(selection, expected)
         return selected
 
 
-def launch(root: Path, arguments: list[str]) -> int:
+def launch(root: Path, arguments: list[str], *, profile: str | None = None) -> int:
     if any(value.startswith("--") and "--python".startswith(value.split("=", 1)[0])
            for value in arguments):
         raise PreparationError("This launcher uses the prepared interpreter. Use CIVIL_PYTHON only to select the bootstrap interpreter, or invoke the advanced launcher directly.")
-    python = prepared_python(root)
-    check_inventory(python, root, (python.parents[1] / "requirements.lock").read_bytes())
+    python = prepared_python(root, profile=profile)
     script = root / "scripts/start_unified_workbench.py"
     reject_links(script)
     if not script.is_file():
@@ -417,7 +513,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if arguments[:1] == ["--launch"]:
             return launch(ROOT, arguments[1:])
-        parser = argparse.ArgumentParser(description=__doc__)
+        parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+        parser.add_argument("--profile", choices=tuple(PROFILE_LOCKS), help="Fixed dependency profile; omitted preserves the selected profile, or uses core for a new package")
         parser.add_argument("--python", default=sys.executable, help="Base CPython 3.11 Windows x64 interpreter")
         parser.add_argument("--binary", type=Path, default=ROOT / "bin/civil-workbench.exe")
         parser.add_argument("--port", type=int, help="Optional preparation probe port; ordinary startup checks its actual port")
@@ -427,9 +524,9 @@ def main(argv: list[str] | None = None) -> int:
         mode.add_argument("--rebuild", action="store_true", help="Install the same release lock in a fresh generation; retain every prior environment and select only after successful checks")
         args = parser.parse_args(arguments)
         if args.check:
-            return launch(ROOT, ["--check", "--binary", str(args.binary), "--port", str(args.port or 8765)])
+            return launch(ROOT, ["--check", "--binary", str(args.binary), "--port", str(args.port or 8765)], profile=args.profile)
         selected = prepare(ROOT, python=args.python, binary=args.binary, port=args.port, wheelhouse=args.wheelhouse,
-                           rebuild=args.rebuild)
+                           rebuild=args.rebuild, profile=args.profile)
         print("Preparation complete / 环境准备完成: " + str(selected))
         print("Open start-unified-workbench.bat to start. No product or model was started during preparation.")
         return 0

@@ -5,7 +5,7 @@
         模型没准备好（第一次要下载约 460 MB）时先准备、准备好再录，不会让人白说一段；
      2) 浏览器自带识别：本机识别未安装依赖、未准备好或运行出错时才用。Chrome 会把录音发到
         Google 的服务器，第一次使用前弹窗说明，同意后才开始；
-     3) 两者都没有：按钮置灰并说明原因。
+     3) 两者都没有：说明原因，保留下一次点击重新检查的入口。
    一段录音最长 20 秒（后端 asr.MAX_SECONDS）：页面提前 1 秒自动停，后端另有 2 秒宽限并裁到 20 秒。 */
 (function () {
   "use strict";
@@ -16,7 +16,13 @@
     "准备请求超时": "The preparation request timed out",
     "准备请求连接失败": "The preparation request could not connect",
     "已停止等待，未开始录音；后台准备可能仍在继续。稍后再点「语音」检查。": "Stopped waiting; recording did not start. Preparation may still be running in the background. Click Voice later to check.",
-    "识别模型准备等待已超时。已停止等待，未开始录音；后台准备可能仍在继续，请稍后重试或先打字。": "Timed out waiting for the speech model. Waiting has stopped and recording did not start. Preparation may still be running in the background; retry later or type your task."
+    "识别模型准备等待已超时。已停止等待，未开始录音；后台准备可能仍在继续，请稍后重试或先打字。": "Timed out waiting for the speech model. Waiting has stopped and recording did not start. Preparation may still be running in the background; retry later or type your task.",
+    "上次本机识别模型准备失败（{detail}），正在重新准备。未开始录音；浏览器识别仍须经你同意。": "The previous local speech model preparation failed ({detail}); retrying preparation. Recording has not started; browser recognition still requires your consent.",
+    "。再点「语音」可重新检查并准备本机识别。": ". Click Voice again to check and prepare local recognition again.",
+    "。再点「语音」会先检查本机；仍未就绪时可经同意使用浏览器识别。取消浏览器识别后再点，可重试本机准备。": ". Click Voice again to check the local service; if it is still not ready, you may use browser recognition after consent. After cancelling browser recognition, click again to retry local preparation.",
+    "已取消浏览器识别，未开始录音。可以继续打字，或稍后再点「语音」检查本机识别。": "Browser recognition was cancelled; recording did not start. You can type your task or click Voice later to check local recognition.",
+    "当前语音服务不可用；再点一次可重新检查": "Speech services are currently unavailable; click again to check",
+    "语音输入暂不可用：本机识别服务未就绪，浏览器也不支持语音识别。可先打字，稍后再点「语音」检查。": "Voice input is currently unavailable: the local speech service is not ready and the browser does not support speech recognition. Type your task or click Voice later to check."
   });
   // Translate only the fixed ASR error contract. Unknown details and transcripts
   // may contain user data, so never pass arbitrary backend text through i18n.
@@ -52,8 +58,8 @@
   if (!btn || !input) return;
 
   const BrowserRecognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
-  let mode = null; // 只缓存 "server"；浏览器 / 不可用每次点击重新探测，装好本机识别后下一次就会用上
-  let serverBroken = false; // 本机识别在运行中出过错（5xx）：本页不再用，改走浏览器
+  let browserFallbackPending = false; // 转写出错后，下一次点击重新探测并可经同意改走浏览器；不会永久屏蔽本机服务。
+  let preparationFallbackPending = false;
   let phase = "idle"; // idle | starting | preparing | recording | transcribing
   let recorder = null;
   let stream = null;
@@ -115,7 +121,8 @@
     // 忙的时候用 aria-disabled 而不是 disabled：按钮不失焦，点击由 phase 挡住
     btn.setAttribute("aria-disabled", phase === "starting" ? "true" : "false");
     btn.classList.toggle("is-rec", phase === "recording");
-    btn.disabled = mode === "none";
+    // 可用性是瞬时状态：环境升级或服务恢复后，人可再次点击检查。
+    btn.disabled = false;
   }
 
   /* 所有计时器都在这里收放：离开 recording 的每条路径都经过 setPhase，不会留下旧的 20 秒计时器 */
@@ -161,35 +168,37 @@
     }
   }
 
-  async function serverStatus(timeoutMs = CONTROL_REQUEST_TIMEOUT_MS) {
+  async function serverStatus(timeoutMs = CONTROL_REQUEST_TIMEOUT_MS, token = generation) {
     try {
       const { response, data: info } = await controlRequest("/api/asr/status", {}, timeoutMs);
-      if (response.ok && info && typeof info === "object") { supportsCancel = info.supports_cancel === true; return info; }
+      if (response.ok && info && typeof info === "object") {
+        if (alive(token)) supportsCancel = info.supports_cancel === true;
+        return info;
+      }
     } catch (_) {
       /* 服务未启用这个接口，或网络连接失败。 */
     }
     return null;
   }
 
-  async function detectMode() {
-    if (mode === "server" && !serverBroken) return mode;
-    const info = serverBroken ? null : await serverStatus();
-    if (info && info.available) return (mode = "server");
-    return (mode = BrowserRecognition ? "browser" : "none");
+  async function detectMode(token) {
+    const info = await serverStatus(CONTROL_REQUEST_TIMEOUT_MS, token);
+    if (!alive(token)) return null;
+    const fallback = browserFallbackPending; browserFallbackPending = false;
+    const prepareFallback = preparationFallbackPending; preparationFallbackPending = false;
+    if (prepareFallback && BrowserRecognition && info?.state !== "ready") return "browser";
+    if (fallback && BrowserRecognition && info?.state === "ready") return "browser";
+    if (info && info.available) return "server";
+    return BrowserRecognition ? "browser" : "none";
   }
 
   /* 本机模型准备好了才开始录音：第一次要下载，下载时不录，免得说完了才发现识别不了 */
   async function ensureReady(token) {
-    let info = await serverStatus();
+    let info = await serverStatus(CONTROL_REQUEST_TIMEOUT_MS, token);
     if (!alive(token)) return false;
     if (!info || !info.available) return false;
     if (info.state === "ready") return true;
-    if (info.state === "failed") {
-      serverBroken = true;
-      mode = null;
-      say(cbVoiceText("本机识别模型准备失败（") + (serverErrorText(info.load_error) || cbVoiceText("原因未知")) + cbVoiceText("）。再点一次「语音」将改用浏览器识别。"), "warn");
-      return false;
-    }
+    const previousFailure = info.state === "failed";
     const preparationStarted = Date.now();
     const preparationExpired = () => {
       if (Date.now() - preparationStarted < PREPARE_WAIT_MS) return false;
@@ -198,7 +207,9 @@
       return true;
     };
     setPhase("preparing");
-    say(cbVoiceText("正在请求准备本机识别模型…"), "");
+    say(previousFailure ? cbVoiceText("上次本机识别模型准备失败（{detail}），正在重新准备。未开始录音；浏览器识别仍须经你同意。", {
+      detail: serverErrorText(info.load_error) || cbVoiceText("原因未知")
+    }) : cbVoiceText("正在请求准备本机识别模型…"), previousFailure ? "warn" : "");
     try {
       const { response, data } = await controlRequest("/api/asr/prepare", { method: "POST" });
       if (!alive(token)) return false;
@@ -216,7 +227,7 @@
       return false;
     }
     if (!alive(token)) return false;
-    say(info.state === "missing"
+    if (!previousFailure) say(info.state === "missing"
       ? cbVoiceText("第一次使用要下载本机识别模型（约 460 MB），下载好之前先不录音。可以先打字；点「取消」不影响后台下载。")
       : cbVoiceText("正在加载本机识别模型，几秒钟后开始录音。"), "");
     while (phase === "preparing" && alive(token)) {
@@ -225,7 +236,7 @@
       await new Promise((resolve) => setTimeout(resolve, Math.min(POLL_MS, remaining)));
       if (phase !== "preparing" || !alive(token)) return false; // 点了「取消」
       if (preparationExpired()) return false;
-      info = await serverStatus(Math.min(CONTROL_REQUEST_TIMEOUT_MS, PREPARE_WAIT_MS - (Date.now() - preparationStarted)));
+      info = await serverStatus(Math.min(CONTROL_REQUEST_TIMEOUT_MS, PREPARE_WAIT_MS - (Date.now() - preparationStarted)), token);
       if (!alive(token)) return false;
       if (preparationExpired()) return false;
       if (info && info.state === "ready") {
@@ -233,11 +244,10 @@
         return true;
       }
       if (!info || info.state === "failed" || !info.available) {
-        serverBroken = true;
-        mode = null;
+        preparationFallbackPending = !!BrowserRecognition;
         setPhase("idle");
         say(cbVoiceText("本机识别模型准备失败") + (info && info.load_error ? cbVoiceText("（{detail}）", { detail: serverErrorText(info.load_error) }) : "") +
-          cbVoiceText("。再点一次「语音」将改用浏览器识别。"), "warn");
+          cbVoiceText(BrowserRecognition ? "。再点「语音」会先检查本机；仍未就绪时可经同意使用浏览器识别。取消浏览器识别后再点，可重试本机准备。" : "。再点「语音」可重新检查并准备本机识别。"), "warn");
         return false;
       }
     }
@@ -300,9 +310,8 @@
       const data = await response.json().catch(() => ({}));
       if (!alive(token)) return;
       if (response.status >= 500) {
-        // 本机识别运行出错：本页不再撞它，下一次改走浏览器识别
-        serverBroken = true;
-        mode = null;
+        // 只为下一次显式点击提供浏览器回退；之后仍可再次检查本机服务。
+        browserFallbackPending = true;
         throw new Error((serverErrorText(data.detail) || cbVoiceText("本机识别不可用")) +
           (BrowserRecognition ? cbVoiceText("。再点一次「语音」将改用浏览器识别。") : ""));
       }
@@ -338,7 +347,7 @@
 
   function startBrowser(token) {
     if (!browserConsent()) {
-      say(cbVoiceText("已取消。本机识别需要在 Python 工作台安装 requirements-asr.txt。"), "");
+      say(cbVoiceText("已取消浏览器识别，未开始录音。可以继续打字，或稍后再点「语音」检查本机识别。"), "");
       return;
     }
     recognition = new BrowserRecognition();
@@ -414,17 +423,18 @@
     }
     if (phase !== "idle") return;
     const token = ++generation;
+    btn.title = "";
     setPhase("starting"); // 同步占位：第一次 await 之前就挡住第二次点击，不会开出两个录音
     try {
-      const current = await detectMode();
+      const current = await detectMode(token);
       if (!alive(token)) return;
       if (current === "server") {
         if (await ensureReady(token)) await startServer(token);
         return;
       }
       if (current === "browser") return startBrowser(token);
-      btn.title = cbVoiceText("当前浏览器不支持语音识别，本机识别也未安装");
-      say(cbVoiceText("语音输入不可用：本机未安装识别引擎，浏览器也不支持语音识别。"), "warn");
+      btn.title = cbVoiceText("当前语音服务不可用；再点一次可重新检查");
+      say(cbVoiceText("语音输入暂不可用：本机识别服务未就绪，浏览器也不支持语音识别。可先打字，稍后再点「语音」检查。"), "warn");
     } finally {
       if (alive(token) && phase === "starting") setPhase("idle");
     }

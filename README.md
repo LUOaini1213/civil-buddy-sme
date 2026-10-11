@@ -235,6 +235,13 @@ This local preview starts both processes and opens the Agent page. Install optio
 and planning dependencies from their respective requirements files when using those pages. The
 ordinary checks use scripted local models; no paid model or cloud deployment is implied.
 
+Windows x64/CPython 3.11 release packages also provide hash-locked `core`, `speech`,
+`planning` and `speech-planning` preparation profiles. Run
+`prepare-unified-workbench.bat --profile speech-planning` for CPU speech and resource scheduling,
+then `start-unified-workbench.bat`. A profile is selected only after installation and fixed native
+checks succeed; failure retains the previous environment. Model preparation remains explicit in
+the voice control. See the [preparation guide](docs/civil-buddy/unified-workbench.md).
+
 For a named user, provide `--user-id`, `--workspace` and `--token-file` together. Each instance owns
 one physical workspace and private state; this is **not a shared-process multi-tenant service**.
 The [handoff guide](docs/civil-buddy/release-handoff.md) (in Chinese) covers login, restart, project packages and
