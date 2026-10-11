@@ -70,6 +70,7 @@ pub fn initialize(db: &Connection) -> Result<(), String> {
 pub fn router(state: Arc<ProductState>) -> Router {
     Router::new()
         .route("/api/project-control", get(overview))
+        .route("/api/project-control/files", get(source_files))
         .route("/api/project-control/documents", post(register_document))
         .route(
             "/api/project-control/documents/{id}/review",
@@ -93,6 +94,14 @@ pub fn router(state: Arc<ProductState>) -> Router {
         .route("/api/agent/artifacts/{id}/preview", get(preview_artifact))
         .layer(DefaultBodyLimit::max(64 * 1024))
         .with_state(state)
+}
+
+async fn source_files(State(st): State<Arc<ProductState>>, Query(q): Query<Scope>) -> Result<Json<Value>, Error> {
+    let ws = st.workspace(&q.workspace).map_err(bad)?;
+    let report = super::file_listing::list_files(&ws, super::file_listing::FileListPurpose::ProjectControl).map_err(bad)?;
+    let mut value = serde_json::to_value(report).map_err(bad)?;
+    value["workspace"] = json!(q.workspace);
+    Ok(Json(value))
 }
 
 fn read_source(ws: &WorkspaceContext, relative: &str) -> Result<Vec<u8>, Error> {

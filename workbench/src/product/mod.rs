@@ -3,6 +3,7 @@ pub mod providers;
 pub mod worker;
 pub mod api;
 pub mod tools;
+pub mod file_listing;
 pub mod agent;
 pub mod domains;
 pub mod engineering;

@@ -29,7 +29,8 @@
         <details id="pcDocumentEditor"><summary>登记资料或新增修订</summary>
           <form id="pcDocumentForm" class="pc-form">
             <label>资料<select id="pcDocumentId" data-i18n-skip></select></label>
-            <label>来源文件<select id="pcSource" data-i18n-skip required></select></label>
+            <label>来源文件<select id="pcSource" data-i18n-skip required aria-describedby="pcSourceNotice"></select></label>
+            <p id="pcSourceNotice" class="pc-muted" role="status" aria-live="polite" data-i18n-skip hidden></p>
             <label>资料名称<input id="pcTitle" maxlength="160" required></label>
             <div class="pc-row"><label class="pc-grow">专业或用途<input id="pcDiscipline" maxlength="80" required placeholder="例如：招采、幕墙、现场质量"></label><label class="pc-grow">版本标记<input id="pcRevision" maxlength="80" required placeholder="例如：Rev A、2026-09-30"></label></div>
             <button type="submit">保存资料快照</button>
@@ -58,6 +59,6 @@
     <section id="pcReviewPanel" class="pc-panel" hidden><h2>内部复核</h2><form id="pcReviewForm" class="pc-form"><p id="pcReviewTarget" data-i18n-skip></p><label>复核范围与结论<textarea id="pcReviewNotes" rows="3" maxlength="4000" required></textarea></label><p class="pc-muted">仅对当前文件指纹登记内部复核。来源变更或事项未解决时无法完成；此记录不代表投标、施工或装运批准。</p><div class="pc-row"><button type="submit">登记内部复核</button><button id="pcReviewCancel" type="button">取消</button></div></form></section>
     <section class="pc-panel"><details><summary>最近操作记录</summary><div id="pcEvents" class="pc-list" data-i18n-skip></div></details></section>
   </main>
-  <script src="/static/project-control.js"></script>
+  <script src="/static/modules/file-listing.js"></script><script src="/static/project-control.js"></script>
 </body>
 </html>

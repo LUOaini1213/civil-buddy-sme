@@ -1,5 +1,6 @@
 import { createAuth } from "./modules/auth.js";
 import { renderAgentMarkdown } from "./modules/agent-markdown.js";
+import "./modules/file-listing.js";
 
 const STORE_KEY = "cb_agent_workspaces_v1";
 const SUBMISSION_KEY = "cb_agent_pending_submissions_v1";
@@ -88,6 +89,7 @@ export function createAgentWorkbench(deps) {
   const t = (source, values = {}) => win.CBI18n?.t(source, values) ?? String(source || "").replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
   const fetcher = deps.fetch || ((url, init) => win.fetch(url, init));
   const storage = deps.storage || win.localStorage;
+  const fileListing = deps.fileListing || win.CBFileListing || globalThis.CBFileListing;
   const later = deps.setTimeout || setTimeout, unschedule = deps.clearTimeout || clearTimeout;
   const newId = deps.makeSessionId || (() => globalThis.crypto && typeof globalThis.crypto.randomUUID === "function"
     ? globalThis.crypto.randomUUID().replaceAll("-", "") : Date.now().toString(36) + Math.random().toString(36).slice(2));
@@ -99,7 +101,8 @@ export function createAgentWorkbench(deps) {
     engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, engineeringStatus: null, pendingPlanning: null, terminalNotice: false, experts: [],
     excelJobs: new Map(), excelActions: new Map(), excelLoading: false, excelError: "", excelTruncated: false, excelEpoch: 0,
     opening: false, submitting: false, cancelling: false, modelBusy: false, modelConfigured: false, disposed: false,
-    pendingSubmission: null, submissionScope: "", submissionRecovery: "", recoveringSubmission: false, submissionOutcome: null };
+    pendingSubmission: null, submissionScope: "", submissionRecovery: "", recoveringSubmission: false, submissionOutcome: null,
+    fileReport: null, fileListingError: false, removedFiles: [] };
   let saved = { lastRoot: "", workspaces: {} }, timer = null, controller = null, started = false;
   let excelTimer = null;
   let submissionI18n = null, pendingSubmissions = [];
@@ -391,15 +394,34 @@ export function createAgentWorkbench(deps) {
       }
     }
   }
+  function displayedFiles() {
+    const rows = state.files.map(file => ({ ...file, retained: false }));
+    if (state.fileReport?.complete !== true || state.fileListingError) {
+      const paths = new Set(rows.map(file => file.path));
+      for (const path of state.selected) if (!paths.has(path)) rows.push({ path, name: path, retained: true });
+    }
+    return rows;
+  }
+  function paintFilesStatus() {
+    win.CBI18n?.add(fileListing.messages);
+    const messages = [fileListing.notice(state.fileReport, t)];
+    if (state.fileListingError) messages.push(fileListing.failure(t));
+    if (state.removedFiles.length) messages.push(t("完整列表中已找不到这些来源，已取消选择：{paths}。", { paths: state.removedFiles.join("；") }));
+    $("agentFilesStatus").textContent = messages.filter(Boolean).join(" ");
+    $("agentFilesStatus").hidden = !$("agentFilesStatus").textContent;
+  }
   function paintFiles() {
+    paintFilesStatus();
     paintPackingSources();
     const host = $("agentFiles"); host.replaceChildren();
     if (!state.workspace) { host.appendChild(node("p", t("打开文件夹后显示可读资料。"), "muted")); return; }
-    if (!state.files.length) { host.appendChild(node("p", t("这个文件夹暂未列出可读资料。"), "muted")); return; }
-    for (const file of state.files) {
+    const files = displayedFiles();
+    if (!files.length) { host.appendChild(node("p", t("这个文件夹暂未列出可读资料。"), "muted")); return; }
+    for (const file of files) {
       const label = node("label", undefined, "file-row"), check = node("input"); check.type = "checkbox"; check.checked = state.selected.has(file.path);
       check.addEventListener("change", () => { check.checked ? state.selected.add(file.path) : state.selected.delete(file.path); record().files = [...state.selected]; persist(); paintPackingSources(); controls(); });
       const info = node("span", file.name || file.path); info.appendChild(node("small", file.path + (Number.isFinite(file.size) ? t(" · {size} 字节", { size: file.size.toLocaleString() }) : "")));
+      if (file.retained) info.appendChild(node("small", fileListing.retained(file.path, t)));
       label.append(check, info); host.appendChild(label);
     }
   }
@@ -407,9 +429,9 @@ export function createAgentWorkbench(deps) {
     const select = $("agentPackingSource"), selected = select.value;
     select.replaceChildren();
     const empty = node("option", t("本轮不重排")); empty.value = ""; select.appendChild(empty);
-    for (const file of state.files) {
+    for (const file of displayedFiles()) {
       if (!state.selected.has(file.path) || !/\.json$/i.test(file.path)) continue;
-      const option = node("option", file.path); option.value = file.path; select.appendChild(option);
+      const option = node("option", file.retained ? fileListing.retained(file.path, t) : file.path); option.value = file.path; select.appendChild(option);
     }
     select.value = [...select.options].some(option => option.value === selected) ? selected : "";
   }
@@ -419,10 +441,15 @@ export function createAgentWorkbench(deps) {
     try {
       const data = await request("/api/agent/files?" + new URLSearchParams({ workspace: id }));
       if (state.disposed || state.workspace?.id !== id || version !== state.fileEpoch) return;
-      state.files = Array.isArray(data.files) ? data.files.filter((file) => file && typeof file.path === "string") : [];
-      const paths = new Set(state.files.map((file) => file.path)); state.selected = new Set([...state.selected].filter((path) => paths.has(path)));
+      const report = fileListing.validate(data, id, "agent");
+      const paths = new Set(report.files.map(file => file.path));
+      state.removedFiles = report.complete ? [...state.selected].filter(path => !paths.has(path)) : [];
+      if (report.complete) state.selected = new Set([...state.selected].filter(path => paths.has(path)));
+      state.fileReport = report; state.files = report.files; state.fileListingError = false;
       record().files = [...state.selected]; persist(); paintFiles();
-    } catch (error) { if (state.workspace?.id === id && version === state.fileEpoch) notice(t("资料列表读取失败：") + error.message, true); }
+    } catch (error) { if (state.workspace?.id === id && version === state.fileEpoch) {
+      state.fileListingError = true; paintFiles(); notice(t("资料列表读取失败：") + t(error.message), true);
+    } }
   }
   function clearEngineering() {
     state.engineeringEpoch += 1; state.engineeringLoading = false;
@@ -561,6 +588,7 @@ export function createAgentWorkbench(deps) {
       if (!data.workspace || typeof data.workspace.id !== "string" || typeof data.workspace.root !== "string") throw new Error(t("工作区响应缺少标识或路径"));
       if (expectedId && data.workspace.id !== expectedId) throw new Error(t("工程链接与服务器返回的工程不一致，请从项目页重新打开。"));
       state.workspace = data.workspace;
+      state.files = []; state.fileReport = null; state.fileListingError = false; state.removedFiles = [];
       $("agentMessage").value = "";
       $("agentRiskConfirmation").value = "";
       if (data.capabilities) paintCapabilities(data.capabilities);

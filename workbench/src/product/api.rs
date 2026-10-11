@@ -347,9 +347,10 @@ async fn files(
     Query(q): Query<Scope>,
 ) -> Result<Json<Value>, HttpError> {
     let ws = st.workspace(&q.workspace).map_err(bad)?;
-    Ok(Json(
-        json!({"workspace":q.workspace,"files":super::tools::list_files(&ws).map_err(bad)?}),
-    ))
+    let report = super::file_listing::list_files(&ws, super::file_listing::FileListPurpose::Agent).map_err(bad)?;
+    let mut value = serde_json::to_value(report).map_err(bad)?;
+    value["workspace"] = json!(q.workspace);
+    Ok(Json(value))
 }
 
 async fn engineering_projects(

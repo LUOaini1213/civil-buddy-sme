@@ -3,7 +3,9 @@
 function createProjectControl(deps = {}) {
   const win = deps.window || window, doc = deps.document || document, fetcher = deps.fetch || win.fetch.bind(win);
   const $ = (id) => doc.getElementById(id), t = (s,p) => win.CBI18n?.t(s,p) || String(s).replace(/\{(\w+)\}/g,(_,k)=>p?.[k]??`{${k}}`);
-  const state = { workspace: "", workspaces: [], data: null, files: [], epoch: 0, refreshSeq: 0, historySeq: 0, workspaceSeq: 0, operationSeq: 0, busy: false, edit: null, issueEvidence: null, review: null, history: null, documentRevision: null, notice: null };
+  const fileListing = deps.fileListing || win.CBFileListing || globalThis.CBFileListing || (typeof require === "function" ? require("./modules/file-listing.js") : null);
+  let listingI18n=null;
+  const state = { workspace: "", workspaces: [], data: null, files: [], fileReport: null, fileFailure: false, sourceMissing: false, epoch: 0, refreshSeq: 0, historySeq: 0, workspaceSeq: 0, operationSeq: 0, busy: false, edit: null, issueEvidence: null, review: null, history: null, documentRevision: null, notice: null };
   const statusNames = { open:"待处理", in_progress:"处理中", resolved:"已解决", review_required:"需要重新复核", work_in_progress:"待复核", internally_reviewed:"已内部复核", current:"来源一致", changed:"来源已变化", unavailable:"来源不可读", not_checked:"本次未检查" };
   const eventNames = { document_revision_registered:"登记资料修订", issue_saved:"保存事项", issue_reopened:"修订后重新打开事项", document_internal_review:"登记内部复核" };
   const current = (epoch) => state.epoch === epoch;
@@ -23,9 +25,32 @@ function createProjectControl(deps = {}) {
   }
   async function request(url, body) { const r=await fetcher(url,body===undefined?undefined:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); const value=await r.json(); if(!r.ok)throw new Error(value.detail||`HTTP ${r.status}`);return value; }
   function options(host,items,first) { const old=host.value; host.replaceChildren(); if(first){const n=node("option",t(first));n.value="";host.append(n);} for(const item of items){const n=node("option",item.label);n.value=item.value;host.append(n);} if([...host.options].some(n=>n.value===old))host.value=old; }
+  function renderSourceNotice(){
+    if(win.CBI18n && listingI18n!==win.CBI18n){win.CBI18n.add(fileListing.messages);listingI18n=win.CBI18n;}
+    const messages=[];
+    if(state.fileFailure)messages.push(fileListing.failure(t));
+    else if(state.fileReport){const message=fileListing.notice(state.fileReport,t);if(message)messages.push(message);}
+    const source=$("pcSource").value;
+    if(source && state.fileReport && !state.fileReport.complete && !state.files.some(f=>f.path===source))messages.push(fileListing.retained(source,t));
+    if(/\.(ifc|dxf)$/i.test(source))messages.push(t("IFC/DXF 在这里用于登记文件快照；模型内容解析取决于相应工具和环境。"));
+    if(state.sourceMissing)messages.push(t("之前选择的来源未出现在完整文件列表中，已取消选择。请重新选择来源。"));
+    $("pcSourceNotice").textContent=messages.join(" ");$("pcSourceNotice").hidden=!messages.length;
+  }
+  function validateFiles(data,workspace){try{return fileListing.validate(data,workspace,"project_control");}catch(e){e.fileListingFailure=true;throw e;}}
+  function errorNotice(e){notice(e.message,true,!!e.fileListingFailure);}
+  function renderSources(selected=$("pcSource").value){
+    const items=state.files.map(f=>({value:f.path,label:f.path}));
+    if(selected && !items.some(f=>f.value===selected)){
+      if(state.fileReport && !state.fileReport.complete)items.push({value:selected,label:t("{path}（本次未列出，保留已选来源）",{path:selected})});
+      else if(state.fileReport?.complete)state.sourceMissing=true;
+    }
+    options($("pcSource"),items,"请选择来源文件");
+    if(items.some(f=>f.value===selected))$("pcSource").value=selected;else $("pcSource").value="";
+    renderSourceNotice();
+  }
   function documents(){return state.data?.documents||[];}
   function selectedDocument(){return documents().find(d=>d.id===$("pcDocumentId").value);}
-  function editDocument(){ const d=selectedDocument();state.documentRevision=d?.revision??null; if(d){$("pcTitle").value=d.title;$("pcDiscipline").value=d.discipline;$("pcRevision").value="";$("pcSource").value=d.path;} }
+  function editDocument(){ const d=selectedDocument();state.documentRevision=d?.revision??null; if(d){$("pcTitle").value=d.title;$("pcDiscipline").value=d.discipline;$("pcRevision").value="";state.sourceMissing=false;renderSources(d.path);} }
   function issueEvidence(){const d=state.issueEvidence, latest=documents().find(x=>x.id===d?.id);$("pcIssueEvidence").textContent=d?t("本次保存绑定：{title} · {revision}",{title:d.title,revision:d.revision_label})+(latest?.revision!==d.revision?" · "+t("资料已有新修订，请重新核对后更新事项。"):""):t("先登记资料，再创建事项。");$("pcResolution").required=$("pcIssueStatus").value==="resolved";}
   // Capture evidence only on an explicit editing/selection gesture. A refresh
   // must not silently rebase the user's description or resolution onto new bytes.
@@ -37,7 +62,7 @@ function createProjectControl(deps = {}) {
     options($("pcWorkspaceSelect"),state.workspaces.map(w=>({value:w.id,label:w.root})),"请选择工程文件夹");
     $("pcMetrics").replaceChildren();for(const [value,label] of [[documents().length,"受控资料"],[state.data?.unresolved_issues||0,"未解决事项"],[documents().filter(d=>d.effective_status==="internally_reviewed").length,"已内部复核"]]){const n=node("div",undefined,"pc-metric");n.append(node("strong",String(value)),node("span",t(label)));$("pcMetrics").append(n);}
     options($("pcDocumentId"),documents().map(d=>({value:d.id,label:`${d.title} · ${d.revision_label}`})),"新资料");
-    options($("pcSource"),state.files.filter(f=>/\.(pdf|docx|xlsx|csv|txt|md|json|ifc|dxf)$/i.test(f.path)).map(f=>({value:f.path,label:f.path})),"请选择来源文件");
+    renderSources();
     options($("pcIssueDocument"),documents().map(d=>({value:d.id,label:`${d.title} · ${d.revision_label}`})),"请选择关联资料");
     const host=$("pcDocuments");host.replaceChildren();if(!documents().length)host.append(node("p",t("尚无受控资料。展开下方表单登记第一份文件。"),"pc-muted"));
     for(const d of documents()){
@@ -48,18 +73,18 @@ function createProjectControl(deps = {}) {
     const events=$("pcEvents");events.replaceChildren();for(const e of state.data?.events||[]){events.append(node("p",`${e.at} · ${e.actor_id} · ${t(eventNames[e.kind]||e.kind)} · ${e.entity_id}`,"pc-muted"));}
     renderHistory();issueEvidence();renderNotice();controls();
   }
-  async function refresh(){if(!state.workspace)return;const epoch=state.epoch, seq=++state.refreshSeq, workspace=state.workspace;notice("正在检查来源…");try{const [data,files]=await Promise.all([request("/api/project-control?complete=true&workspace="+encodeURIComponent(workspace)),request("/api/agent/files?workspace="+encodeURIComponent(workspace))]);if(!current(epoch)||seq!==state.refreshSeq)return;state.data=data;state.files=files.files||[];render();notice("已读取服务器记录并检查来源。");}catch(e){if(current(epoch)&&seq===state.refreshSeq)throw e;}}
-  async function selectWorkspace(value){state.epoch++;state.refreshSeq++;state.historySeq++;state.operationSeq++;state.busy=false;state.workspace=value;$("pcWorkspaceSelect").value=value;state.data=null;state.files=[];state.history=null;state.review=null;state.documentRevision=null;$("pcReviewPanel").hidden=true;$("pcDocumentForm").reset();resetIssue();render();if(!value){notice("请选择或打开工程文件夹。");return;}const epoch=state.epoch;try{await refresh();if(current(epoch))try{win.localStorage.setItem("cb_project_workspace_v1",value);}catch(_){/* optional */}}catch(e){if(current(epoch))notice(e.message,true,false);}}
-  async function perform(fn,success,pending="正在保存…"){if(state.busy)return;const epoch=state.epoch, operation=++state.operationSeq;state.refreshSeq++;state.historySeq++;state.busy=true;notice(pending);controls();try{await fn();if(!current(epoch)||operation!==state.operationSeq)return;if(success)success();await refresh();}catch(e){if(current(epoch)&&operation===state.operationSeq)notice(e.message,true,false);}finally{if(operation===state.operationSeq){state.busy=false;controls();}}}
+  async function refresh(){if(!state.workspace)return;const epoch=state.epoch, seq=++state.refreshSeq, workspace=state.workspace;notice("正在检查来源…");try{const [data,files]=await Promise.all([request("/api/project-control?complete=true&workspace="+encodeURIComponent(workspace)),request("/api/project-control/files?workspace="+encodeURIComponent(workspace))]);if(!current(epoch)||seq!==state.refreshSeq)return;const report=validateFiles(files,workspace);state.data=data;state.files=report.files;state.fileReport=report;state.fileFailure=false;render();notice("已读取服务器记录并检查来源。");}catch(e){if(current(epoch)&&seq===state.refreshSeq){state.fileFailure=true;renderSourceNotice();throw e;}}}
+  async function selectWorkspace(value){state.epoch++;state.refreshSeq++;state.historySeq++;state.operationSeq++;state.busy=false;state.workspace=value;$("pcWorkspaceSelect").value=value;state.data=null;state.files=[];state.fileReport=null;state.fileFailure=false;state.sourceMissing=false;state.history=null;state.review=null;state.documentRevision=null;$("pcReviewPanel").hidden=true;$("pcDocumentForm").reset();resetIssue();render();if(!value){notice("请选择或打开工程文件夹。");return;}const epoch=state.epoch;try{await refresh();if(current(epoch))try{win.localStorage.setItem("cb_project_workspace_v1",value);}catch(_){/* optional */}}catch(e){if(current(epoch))errorNotice(e);}}
+  async function perform(fn,success,pending="正在保存…"){if(state.busy)return;const epoch=state.epoch, operation=++state.operationSeq;state.refreshSeq++;state.historySeq++;state.busy=true;notice(pending);controls();try{await fn();if(!current(epoch)||operation!==state.operationSeq)return;if(success)success();await refresh();}catch(e){if(current(epoch)&&operation===state.operationSeq)errorNotice(e);}finally{if(operation===state.operationSeq){state.busy=false;controls();}}}
   async function loadHistory(id){const epoch=state.epoch, seq=++state.historySeq;try{const h=await request(`/api/project-control/documents/${encodeURIComponent(id)}/revisions?workspace=${encodeURIComponent(state.workspace)}`);if(current(epoch)&&seq===state.historySeq){state.history=h;renderHistory();}}catch(e){if(current(epoch)&&seq===state.historySeq)notice(e.message,true,false);}}
   async function loadWorkspaces(){const seq=++state.workspaceSeq;try{const res=await request("/api/agent/workspaces");if(seq!==state.workspaceSeq)return false;state.workspaces=res.workspaces||[];options($("pcWorkspaceSelect"),state.workspaces.map(w=>({value:w.id,label:w.root})),"请选择工程文件夹");return true;}catch(e){if(seq===state.workspaceSeq)throw e;return false;}}
   async function registerWorkspace(path){const epoch=state.epoch;await perform(async()=>{const res=await request("/api/agent/workspaces",{path});if(!current(epoch))return;if(!await loadWorkspaces()||!current(epoch))return;await selectWorkspace(res.workspace.id);},undefined,"正在打开工程文件夹…");}
-  async function saveDocument(){const d=selectedDocument();await perform(()=>request("/api/project-control/documents",{workspace:state.workspace,document_id:d?.id||null,expected_revision:d?state.documentRevision:null,path:$("pcSource").value,title:$("pcTitle").value,discipline:$("pcDiscipline").value,revision_label:$("pcRevision").value}),()=>{$("pcDocumentForm").reset();state.documentRevision=null;state.history=null;});}
+  async function saveDocument(){const d=selectedDocument();await perform(()=>request("/api/project-control/documents",{workspace:state.workspace,document_id:d?.id||null,expected_revision:d?state.documentRevision:null,path:$("pcSource").value,title:$("pcTitle").value,discipline:$("pcDiscipline").value,revision_label:$("pcRevision").value}),()=>{$("pcDocumentForm").reset();state.documentRevision=null;state.sourceMissing=false;state.history=null;});}
   async function saveIssue(){const d=state.issueEvidence;if(!d||d.id!==$("pcIssueDocument").value){notice("请选择关联资料",true);return;}await perform(()=>request("/api/project-control/issues",{workspace:state.workspace,id:state.edit?.id||null,expected_version:state.edit?.version??null,document_id:d.id,document_revision:d.revision,kind:$("pcKind").value,title:$("pcIssueTitle").value,description:$("pcDescription").value,assignee:$("pcAssignee").value,due_date:$("pcDue").value,status:$("pcIssueStatus").value,resolution:$("pcResolution").value}),resetIssue);}
   async function saveReview(){if(!state.review)return;const review=state.review;await perform(()=>request(`/api/project-control/documents/${encodeURIComponent(review.id)}/review`,{workspace:state.workspace,expected_revision:review.revision,expected_review_version:review.reviewVersion,notes:$("pcReviewNotes").value}),()=>{state.review=null;$("pcReviewPanel").hidden=true;});}
   async function start(){
     $("pcWorkspaceForm").addEventListener("submit",e=>{e.preventDefault();registerWorkspace($("pcWorkspacePath").value);});$("pcWorkspaceSelect").addEventListener("change",()=>selectWorkspace($("pcWorkspaceSelect").value));$("pcRefresh").addEventListener("click",()=>perform(async()=>{},undefined,"正在检查来源…"));
-    $("pcDocumentId").addEventListener("change",editDocument);$("pcDocumentForm").addEventListener("submit",e=>{e.preventDefault();saveDocument();});$("pcIssueForm").addEventListener("submit",e=>{e.preventDefault();saveIssue();});$("pcIssueDocument").addEventListener("change",bindIssueEvidence);$("pcIssueStatus").addEventListener("change",issueEvidence);$("pcNewIssue").addEventListener("click",resetIssue);$("pcFilter").addEventListener("change",render);$("pcReviewForm").addEventListener("submit",e=>{e.preventDefault();saveReview();});$("pcReviewCancel").addEventListener("click",()=>{state.review=null;$("pcReviewPanel").hidden=true;});win.addEventListener("cb:languagechange",render);
+    $("pcDocumentId").addEventListener("change",editDocument);$("pcSource").addEventListener("change",()=>{state.sourceMissing=false;renderSourceNotice();});$("pcDocumentForm").addEventListener("submit",e=>{e.preventDefault();saveDocument();});$("pcIssueForm").addEventListener("submit",e=>{e.preventDefault();saveIssue();});$("pcIssueDocument").addEventListener("change",bindIssueEvidence);$("pcIssueStatus").addEventListener("change",issueEvidence);$("pcNewIssue").addEventListener("click",resetIssue);$("pcFilter").addEventListener("change",render);$("pcReviewForm").addEventListener("submit",e=>{e.preventDefault();saveReview();});$("pcReviewCancel").addEventListener("click",()=>{state.review=null;$("pcReviewPanel").hidden=true;});win.addEventListener("cb:languagechange",render);
     const epoch=state.epoch, operation=state.operationSeq;notice("正在读取工程列表…");controls();try{if(!await loadWorkspaces()||!current(epoch)||operation!==state.operationSeq)return;let saved="";try{saved=win.localStorage.getItem("cb_project_workspace_v1");}catch(_){}if(state.workspaces.some(w=>w.id===saved)){$("pcWorkspaceSelect").value=saved;await selectWorkspace(saved);}else notice("请选择或打开工程文件夹。");}catch(e){if(current(epoch)&&operation===state.operationSeq)notice(e.message,true,false);}
   }
   return {state,start,selectWorkspace,refresh,registerWorkspace,saveDocument,saveIssue,saveReview,editIssue,render};

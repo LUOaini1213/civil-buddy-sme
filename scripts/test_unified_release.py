@@ -79,7 +79,7 @@ class UnifiedReleaseTests(unittest.TestCase):
                              "frontend/index.html", "frontend/manifest.webmanifest", "frontend/icons/cb-icon.svg",
                              "demo/static/project-control.html", "demo/static/project-control.js",
                              "demo/static/project-control.css", "demo/static/i18n-project.js",
-                             "demo/static/modules/agent-markdown.js", "demo/static/vendor/marked.min.js",
+                             "demo/static/modules/agent-markdown.js", "demo/static/modules/file-listing.js", "demo/static/vendor/marked.min.js",
                              "gateway/idempotency.py", "scripts/workbench_preflight.py",
                              "gateway/pages/demo.html", "examples/facade-demo/facade_itt_doc.md",
                              "start-workbench.bat", "prepare-unified-workbench.bat", "start-unified-workbench.bat",

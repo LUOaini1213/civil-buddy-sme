@@ -110,73 +110,6 @@ fn patch_contents(patch: &Value) -> Vec<(String, String, bool, bool)> {
 pub fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
-fn supported(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase()
-            .as_str(),
-        "pdf" | "xlsx" | "docx" | "txt" | "md" | "csv" | "json"
-    )
-}
-pub fn list_files(ws: &WorkspaceContext) -> Result<Vec<Value>, String> {
-    let mut files = Vec::new();
-    let mut directories = vec![(ws.root().to_path_buf(), 0)];
-    while let Some((directory, depth)) = directories.pop() {
-        if depth > 5 {
-            continue;
-        }
-        let entries = std::fs::read_dir(directory).map_err(|e| e.to_string())?;
-        for entry in entries {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-            if entry.file_name().to_string_lossy().starts_with('.') {
-                continue;
-            }
-            let kind = entry.file_type().map_err(|e| e.to_string())?;
-            if kind.is_symlink() {
-                continue;
-            }
-            if kind.is_dir() {
-                // Do not traverse junctions. resolve_read only permits files;
-                // canonical containment and Windows reparse checks guard directories.
-                #[cfg(windows)]
-                {
-                    use std::os::windows::fs::MetadataExt;
-                    if entry
-                        .metadata()
-                        .map_err(|e| e.to_string())?
-                        .file_attributes()
-                        & 0x400
-                        != 0
-                    {
-                        continue;
-                    }
-                }
-                if path
-                    .canonicalize()
-                    .map_err(|e| e.to_string())?
-                    .starts_with(ws.root())
-                {
-                    directories.push((path, depth + 1));
-                }
-            } else if kind.is_file() && supported(&path) {
-                let relative = path.strip_prefix(ws.root()).map_err(|e| e.to_string())?;
-                if ws.resolve_read(relative).is_err() {
-                    continue;
-                }
-                files.push(json!({"path":relative.to_string_lossy().replace('\\',"/"),"name":entry.file_name().to_string_lossy(),"size":entry.metadata().map_err(|e|e.to_string())?.len()}));
-                if files.len() >= 500 {
-                    return Ok(files);
-                }
-            }
-        }
-    }
-    files.sort_by_key(|v| v["path"].as_str().unwrap_or("").to_owned());
-    Ok(files)
-}
-
 fn schema(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({"type":"function","function":{"name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}})
 }
@@ -614,7 +547,10 @@ impl ToolScope<'_> {
         self.cancel.check().map_err(|e| e.to_string())?;
         match name {
             "list_files" => {
-                Ok(json!({"files":list_files(self.workspace)?,"selected":self.selected}))
+                let report = super::file_listing::list_files(self.workspace, super::file_listing::FileListPurpose::Agent)?;
+                let mut value = serde_json::to_value(report).map_err(|_| "File listing could not be encoded")?;
+                value["selected"] = json!(self.selected);
+                Ok(value)
             }
             "load_skill" => {
                 let id = args["skill_id"].as_str().ok_or("skill_id required")?;

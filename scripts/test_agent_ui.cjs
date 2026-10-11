@@ -21,6 +21,10 @@ test("Saved plan link parser binds one exact revision/hash and rejects ambiguous
 const caps = { available: true, models: { configured: false }, modes: ["steps", "model"], sandbox: ["read-only", "workspace-write"],
   features: { cancel: true, context: true, subagents: true, documents: true }, sandbox_controls: { policy: true, os_enforced: false } };
 const response = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+const fileReport = (files, workspace = "workspace-1", extra = {}) => ({ schema_version: 1, workspace, purpose: "agent",
+  files: files.map(file => ({ name: file.path.split("/").at(-1), size: 0, ...file })), returned_count: files.length,
+  complete: true, limits: { max_files: 500, max_directory_depth: 5, max_scanned_entries: 10000 },
+  file_limit_reached: false, depth_limit_reached: false, scan_limit_reached: false, incomplete_reasons: [], ...extra });
 const storage = () => { const values = new Map(); return { getItem: (key) => values.get(key) || null, setItem: (key, value) => values.set(key, String(value)), values }; };
 function installLanguage(h, locale = "zh-CN") {
   h.win.localStorage.setItem("cb_locale_v1", locale);
@@ -258,7 +262,7 @@ function harness(route = () => undefined, saved = storage()) {
     if (url.startsWith("/api/agent/engineering/projects?")) return response({ projects: [] });
     if (url === "/api/llm-config" && !init) return response({ configured: false, model: "", base_url: "https://example.invalid/v1" });
     if (url === "/api/agent/workspaces") return response({ workspace: { id: "workspace-1", root: "C:/engineering" }, capabilities: caps });
-    if (url.startsWith("/api/agent/files?")) return response({ files: [{ path: "方案.docx", name: "方案.docx", size: 120 }, { path: "计划.xlsx", name: "计划.xlsx", size: 240 }] });
+    if (url.startsWith("/api/agent/files?")) return response(fileReport([{ path: "方案.docx", name: "方案.docx", size: 120 }, { path: "计划.xlsx", name: "计划.xlsx", size: 240 }], new URL(url, "http://localhost").searchParams.get("workspace")));
     if (url.startsWith("/api/agent/turns?")) return response({ turns: [] });
     throw new Error("unexpected request: " + url);
   };
@@ -435,7 +439,7 @@ test("Submission recovery: a late accepted POST cannot paint or consume input in
 
 test("Submission recovery: server-captured packing hashes and absent UI defaults still recover the exact saved task", async (t) => {
   const saved = storage(), server = submissionServer({ capabilities: { features: { ...caps.features, packing_replan: true } } });
-  const route = (url, init) => url.startsWith("/api/agent/files?") ? response({ files: [{ path: "箱单.json", name: "箱单.json" }] }) : server.route(url, init);
+  const route = (url, init) => url.startsWith("/api/agent/files?") ? response(fileReport([{ path: "箱单.json", name: "箱单.json" }])) : server.route(url, init);
   const first = harness(route, saved); t.after(first.close); await first.ready(); first.selectFirst();
   first.$("agentPackingSource").value = "箱单.json"; first.$("agentMessage").value = "只读重排已选箱单"; await first.app.send();
   const sent = first.calls.find(call => call.url === "/api/agent/turns" && call.init).body;
@@ -485,7 +489,7 @@ test("Agent packing: only explicitly selected JSON is authorized for one turn", 
     if (url === "/api/agent/capabilities" || url === "/api/agent/workspaces") return response(url.endsWith("workspaces")
       ? { workspace: { id: "workspace-1", root: "C:/engineering" }, capabilities: { ...caps, features: { ...caps.features, packing_replan: true } } }
       : { ...caps, features: { ...caps.features, packing_replan: true } });
-    if (url.startsWith("/api/agent/files?")) return response({ files: [{ path: "箱单.json" }, { path: "约束.JSON" }, { path: "资料.xlsx" }] });
+    if (url.startsWith("/api/agent/files?")) return response(fileReport([{ path: "箱单.json" }, { path: "约束.JSON" }, { path: "资料.xlsx" }]));
     if (url === "/api/agent/turns" && init) return response({ turn_id: "packing-turn", session_id: JSON.parse(init.body).session_id });
     if (url.includes("/packing-turn/events?")) return response({ events: [], turn: { status: "completed", result: { reply: "仅做核对" } } });
   });
@@ -1932,4 +1936,80 @@ test("Submission recovery: a later history selection in the same session keeps i
   assert.notEqual(h.app.state.submissionOutcome, "recovered");
   assert.equal(h.$("agentNotice").textContent, notice);
   assert.equal(server.stats.tasks, 1);
+});
+
+test("File discovery: a partial list retains visible explicit sources and packing choice without granting permission", async (t) => {
+  let listing = fileReport([{ path: "箱单.json" }, { path: "site-note.txt" }]);
+  const server = submissionServer({ loseFirst: false, capabilities: { features: { ...caps.features, packing_replan: true } } });
+  const h = harness((url, init) => url.startsWith("/api/agent/files?") ? response(listing) : server.route(url, init));
+  t.after(h.close); installLanguage(h); await h.ready();
+  for (const input of h.doc.querySelectorAll("#agentFiles input")) { input.checked = true; input.dispatchEvent(new h.win.Event("change")); }
+  h.$("agentPackingSource").value = "箱单.json"; h.$("agentMessage").value = "Keep this unsent draft";
+  listing = fileReport([{ path: "another.md" }], "workspace-1", { complete: false, depth_limit_reached: true, incomplete_reasons: ["depth_limit"] });
+  await h.app.loadFiles();
+  assert.deepEqual([...h.app.state.selected].sort(), ["site-note.txt", "箱单.json"].sort());
+  assert.equal(h.$("agentPackingSource").value, "箱单.json"); assert.match(h.$("agentFiles").textContent, /已保留此前选择/);
+  assert.equal(h.doc.querySelectorAll("#agentFiles input:checked").length, 2);
+  assert.equal(h.$("agentSandbox").value, "read-only"); assert.equal(h.$("agentRiskConfirmation").value, ""); assert.equal(server.stats.posts, 0);
+  h.win.CBI18n.setLocale("en");
+  assert.match(h.$("agentFilesStatus").textContent, /may be incomplete/); assert.match(h.$("agentFiles").textContent, /Previous selection retained: 箱单.json/);
+  assert.equal(h.$("agentPackingSource").value, "箱单.json"); assert.equal(h.$("agentMessage").value, "Keep this unsent draft");
+  await h.app.send();
+  const sent = h.calls.find(call => call.url === "/api/agent/turns" && call.init).body;
+  assert.deepEqual(sent.files.sort(), ["site-note.txt", "箱单.json"].sort()); assert.deepEqual(sent.packing_sources, [{ source: "箱单.json" }]);
+  assert.equal(sent.sandbox, "read-only"); assert.equal(sent.risk_confirmation, "");
+});
+
+test("File discovery: malformed inventories cannot erase choices or expand Agent formats", async (t) => {
+  for (const kind of ["missing-files", "wrong-workspace", "wrong-purpose", "duplicate-path", "invalid-count", "invalid-flags", "false-complete-at-limit", "ifc-as-agent"]) await t.test(kind, async (t) => {
+    let listing = fileReport([{ path: "箱单.json" }]);
+    const server = submissionServer({ capabilities: { features: { ...caps.features, packing_replan: true } } });
+    const h = harness((url, init) => url.startsWith("/api/agent/files?") ? response(listing) : server.route(url, init));
+    t.after(h.close); installLanguage(h); await h.ready(); h.selectFirst(); h.$("agentPackingSource").value = "箱单.json";
+    const before = JSON.stringify(h.app.state.files), saved = h.saved.getItem("cb_agent_workspaces_v1");
+    listing = fileReport([]);
+    if (kind === "missing-files") delete listing.files;
+    if (kind === "wrong-workspace") listing.workspace = "other-project";
+    if (kind === "wrong-purpose") listing.purpose = "project_control";
+    if (kind === "duplicate-path") listing = fileReport([{ path: "duplicate.md" }, { path: "duplicate.md" }]);
+    if (kind === "invalid-count") listing.returned_count = 1;
+    if (kind === "invalid-flags") listing.complete = false;
+    if (kind === "false-complete-at-limit") listing = fileReport(Array.from({ length: 500 }, (_, index) => ({ path: `listed-${index}.md` })));
+    if (kind === "ifc-as-agent") listing = fileReport([{ path: "design.ifc" }]);
+    await h.app.loadFiles();
+    assert.equal(JSON.stringify(h.app.state.files), before); assert.deepEqual([...h.app.state.selected], ["箱单.json"]);
+    assert.equal(h.$("agentPackingSource").value, "箱单.json"); assert.equal(h.saved.getItem("cb_agent_workspaces_v1"), saved);
+    assert.equal(server.stats.posts, 0); h.win.CBI18n.setLocale("en"); assert.match(h.$("agentFilesStatus").textContent, /could not be validated/);
+  });
+});
+
+test("File discovery: complete absence deselects with a bilingual explanation", async (t) => {
+  let listing = fileReport([{ path: "箱单.json" }]);
+  const server = submissionServer({ capabilities: { features: { ...caps.features, packing_replan: true } } });
+  const h = harness((url, init) => url.startsWith("/api/agent/files?") ? response(listing) : server.route(url, init));
+  t.after(h.close); installLanguage(h); await h.ready(); h.selectFirst(); h.$("agentPackingSource").value = "箱单.json";
+  listing = fileReport([]); await h.app.loadFiles();
+  assert.equal(h.app.state.selected.size, 0); assert.equal(h.$("agentPackingSource").value, "");
+  assert.match(h.$("agentFilesStatus").textContent, /已取消选择：箱单.json/);
+  h.win.CBI18n.setLocale("en"); assert.match(h.$("agentFilesStatus").textContent, /deselected: 箱单.json/);
+  assert.equal(server.stats.posts, 0);
+});
+
+test("File discovery: delayed partial refresh cannot retain sources in a different workspace", async (t) => {
+  let delay = false, release;
+  const server = submissionServer({ capabilities: { features: { ...caps.features, packing_replan: true } } });
+  const h = harness((url, init) => {
+    if (url.startsWith("/api/agent/files?")) {
+      const workspace = new URL(url, "http://localhost").searchParams.get("workspace");
+      if (delay && workspace === "workspace-1") { delay = false; return new Promise(resolve => { release = () => resolve(response(fileReport([], workspace, { complete: false, depth_limit_reached: true, incomplete_reasons: ["depth_limit"] }))); }); }
+      return response(fileReport([{ path: workspace === "workspace-1" ? "old.json" : "new.json" }], workspace));
+    }
+    return server.route(url, init);
+  });
+  t.after(h.close); await h.ready(); h.selectFirst(); h.$("agentPackingSource").value = "old.json";
+  delay = true; const loading = h.app.loadFiles(); await waitFor(() => typeof release === "function");
+  await h.app.openWorkspace("C:/second"); h.selectFirst(); h.$("agentPackingSource").value = "new.json";
+  release(); await loading;
+  assert.deepEqual([...h.app.state.selected], ["new.json"]); assert.equal(h.$("agentPackingSource").value, "new.json");
+  assert.doesNotMatch(h.$("agentFiles").textContent, /old.json/); assert.equal(server.stats.posts, 0);
 });

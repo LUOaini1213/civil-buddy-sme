@@ -6,11 +6,13 @@ const html=fs.readFileSync(path.join(__dirname,"../demo/static/project-control.h
 const documentRecord={id:"doc1",title:"原始方案 <script>alert(1)</script>",path:"资料.md",discipline:"幕墙",revision:1,review_version:1,revision_label:"Rev A",sha256:"a".repeat(64),status:"work_in_progress",effective_status:"work_in_progress",source_status:"current"};
 const issue={id:"issue1",version:4,document_id:"doc1",document_revision:1,kind:"rfi",title:"复核原文",description:"尺寸按原文件，不擅自翻译",assignee:"张工",due_date:"2026-10-15",status:"review_required",resolution:"原说明"};
 const response=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{"Content-Type":"application/json"}});
+const fileRecord=source=>({path:source,name:source.split("/").at(-1),size:21});
+const fileReport=(workspace="w1",sources=["资料.md","材料.xlsx"],overrides={})=>({schema_version:1,workspace,purpose:"project_control",files:sources.map(fileRecord),returned_count:sources.length,complete:true,limits:{max_files:500,max_directory_depth:5,max_scanned_entries:10000},file_limit_reached:false,depth_limit_reached:false,scan_limit_reached:false,incomplete_reasons:[],...overrides});
 function harness(override=()=>undefined){
   const dom=new JSDOM(html,{url:"http://localhost/static/project-control.html",runScripts:"outside-only"});let data={documents:[{...documentRecord}],issues:[{...issue}],events:[],unresolved_issues:1};const calls=[];
   for(const f of ["i18n.js","i18n-project.js"])dom.window.eval(fs.readFileSync(path.join(__dirname,"../demo/static",f),"utf8"));
   dom.window.document.dispatchEvent(new dom.window.Event("DOMContentLoaded"));
-  const fetch=async(url,init)=>{const body=init?.body?JSON.parse(init.body):undefined;calls.push({url,body});const custom=await override(url,body);if(custom!==undefined)return custom;if(url==="/api/agent/workspaces")return response({workspaces:[{id:"w1",root:"C:/甲项目"},{id:"w2",root:"C:/乙项目"}]});if(url.startsWith("/api/agent/files?"))return response({files:[{path:"资料.md"},{path:"材料.xlsx"}]});if(url.startsWith("/api/project-control?"))return response(data);if(url.startsWith("/api/project-control/documents/doc1/revisions"))return response({revisions:[documentRecord]});throw new Error("Unexpected route "+url);};
+  const fetch=async(url,init)=>{const body=init?.body?JSON.parse(init.body):undefined;calls.push({url,body});const custom=await override(url,body);if(custom!==undefined)return custom;if(url==="/api/agent/workspaces")return response({workspaces:[{id:"w1",root:"C:/甲项目"},{id:"w2",root:"C:/乙项目"}]});if(url.startsWith("/api/project-control/files?"))return response(fileReport(new URL(url,"http://localhost").searchParams.get("workspace")));if(url.startsWith("/api/project-control?"))return response(data);if(url.startsWith("/api/project-control/documents/doc1/revisions"))return response({revisions:[documentRecord]});throw new Error("Unexpected route "+url);};
   const app=createProjectControl({document:dom.window.document,window:dom.window,fetch});return{app,dom,calls,$:id=>dom.window.document.getElementById(id),setData:v=>{data=v;},async start(){await app.start();await app.selectWorkspace("w1");},close(){dom.window.close();}};
 }
 test("bilingual product changes UI without translating source records, fields or evidence",async()=>{
@@ -144,5 +146,100 @@ test("startup restoration cannot replace a manual open already in progress",asyn
     list.resolve(response({workspaces:[{id:"w1",root:"C:/甲项目"},{id:"w2",root:"C:/乙项目"}]}));await startup;
     assert.equal(h.app.state.workspace,"");assert.equal(h.app.state.busy,true);assert.equal(h.$("pcStatus").textContent,"正在打开工程文件夹…");
     opening.resolve(response({workspace:{id:"w2"}}));await manual;assert.equal(h.app.state.workspace,"w2");assert.equal(h.app.state.busy,false);
+  }finally{h.close();}
+});
+
+test("project source chooser uses the validated purpose-specific endpoint and offers IFC/DXF snapshots without selecting them",async()=>{
+  const sources=["资料.md","模型/幕墙.ifc","图纸/节点.DXF"];
+  const h=harness(url=>url.startsWith("/api/project-control/files?")?response(fileReport("w1",sources)):undefined);
+  try{
+    await h.start();assert.deepEqual([...h.$("pcSource").options].map(o=>o.value),["",...sources]);
+    assert.equal(h.$("pcSource").value,"");assert.equal(h.$("pcSourceNotice").hidden,true);
+    assert.equal(h.calls.some(c=>c.url.startsWith("/api/agent/files?")),false);
+    for(const source of sources.slice(1)){
+      h.$("pcSource").value=source;h.$("pcSource").dispatchEvent(new h.dom.window.Event("change"));
+      h.dom.window.CBI18n.setLocale("en");assert.equal(h.$("pcSource").selectedOptions[0].textContent,source);
+      assert.equal(h.$("pcSource").value,source);assert.match(h.$("pcSourceNotice").textContent,/source snapshots/);h.dom.window.CBI18n.setLocale("zh-CN");assert.match(h.$("pcSourceNotice").textContent,/登记文件快照/);
+    }
+    assert.equal(h.calls.some(c=>c.body),false);
+    const scripts=[...h.dom.window.document.querySelectorAll("script[src]")].map(n=>n.getAttribute("src"));
+    assert.ok(scripts.indexOf("/static/modules/file-listing.js")<scripts.indexOf("/static/project-control.js"));
+    assert.equal(h.$("pcSource").getAttribute("aria-describedby"),"pcSourceNotice");
+  }finally{h.close();}
+});
+
+test("partial listings preserve an explicitly selected omitted source and all unsaved revision and issue evidence",async()=>{
+  let report=fileReport();
+  const h=harness(url=>url.startsWith("/api/project-control/files?")?response(report):url==="/api/project-control/documents"?response({detail:"Preserve draft for inspection"},409):undefined);
+  try{
+    await h.start();h.$("pcDocumentId").value="doc1";h.$("pcDocumentId").dispatchEvent(new h.dom.window.Event("change"));h.app.editIssue(issue);
+    h.$("pcTitle").value="我的草稿标题";h.$("pcDiscipline").value="我的用途";h.$("pcRevision").value="我的 Rev B";h.$("pcResolution").value="我的处理依据";
+    const basis=structuredClone(h.app.state.issueEvidence);
+    report=fileReport("w1",["材料.xlsx"],{complete:false,depth_limit_reached:true,incomplete_reasons:["depth_limit"]});h.setData(dataAt(2));await h.app.refresh();
+    assert.equal(h.$("pcSource").value,"资料.md");assert.match(h.$("pcSource").selectedOptions[0].textContent,/保留已选来源/);assert.equal(h.$("pcSourceNotice").hidden,false);
+    assert.equal(h.$("pcTitle").value,"我的草稿标题");assert.equal(h.$("pcDiscipline").value,"我的用途");assert.equal(h.$("pcRevision").value,"我的 Rev B");assert.equal(h.$("pcResolution").value,"我的处理依据");
+    assert.deepEqual(h.app.state.issueEvidence,basis);assert.equal(h.app.state.documentRevision,1);
+    h.dom.window.CBI18n.setLocale("en");assert.match(h.$("pcSource").selectedOptions[0].textContent,/selected source retained/);assert.match(h.$("pcSourceNotice").textContent,/资料\.md/);assert.match(h.$("pcSourceNotice").textContent,/incomplete|partial|limit/i);
+    assert.equal(h.$("pcSource").value,"资料.md");assert.deepEqual(h.app.state.issueEvidence,basis);
+    await h.app.saveDocument();const sent=h.calls.find(c=>c.url==="/api/project-control/documents").body;
+    assert.equal(sent.path,"资料.md");assert.equal(sent.expected_revision,1);assert.equal(sent.title,"我的草稿标题");assert.equal(sent.revision_label,"我的 Rev B");
+    h.dom.window.CBI18n.setLocale("zh-CN");assert.equal(h.$("pcSource").value,"资料.md");assert.match(h.$("pcSourceNotice").textContent,/资料\.md/);
+  }finally{h.close();}
+});
+
+test("only a valid complete absence clears the source, gives bilingual guidance, and preserves revision draft",async()=>{
+  let report=fileReport();const h=harness(url=>url.startsWith("/api/project-control/files?")?response({...report,workspace:new URL(url,"http://localhost").searchParams.get("workspace")}):undefined);
+  try{
+    await h.start();h.$("pcDocumentId").value="doc1";h.$("pcDocumentId").dispatchEvent(new h.dom.window.Event("change"));h.$("pcTitle").value="未保存的名称";h.$("pcRevision").value="未保存的修订";
+    report=fileReport("w1",["材料.xlsx"]);await h.app.refresh();
+    assert.equal(h.$("pcSource").value,"");assert.match(h.$("pcSourceNotice").textContent,/已取消选择/);assert.equal(h.$("pcTitle").value,"未保存的名称");assert.equal(h.$("pcRevision").value,"未保存的修订");assert.equal(h.app.state.documentRevision,1);
+    h.dom.window.CBI18n.setLocale("en");assert.match(h.$("pcSourceNotice").textContent,/complete file list.*cleared/);assert.equal(h.$("pcSource").value,"");
+    h.$("pcSource").value="材料.xlsx";h.$("pcSource").dispatchEvent(new h.dom.window.Event("change"));assert.equal(h.$("pcSourceNotice").hidden,true);
+    await h.app.selectWorkspace("w2");assert.equal(h.$("pcSource").value,"");assert.equal(h.$("pcTitle").value,"");assert.equal(h.$("pcRevision").value,"");assert.equal(h.app.state.documentRevision,null);assert.equal(h.app.state.issueEvidence,null);assert.equal(h.app.state.fileFailure,false);assert.equal(h.app.state.fileReport.workspace,"w2");
+  }finally{h.close();}
+});
+
+test("malformed or cross-purpose lists leave records, source, and every captured draft unchanged until retry succeeds",async t=>{
+  const mutations=[
+    ["missing files",()=>({})],
+    ["wrong workspace",()=>fileReport("w2")],
+    ["wrong purpose",()=>fileReport("w1",[],{purpose:"agent"})],
+    ["count mismatch",()=>fileReport("w1",[],{returned_count:1})],
+    ["invalid completeness",()=>fileReport("w1",[],{complete:false})],
+    ["500 rows falsely claiming a complete list",()=>fileReport("w1",Array.from({length:500},(_,i)=>`资料-${i}.md`))],
+    ["unsafe duplicate",()=>fileReport("w1",["资料.md","资料.md"])],
+    ["invalid file shape",()=>fileReport("w1",[],{files:[{path:"资料.md"}],returned_count:1})],
+  ];
+  for(const [name,mutate] of mutations)await t.test(name,async()=>{
+    let bad=false;const h=harness(url=>bad&&url.startsWith("/api/project-control/files?")?response(mutate()):undefined);
+    try{
+      await h.start();h.$("pcDocumentId").value="doc1";h.$("pcDocumentId").dispatchEvent(new h.dom.window.Event("change"));h.app.editIssue(issue);h.$("pcTitle").value="标题草稿";h.$("pcDiscipline").value="用途草稿";h.$("pcRevision").value="修订草稿";h.$("pcResolution").value="依据草稿";
+      const records=h.app.state.data,files=h.app.state.files,report=h.app.state.fileReport,basis=structuredClone(h.app.state.issueEvidence);
+      h.setData(dataAt(8));bad=true;await assert.rejects(h.app.refresh());
+      assert.equal(h.app.state.data,records);assert.equal(h.app.state.files,files);assert.equal(h.app.state.fileReport,report);assert.equal(h.$("pcSource").value,"资料.md");assert.equal(h.$("pcTitle").value,"标题草稿");assert.equal(h.$("pcDiscipline").value,"用途草稿");assert.equal(h.$("pcRevision").value,"修订草稿");assert.equal(h.$("pcResolution").value,"依据草稿");assert.equal(h.app.state.documentRevision,1);assert.deepEqual(h.app.state.issueEvidence,basis);assert.equal(h.app.state.fileFailure,true);
+      assert.equal(h.$("pcSourceNotice").hidden,false);h.dom.window.CBI18n.setLocale("en");assert.match(h.$("pcSourceNotice").textContent,/retry|refresh/i);assert.equal(h.$("pcSource").value,"资料.md");
+      bad=false;await h.app.refresh();assert.equal(h.app.state.fileFailure,false);assert.equal(h.app.state.data.documents[0].revision,8);assert.equal(h.$("pcSourceNotice").hidden,true);assert.equal(h.app.state.documentRevision,1);assert.deepEqual(h.app.state.issueEvidence,basis);assert.equal(h.calls.some(c=>c.body),false);
+    }finally{h.close();}
+  });
+});
+
+test("late partial or malformed file responses from an old workspace cannot retain its source in the new workspace",async t=>{
+  for(const malformed of [false,true])await t.test(malformed?"malformed old list":"partial old list",async()=>{
+    const waiting=deferred();let delay=false;const h=harness(url=>delay&&url==="/api/project-control/files?workspace=w1"?waiting.promise:undefined);
+    try{
+      await h.start();h.$("pcSource").value="资料.md";delay=true;const old=h.app.refresh();await tick();await h.app.selectWorkspace("w2");
+      waiting.resolve(response(malformed?{}:fileReport("w1",[],{complete:false,depth_limit_reached:true,incomplete_reasons:["depth_limit"]})));await old;
+      assert.equal(h.app.state.workspace,"w2");assert.equal(h.app.state.fileReport.workspace,"w2");assert.equal(h.$("pcSource").value,"");assert.equal(h.$("pcSourceNotice").hidden,true);assert.equal(h.app.state.fileFailure,false);
+    }finally{h.close();}
+  });
+});
+
+test("the actual refresh button translates client list failures while preserving the selected source and draft",async()=>{
+  let bad=false;const h=harness(url=>bad&&url.startsWith("/api/project-control/files?")?response({}):undefined);
+  try{
+    await h.start();h.$("pcSource").value="资料.md";h.$("pcTitle").value="保留草稿";h.dom.window.CBI18n.setLocale("en");bad=true;
+    h.$("pcRefresh").click();await tick();assert.equal(h.app.state.busy,false);assert.match(h.$("pcStatus").textContent,/could not be validated/);assert.match(h.$("pcSourceNotice").textContent,/refresh again/);
+    h.dom.window.CBI18n.setLocale("zh-CN");assert.match(h.$("pcStatus").textContent,/响应无法核对/);assert.match(h.$("pcSourceNotice").textContent,/重试刷新/);
+    assert.equal(h.$("pcSource").value,"资料.md");assert.equal(h.$("pcTitle").value,"保留草稿");assert.equal(h.calls.some(c=>c.body),false);
   }finally{h.close();}
 });
