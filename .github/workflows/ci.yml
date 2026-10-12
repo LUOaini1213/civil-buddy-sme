@@ -40,6 +40,7 @@ jobs:
         run: |
           cargo build --locked --manifest-path workbench/Cargo.toml --bin civil-workbench
           python scripts/test_unified_runtime_http.py --binary workbench/target/debug/civil-workbench
+          python scripts/native_engineering_runtime.py --binary workbench/target/debug/civil-workbench
 
   smoke:
     runs-on: ubuntu-latest

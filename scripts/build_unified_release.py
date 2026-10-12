@@ -37,6 +37,7 @@ EXTRA = (
     "docs/civil-buddy/acceptance/sme-preview-checklist.md",
     "scripts/unified_acceptance.py", "scripts/test_unified_runtime_http.py", "scripts/test_linked_runtime_http.py",
     "scripts/native_engineering_acceptance.py", "scripts/test_frame_analysis.py",
+    "scripts/native_engineering_runtime.py",
     "scripts/test_engineering_section.py", "scripts/test_engineering_ifc.py",
     "scripts/test_engineering_api.py", "scripts/test_cad_api.py",
     "examples/facade-demo/README.md", "examples/facade-demo/facade_itt_doc.md",
@@ -259,11 +260,15 @@ $env:PYTHON_DOTENV_DISABLED='1'
 
 ```powershell
 & ".\\.venv\\Scripts\\python.exe" scripts/native_engineering_acceptance.py
+& ".\\.venv\\Scripts\\python.exe" scripts/native_engineering_runtime.py --binary bin/civil-workbench.exe
 ```
 
 此入口使用合成资料，要求固定求解器版本及零跳过；缺依赖、skip、预期失败或测试减少
 均返回失败。它生成新的 JSON 报告，记录依赖版本、源码哈希与逐项结果，不覆盖历史证据。
 这不等于真实工程、第二台电脑、真实模型或工程签认通过。
+第二项从临时具名账号登录 Rust 主入口，调用实际梁、截面及 IFC 求解器，检查签认导出门禁、
+版本冲突、真实进程重启恢复与跨账号隔离。两项必须使用同时安装主项目、CAD 和工程依赖的解释器；
+测试实例不配置模型，不能把另一套解释器的已安装依赖当成本实例可用。
 """
 
 

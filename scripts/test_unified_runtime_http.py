@@ -51,8 +51,8 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def request(base, path, body=None, *, token=None, cookie=None, form=False, content_type=None, timeout=30):
-    headers = {"Origin": base, "Content-Type": content_type or ("application/x-www-form-urlencoded" if form else "application/json")}
+def request(base, path, body=None, *, token=None, cookie=None, form=False, content_type=None, timeout=30, origin=None):
+    headers = {"Origin": origin or base, "Content-Type": content_type or ("application/x-www-form-urlencoded" if form else "application/json")}
     if token:
         headers["Authorization"] = "Bearer " + token
     if cookie:
@@ -365,6 +365,19 @@ def legacy_session_handoff(first, first_cookie, second, second_cookie, directory
     return result
 
 
+def instance_environment(model_port):
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.upper().startswith(("CIVIL_", "OPENAI_", "ANTHROPIC_", "LLM_", "DEEPSEEK_", "ZAI_", "LANGSMITH_", "LANGCHAIN_"))
+                   and not key.upper().endswith("_API_KEY") and key not in {"PYTHONPATH", "PYTHONHOME"}}
+    environment.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHON_DOTENV_DISABLED="1",
+                       LANGSMITH_TRACING="false", LANGCHAIN_TRACING_V2="false", OTEL_SDK_DISABLED="true")
+    if model_port is not None:
+        require(type(model_port) is int and 0 < model_port < 65536, "Scripted model requires a real loopback port")
+        environment.update(CIVIL_MODEL=document_acceptance.MODEL, CIVIL_API_KEY="scripted-local-fixture",
+                           CIVIL_API_BASE=f"http://127.0.0.1:{model_port}/v1")
+    return environment
+
+
 class Instance:
     def __init__(self, binary, directory, state_root, workspace, user, model_port):
         self.binary, self.directory, self.state_root, self.workspace = binary, directory, state_root, workspace
@@ -385,12 +398,7 @@ class Instance:
         self.generation += 1
         self.stop_file = self.directory / f"stop-{self.generation}"
         self.log = (self.directory / f"launcher-{self.generation}.log").open("wb")
-        environment = {key: value for key, value in os.environ.items()
-                       if not key.upper().startswith(("CIVIL_", "OPENAI_", "ANTHROPIC_", "LLM_", "DEEPSEEK_", "ZAI_"))
-                       and not key.upper().endswith("_API_KEY") and key not in {"PYTHONPATH", "PYTHONHOME"}}
-        environment.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHON_DOTENV_DISABLED="1",
-                           CIVIL_MODEL=document_acceptance.MODEL, CIVIL_API_KEY="scripted-local-fixture",
-                           CIVIL_API_BASE=f"http://127.0.0.1:{self.model_port}/v1")
+        environment = instance_environment(self.model_port)
         command = [sys.executable, str(ROOT / "scripts/start_unified_workbench.py"), "--binary", str(self.binary),
                    "--python", sys.executable, "--state-root", str(self.state_root), "--workspace", str(self.workspace),
                    "--user-id", self.user, "--token-file", str(self.token_file), "--port", str(self.port),

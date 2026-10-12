@@ -42,6 +42,7 @@ CHECKS = (
     Check("cad-ui", ("scripts/test_cad_ui.cjs",), "node"),
     Check("engineering-frame", ("scripts/test_frame_analysis.py",)),
     Check("native-engineering-gate", ("scripts/test_native_engineering_gate.py",)),
+    Check("native-runtime-gate", ("scripts/test_native_runtime_gate.py",)),
     Check("engineering-section", ("scripts/test_engineering_section.py",)),
     Check("engineering-ifc", ("scripts/test_engineering_ifc.py",)),
     Check("engineering-records", ("scripts/test_engineering_records.py",)),
@@ -272,6 +273,8 @@ CHECKS = (
 )
 FULL_CHECKS = (
     Check("native-engineering", ("scripts/native_engineering_acceptance.py",), timeout=600),
+    Check("native-engineering-runtime", ("scripts/native_engineering_runtime.py", "--binary",
+          "workbench/target/debug/civil-workbench" + (".exe" if os.name == "nt" else "")), timeout=900),
     Check("http-demo", ("-m", "pytest", "demo/tests", "-q", "--basetemp=output/check-project-pytest")),
     Check("runtime-api", ("scripts/test_runtime_p0.py",)),
     Check("office-job", ("scripts/test_office_job.py",)),

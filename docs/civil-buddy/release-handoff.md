@@ -94,6 +94,11 @@ npm run check:full
 缺依赖、skip 或预期失败返回失败。报告只证明同机合成工程输入，不补齐上表真实项目或
 跨电脑的证据空项。详见[工程验收说明](engineering-workbench.md)。
 
+需要验证主入口实际计算时，使用同一个已安装主项目、CAD 和工程依赖的解释器执行
+`python scripts/native_engineering_runtime.py --binary bin/civil-workbench.exe`（解压包）。
+它启动新的本机具名实例而不配置模型，覆盖实际工程计算、账号隔离、签认导出和重启恢复；
+不要指向正在使用的线上或个人实例。
+
 普通测试使用离线脚本模型，不访问真实收费模型。提示注入集是合成开发集；通过不能宣称能抵御所有恶意文档或所有模型行为。执行结果以本次测试日志为准。
 
 第二台电脑与真实资料验收可填写[验收记录模板](acceptance/sme-preview-checklist.md)。空项不算通过，填写后的私人业务记录不要回传公共仓库。
