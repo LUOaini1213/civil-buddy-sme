@@ -82,6 +82,25 @@ IFC 上传每份最多 8 MiB、IDS 最多 512 KiB；IFC 根对象上限 20000，
 
 ## 离线验证与四人分工
 
+### 当前版本的严格求解器门禁（2026-10-12）
+
+历史核验记录保留原日期和原版本，不能自动沿用到新包。当前新增的严格入口为：
+
+```powershell
+python scripts/native_engineering_acceptance.py
+# 源码仓库也可通过检查矩阵选择该入口
+python scripts/check_project.py --only native-engineering
+```
+
+使用已安装主项目、CAD 和工程依赖的解释器。门禁要求固定版本的 PyniteFEA、
+sectionproperties 与 IFC/IDS 库，梁/框架、截面、IFC/IDS、工程 HTTP 四组均实际运行；
+缺依赖、任何跳过或预期失败、少于现有 16/10/9/9 项测试均不算通过。
+每次在 `output/native-engineering/` 创建新 JSON 报告，保留解释器与依赖版本、
+相关源码哈希、逐项结果和证据边界；`--report` 可指定一个尚不存在的路径。
+
+这些是合成资料上的实际库与工具子进程测试，不是获授权真实工程、跨电脑、
+真实模型或持证人员签认的验收。Python 依赖安装成功本身也不算测试通过。
+
 测试不得接真实大模型接口。设置 `PYTHON_DOTENV_DISABLED=1`，使用项目环境执行 `npm run check`，再按本轮检查矩阵执行工程专项和完整回归。`scripts/test_engineering_ifc.py` 使用真实安装的 IFC/IDS 库，但图纸为合成数据；依赖缺失导致 skip 不能当作该功能通过。`scripts/test_engineering_records.py` 检查重启恢复、中断、并发冲突、损坏记录和路径边界。结构、截面、甘特专项与 HTTP/浏览器证据也必须一并保留。
 
 本轮通过的深度检查命令为 `npm run check:full -- --only http-demo,runtime-api,office-job,pipeline,shadow-eval,rust`，共 6/6；其中 Rust 检查耗时 90.1 秒。与 102 项基础检查一起，覆盖当前检查矩阵全部 108 项任务。

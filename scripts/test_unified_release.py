@@ -95,6 +95,8 @@ class UnifiedReleaseTests(unittest.TestCase):
             self.assertIn("start-workbench.bat", readme)
             self.assertIn("不证明该 exe 由本次源码编译", readme)
             self.assertIn("scripts/test_linked_runtime_http.py --binary bin/civil-workbench.exe", readme)
+            self.assertIn("scripts/native_engineering_acceptance.py", readme)
+            self.assertIn("要求固定求解器版本及零跳过", readme)
             self.assertIn("不连接线上实例或真实模型服务", readme)
         self.assertEqual(json.loads(archive.with_suffix(".manifest.json").read_text(encoding="utf-8")), manifest)
         self.assertEqual(archive.with_suffix(".zip.sha256").read_text().split()[0], release.digest(archive))
@@ -129,6 +131,11 @@ class UnifiedReleaseTests(unittest.TestCase):
             ROOT / "contract/kb_boosts.v1.json",
         ]
         sources += list((ROOT / "demo").glob("*.py")) + list((ROOT / "gateway").glob("*.py"))
+        sources += [ROOT / name for name in release.EXTRA
+                    if name.startswith("scripts/") and name in {
+                        "scripts/native_engineering_acceptance.py", "scripts/test_frame_analysis.py",
+                        "scripts/test_engineering_section.py", "scripts/test_engineering_ifc.py",
+                        "scripts/test_engineering_api.py", "scripts/test_cad_api.py"}]
         sources += [path for name, path in release.legacy.release_inputs(ROOT).items()
                     if name.startswith(("knowledge/", "knowledge_base/", "demo/kb/"))]
         for source in sources:
@@ -162,6 +169,16 @@ class UnifiedReleaseTests(unittest.TestCase):
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45)
         self.assertEqual(0, imported.returncode, imported.stderr.decode("utf-8", "replace"))
         self.assertIn(b"domain-imported", imported.stdout)
+        native = subprocess.run([sys.executable, "-I", "-c",
+                                 "import sys; sys.path.insert(0,sys.argv[1]); "
+                                 "from scripts import native_engineering_acceptance as g; "
+                                 "assert all(g.source_snapshot().values()); "
+                                 "assert g.source_commit() == sys.argv[2]; print('native-gate-contained')",
+                                 str(extracted), self.git("rev-parse", "HEAD").decode().strip()],
+                                cwd=self.folder, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=45)
+        self.assertEqual(0, native.returncode, native.stderr.decode("utf-8", "replace"))
+        self.assertIn(b"native-gate-contained", native.stdout)
         payload = {"tender_text": "Only this short synthetic prompt was shown to the model.",
                    "upload_dir": str(uploads), "files": [{"path": str(original), "name": "招标文件.txt"}]}
         process = subprocess.run([sys.executable, "-I", str(extracted / "workbench/scripts/run_tender_extract.py")],

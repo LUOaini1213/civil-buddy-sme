@@ -36,6 +36,9 @@ EXTRA = (
     "deploy/lightsail/user-data.sh", "deploy/lightsail/civil-admin.sh", "deploy/lightsail/test-local.sh",
     "docs/civil-buddy/acceptance/sme-preview-checklist.md",
     "scripts/unified_acceptance.py", "scripts/test_unified_runtime_http.py", "scripts/test_linked_runtime_http.py",
+    "scripts/native_engineering_acceptance.py", "scripts/test_frame_analysis.py",
+    "scripts/test_engineering_section.py", "scripts/test_engineering_ifc.py",
+    "scripts/test_engineering_api.py", "scripts/test_cad_api.py",
     "examples/facade-demo/README.md", "examples/facade-demo/facade_itt_doc.md",
     "examples/facade-demo/facade_panels.xlsx", "examples/facade-demo/facade_panels_rev_b.xlsx",
     "examples/facade-demo/facade_panels_zh.xlsx", "examples/facade-demo/daily_report_input.txt",
@@ -251,6 +254,16 @@ $env:PYTHON_DOTENV_DISABLED='1'
 ```
 
 版本名含 `local` / `debug` 的包仅供本地测试；不表示已经发布、部署，或取代参赛 `v0.7.0`。
+
+已安装 CAD 和工程依赖后，可运行真实本地求解器的严格专项验收：
+
+```powershell
+& ".\\.venv\\Scripts\\python.exe" scripts/native_engineering_acceptance.py
+```
+
+此入口使用合成资料，要求固定求解器版本及零跳过；缺依赖、skip、预期失败或测试减少
+均返回失败。它生成新的 JSON 报告，记录依赖版本、源码哈希与逐项结果，不覆盖历史证据。
+这不等于真实工程、第二台电脑、真实模型或工程签认通过。
 """
 
 

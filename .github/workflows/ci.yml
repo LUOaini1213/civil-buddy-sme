@@ -66,6 +66,10 @@ jobs:
         env:
           PYTHON_DOTENV_DISABLED: "1"
         run: python -m pytest demo/tests -q --basetemp=output/pytest-ci
+      - name: Native engineering acceptance (real libraries, synthetic inputs, zero skips)
+        env:
+          PYTHON_DOTENV_DISABLED: "1"
+        run: python scripts/native_engineering_acceptance.py
       - name: Voice input eval archive matches its README (no model needed)
         run: python eval/asr/run_eval.py --check
       - name: Import package
