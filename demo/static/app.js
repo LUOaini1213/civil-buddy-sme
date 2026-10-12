@@ -8,6 +8,7 @@ import { createTurnStream } from "./modules/turn-stream.js";
 import { createDeliverables } from "./modules/deliverables.js";
 import { createSessionWatch } from "./modules/session-watch.js";
 import { createSessionNav, sessionId, cadProjectFromUrl } from "./modules/session-nav.js";
+import { applyEntryAvailability } from "./modules/entry-availability.js";
 
 const cbHomeText = (source, values = {}) => window.CBI18n?.t(source, values) ?? String(source || "").replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
 // Only app-owned empty/loading messages have a translation binding. Loaded memory is source text.
@@ -423,6 +424,7 @@ function cbApplyHealth(health) {
   // Other hosts share this HTML without exposing the optional CAD routes.
   const cadEntry = $("cbCadEntry");
   if (cadEntry) cadEntry.hidden = cbCapability("cad") !== true;
+  applyEntryAvailability({ doc: document, capabilities: capabilities || {}, t: cbHomeText });
   if (health.model) state.modelName = health.model;
   cbSyncSend();
 }

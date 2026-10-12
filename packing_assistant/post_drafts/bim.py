@@ -7,7 +7,6 @@ import html
 import re
 from collections.abc import Iterable
 
-from packing_assistant.jurisdiction import infer_jurisdiction
 
 DISCLAIMER = (
     "本文件由 Civil Buddy 根据用户输入生成，仅供内部讨论与起草。"
@@ -62,15 +61,10 @@ _FIELDS = {
     "quantity_record": ("算量校核记录",), "acceptance": ("验收记录", "验收状态"),
     "missing": ("缺项", "未建模系统"), "excluded_delivery": ("不交清单",),
 }
-_ALIASES = {label.casefold(): key for key, labels in _FIELDS.items() for label in labels}
-_LABEL = "|".join(re.escape(label) for label in sorted(_ALIASES, key=len, reverse=True))
-_FIELD_RE = re.compile(r"(?<![\w])(" + _LABEL + r")\s*[:：=]\s*", re.I)
-_EMPTY_RE = re.compile(r"(?:\[A\d+\]\s*)?(?:待填|待核|未知|未提供|未说明|UNSPECIFIED|TBD|N/A)", re.I)
-_CONTEXT = {"project", "zone", "building", "basis", "meeting_date", "attendees", "decision", "next_merge"}
 _COORD_CONTEXT = {"test_set", "pair", "check_scope", "tolerance", "ignore_size", "duplicate", "links", "placeholder"}
 _QUANTITY_RE = re.compile(
     r"(?:约\s*)?[+-]?\d+(?:,\d{3})*(?:\.\d+)?(?:[eE][+-]?\d+)?"
-    r"(?:\s*(?:m[²³23]?|mm|㎡|立方米|平方米|米|个|件|台|套|樘|kg|t|吨|千克))?", re.I)
+    r"(?:\s*(?:m[²³23]?|mm|㎡|立方米|立方|平方米|平米|米|个|件|台|套|樘|kg|t|吨|千克))?", re.I)
 
 
 def _cell(value: object) -> str:
@@ -97,99 +91,24 @@ def _value(row: dict[str, str], key: str) -> str:
 class _Input:
     context: dict[str, str] = field(default_factory=dict)
     records: dict[str, list[dict[str, str]]] = field(default_factory=dict)
+    contexts: list[dict] = field(default_factory=list)
 
     def rows(self, kind: str) -> list[dict[str, str]]:
         return self.records.get(kind) or [self.context]
 
 
-def _kind(key: str, post: str) -> str | None:
-    if key == "model":
-        return "models"
-    if post == "bim-coord":
-        if key in {"issue_id", "description"}:
-            return "issues"
-        if key in {"interface_id", "information"}:
-            return "interfaces"
-    if post == "bim-qto" and key == "category":
-        return "quantities"
-    if post == "bim-deliver" and key == "deliverable":
-        return "deliverables"
-    return None
-
-
 def _parse(text: str, post: str) -> _Input:
-    """Keep each repeated record separate; never fill one model from another.
-
-    Explicit labels are accepted on lines or in Markdown tables. A new model,
-    issue ID, quantity category or deliverable starts its own record. Associated
-    model references use 关联模型 so they do not start a new model definition.
-    """
-    result = _Input()
-    active_kind: str | None = None
-    active = result.context
-
-    def add(key: str, raw: str) -> None:
-        nonlocal active, active_kind
-        value = raw.strip(" ,，;；")
-        if key == "unit" and (post != "bim-qto" or active_kind == "models"):
-            key = "model_unit"
-        start = _kind(key, post)
-        primary_anchor = key in {"model", "issue_id", "category", "deliverable", "interface_id"}
-        if start and (primary_anchor or start != active_kind or key in active):
-            active = {}
-            active_kind = start
-            result.records.setdefault(start, []).append(active)
-        if not value or _EMPTY_RE.fullmatch(value):
-            return
-        global_field = key in _CONTEXT or (post == "bim-coord" and key in _COORD_CONTEXT)
-        target = result.context if global_field else active
-        clean = _input_value(value)
-        if target.get(key) and target[key] != clean:
-            target[key] += "；" + clean
-        else:
-            target[key] = clean
-
-    lines = text.splitlines()
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        if line.lstrip().startswith("|"):
-            block = []
-            while index < len(lines) and lines[index].lstrip().startswith("|"):
-                block.append([value.strip() for value in lines[index].strip().removeprefix("|").removesuffix("|").split("|")])
-                index += 1
-            headers = [_ALIASES.get(value.casefold()) for value in block[0]]
-            is_table = len(block) > 1 and all(re.fullmatch(r":?-{3,}:?", value) for value in block[1])
-            if is_table and any(headers):
-                for values in block[2:]:
-                    row = {key: value for key, value in zip(headers, values) if key and value and not _EMPTY_RE.fullmatch(value)}
-                    kinds = {_kind(key, post) for key in headers}
-                    row_kind = next((kind for kind in ("issues", "interfaces", "quantities", "deliverables", "models") if kind in kinds), None)
-                    if row_kind is None:
-                        row_kind = {"bim-coord": "issues", "bim-qto": "quantities", "bim-deliver": "models"}[post]
-                    if row_kind != "models" and "model" in row:
-                        row["model_ref"] = row.pop("model")
-                    if row_kind == "models" and "unit" in row:
-                        row["model_unit"] = row.pop("unit")
-                    result.records.setdefault(row_kind, []).append({key: _input_value(value) for key, value in row.items()})
-                active_kind, active = None, result.context
-            else:
-                for cells in block:
-                    if len(cells) > 1 and (key := _ALIASES.get(cells[0].casefold())):
-                        add(key, cells[1])
-            continue
-        matches = list(_FIELD_RE.finditer(line))
-        for position, match in enumerate(matches):
-            end = matches[position + 1].start() if position + 1 < len(matches) else len(line)
-            value = re.split(r"[;；]", line[match.end():end], maxsplit=1)[0]
-            add(_ALIASES[match.group(1).casefold()], value)
-        index += 1
-    return result
+    from packing_assistant.post_drafts.bim_observations import parse
+    return parse(text, post)
 
 
-def _header(title: str, text: str, boundary: str) -> list[str]:
+def _header(title: str, text: str, boundary: str, data: _Input) -> list[str]:
+    zones = {context.get("project_zone", UNKNOWN) for context in data.contexts}
+    zones.update(row["zone"] for records in data.records.values() for row in records if "zone" in row)
+    known = zones-{UNKNOWN}
+    zone = next(iter(known)) if len(known) == 1 else "逐对象登记，不合并辖区" if len(known) > 1 else UNKNOWN
     return [f"# {title}（AI 草稿 · 内部讨论）", "", DISCLAIMER, "", boundary, "",
-        f"- 辖区：{infer_jurisdiction(text)}", "- submit_blocked=true", ""]
+        f"- 辖区：{zone}（仅汇总明确输入，不代填对象空栏）" if zone != UNKNOWN else f"- 辖区：{zone}", "- submit_blocked=true", ""]
 
 
 def _register(data: _Input) -> str:
@@ -218,14 +137,68 @@ def _coordinates(data: _Input) -> str:
 
 
 def _sources(data: _Input, text: str) -> str:
+    contexts = data.contexts or [data.context]
     return _table(("辖区", "用户指定依据", "年份 / 版本", "条款", "核实状态"), [
-        (infer_jurisdiction(text), _value(data.context, "basis"), UNKNOWN, UNKNOWN, "unverified；原文与适用性待核")
+        (_value(context, "project_zone"), _value(context, "basis"), _value(context, "basis_version"), UNKNOWN, "unverified；原文与适用性待核") for context in contexts
     ]) + "\n\n本稿仅整理资料和检查项；未引用或认定规范条文，不把模型记录改写为签认结论。"
+
+
+def _ownership(data: _Input, post: str) -> list[str]:
+    from packing_assistant.post_drafts.bim_observations import EXTRA
+    labels = {key: names[0] for key, names in {**_FIELDS, **EXTRA}.items()}
+    out = ["## 项目与文件依据归属", "", _table(("项目", "项目阶段", "总体辖区（不代填对象）", "输入文件", "用户依据", "CN用户依据", "SG用户依据", "EU用户依据", "核验状态"), [
+        tuple(_value(context, key) for key in ("project", "stage", "project_zone", "_origin", "basis", "CN_basis", "SG_basis", "EU_basis"))+("unverified",)
+        for context in data.contexts if any(not key.startswith("_") and (key != "project_zone" or value != UNKNOWN) for key, value in context.items())] or [(UNKNOWN,)*8+("unverified",)]), ""]
+    out += ["## 项目约定与资料位置", "", _table(("项目", "项目阶段", "参数栏目", "用户值（未核验）", "输入文件", "输入位置（非原件页码）", "状态"), [
+        (context.get("project", UNKNOWN), context.get("stage", UNKNOWN), labels.get(key, key), value,
+         context.get("_origin") or UNKNOWN, context.get("_sources", {}).get(key, UNKNOWN), "未核验")
+        for context in data.contexts for key, value in context.items() if not key.startswith("_") and value != UNKNOWN
+    ] or [(UNKNOWN,)*6+("未核验",)]), ""]
+    out += ["## 模型单体与版本来源", "", _table(("模型", "单体", "模型版本", "模型日期", "用户来源", "输入文件", "对象辖区", "核验状态"), [
+        tuple(_value(row, key) for key in ("model", "building", "version", "date", "source", "_origin", "zone"))+("未读取或核验",)
+        for row in data.rows("models")]), ""]
+    if post == "bim-coord":
+        title, kind, keys = "协调问题责任与版本对照", "issues", ("issue_id", "model_ref", "location", "description", "owner", "owner_person", "deadline", "status", "evidence", "closure")
+        columns = ("问题编号", "关联模型", "构件位置", "问题原文", "责任专业 / 责任方", "责任人", "完成时限", "用户状态", "用户证据", "用户关闭依据")
+    elif post == "bim-qto":
+        title, kind, keys = "算量模型与规则来源对照", "quantities", ("model_ref", "category", "material", "include", "exclude", "rule", "unit", "quantity", "source", "openings", "deduction")
+        columns = ("模型", "构件类别", "材质", "过滤包含", "过滤排除", "计量规则", "计量单位", "用户数量原记录（未核算）", "用户来源", "孔洞扣减", "其他扣减")
+    else:
+        title, kind, keys = "模型交付目的与期限", "models", ("model", "building", "purpose", "lod", "version", "format", "recipient", "delivery_date", "file_name", "clash_record", "acceptance")
+        columns = ("模型", "单体", "交付目的", "用户LOD", "用户版本", "交付格式", "交付对象", "交付日期", "文件名", "用户碰撞复查记录", "用户验收记录")
+    out += ["## "+title, "", _table(columns+("核验状态", "签认"), [
+        tuple(_value(row, key) for key in keys)+("未计算、检查或验收；仅用户输入", "") for row in data.rows(kind)]), ""]
+    linked = []
+    for row_kind, records in data.records.items():
+        if row_kind == "models":
+            continue
+        for row in records:
+            model = row.get("_model", {})
+            context = row.get("_context_data", {})
+            linked.append((context.get("project", UNKNOWN),
+                           row.get("issue_id") or row.get("category") or row.get("interface_id") or row.get("deliverable") or UNKNOWN,
+                           _value(row, "model_ref"), _value(model, "version"), _value(model, "source"),
+                           _value(row, "_origin"), _value(model, "_origin"),
+                           "仅用户记录关联；未读取模型" if model else "关联未确定；不得借用其他模型版本"))
+    out += ["## 对象与模型版本关联（仅明确归属）", "", _table(
+        ("项目", "专业对象", "关联模型", "关联模型用户版本", "关联模型用户来源", "对象输入文件", "模型输入文件", "关联核验状态"),
+        linked or [(UNKNOWN,)*7+("关联未确定",)]), ""]
+    facts = []
+    for rows in data.records.values():
+        for row in rows:
+            context = row.get("_context_data", {})
+            object_name = row.get("model") or row.get("issue_id") or row.get("category") or row.get("deliverable") or UNKNOWN
+            for key, value in row.items():
+                if not key.startswith("_") and value != UNKNOWN:
+                    label = labels.get(key, key)
+                    facts.append((context.get("project", UNKNOWN), object_name, label, value, row.get("_origin") or UNKNOWN, row.get("_sources", {}).get(key, UNKNOWN), "未核验"))
+    out += ["## 对象参数与资料位置", "", _table(("项目", "专业对象", "参数栏目", "用户值（未核验）", "输入文件", "输入位置（非原件页码）", "状态"), facts or [(UNKNOWN,)*6+("未核验",)]), ""]
+    return out
 
 
 def _coord(text: str) -> str:
     data = _parse(text, "bim-coord")
-    lines = _header("碰撞 / 协调纪要", text, "仅整理用户提供的问题记录。本轮未打开或扫描 IFC / 原位模型，未执行碰撞检查，不提供碰撞总数或零碰撞证明。")
+    lines = _header("碰撞 / 协调纪要", text, "仅整理用户提供的问题记录。本轮未打开或扫描 IFC / 原位模型，未执行碰撞检查，不提供碰撞总数或零碰撞证明。", data)
     lines += ["## 1 项目与合成模型登记", "", _register(data), "", _models(data), "",
         "纪要编号：（空栏）。各模型版本分行保留，不以一个模型的版本补全其他模型。", "",
         "## 2 合成前提与坐标核对", "", _coordinates(data), "",
@@ -263,7 +236,7 @@ def _coord(text: str) -> str:
         "## 8 依据、自检与相邻岗位", "", _sources(data, text), "",
         "自检：模型与问题逐行；无自动编号、容差或总数；关闭状态未经核验；专业提资独立。LOD / 命名 / 拆分交模型交付，过滤出量交模型算量，改图交设计统筹，现场危大交危大识别。", "",
     ]
-    return "\n".join(lines)
+    return "\n".join(lines+_ownership(data, "bim-coord"))
 
 
 def _quantity(row: dict[str, str]) -> str:
@@ -274,7 +247,7 @@ def _quantity(row: dict[str, str]) -> str:
 def _qto(text: str) -> str:
     data = _parse(text, "bim-qto")
     rows = data.rows("quantities")
-    lines = _header("模型算量口径说明", text, "本轮未读取模型、未提取 IFC 属性、未运行几何算量。数量只抄用户明确给值，未给值保持 UNSPECIFIED；模型量不构成结算书、招标控制价或验工计价依据。")
+    lines = _header("模型算量口径说明", text, "本轮未读取模型、未提取 IFC 属性、未运行几何算量。数量只抄用户明确给值，未给值保持 UNSPECIFIED；模型量不构成结算书、招标控制价或验工计价依据。", data)
     lines += ["## 1 项目与模型来源", "", _register(data), "", _models(data), "",
         "## 2 工程分类与构件过滤", "",
         _table(("工程分类 / 构件类", "关联模型", "类型名", "材质", "楼层 / 区段", "相位 / 施工段", "包含", "排除", "理由"), [
@@ -306,13 +279,13 @@ def _qto(text: str) -> str:
         "## 8 依据与自检", "", _sources(data, text), "",
         "自检：过滤先于数字；数量只抄已给值；未知数 UNSPECIFIED；单价合价 TBD；无虚构属性路径或 GUID；无结算结论。组价交造价，签证事实交变更签证，对上验工交验工计价，模型冲突交模型协调。", "",
     ]
-    return "\n".join(lines)
+    return "\n".join(lines+_ownership(data, "bim-qto"))
 
 
 def _deliver(text: str) -> str:
     data = _parse(text, "bim-deliver")
     models = data.rows("models")
-    lines = _header("BIM 交付清单", text, "本稿整理交付要求与缺口。本轮未打开模型、未检查碰撞、未验收，不构成合同交付签认、审图报件或竣工备案模型。")
+    lines = _header("BIM 交付清单", text, "本稿整理交付要求与缺口。本轮未打开模型、未检查碰撞、未验收，不构成合同交付签认、审图报件或竣工备案模型。", data)
     lines += ["## 1 项目、阶段与模型登记", "", _register(data), "", _models(data), "",
         "## 2 坐标系与单位", "", _coordinates(data), "",
         "共享坐标发布与现场控制点对齐仍需发布记录及测量复核；不从坐标系名称推导坐标数值。", "",
@@ -347,7 +320,7 @@ def _deliver(text: str) -> str:
         "## 9 依据、自检与相邻岗位", "", _sources(data, text), "",
         "自检：多模型版本不串填；用途与 LOD 分列；坐标和单位无默认值；文件名只抄用户值；碰撞与验收未知；无软件账号或授权信息。碰撞交模型协调，出量交模型算量，平台权限交 IT，设计变更交设计统筹，竣工资料交资料监理。", "",
     ]
-    return "\n".join(lines)
+    return "\n".join(lines+_ownership(data, "bim-deliver"))
 
 
 def build_draft(expert_id: str, tool_name: str, text: str) -> str | None:

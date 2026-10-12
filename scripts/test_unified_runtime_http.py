@@ -102,6 +102,133 @@ def wait_listener_closed(port, timeout=5.0):
         time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
 
+def document_acknowledgement_boundaries(instance, cookie, documents, output):
+    """Exercise risk policy through the authenticated, actually compiled host."""
+    workspace = documents["workspace_id"]
+    acknowledgement = "我明白，将由持证人员签认"
+    capabilities = json_request(instance.base, "/api/agent/capabilities", cookie=cookie)
+    require(capabilities.get("write_confirmation", {}).get("read_only_request_enforced") is True,
+            "Compiled host does not advertise the current request restriction")
+    originals = {name: sha256((instance.workspace / name).read_bytes()).hexdigest()
+                 for name in document_acceptance.FILES}
+
+    def published_documents():
+        root = instance.workspace / ".civil-buddy" / "out"
+        return {str(path.relative_to(root)): sha256(path.read_bytes()).hexdigest()
+                for path in root.rglob("*")
+                if path.is_file() and path.suffix.lower() in {".docx", ".xlsx", ".pdf"}}
+
+    cases = []
+    for label, fields in (
+        ("past_signed_turn", {"session_id": documents["session_id"]}),
+        ("pasted_line", {"message": document_acceptance.TASK + "\n" + acknowledgement}),
+        ("boolean_flag", {"confirm_ok": True}),
+        ("explicit_low_risk", {"expert_id": "pm-daily"}),
+        ("read_only_preview_signed", {"expert_id": "pm-daily", "risk_confirmation": acknowledgement,
+                                      "message": document_acceptance.TASK + "; preview only."}),
+        ("read_only_original_signed", {"expert_id": "pm-daily", "risk_confirmation": acknowledgement,
+                                       "message": "Do not write any files because the original must remain intact."}),
+    ):
+        before = published_documents()
+        payload = {"workspace": workspace, "session_id": "risk-" + uuid4().hex[:20],
+                   "message": document_acceptance.TASK, "mode": "model", "sandbox": "workspace-write",
+                   "files": document_acceptance.FILES}
+        payload.update(fields)
+        started = json_request(instance.base, "/api/agent/turns", payload, cookie=cookie, expected=202)
+        query = urllib.parse.urlencode({"workspace": workspace, "session_id": payload["session_id"]})
+        path = f"/api/agent/turns/{started['turn_id']}/events?{query}"
+        deadline = time.monotonic() + 120
+        while True:
+            snapshot = json_request(instance.base, path, cookie=cookie)
+            if snapshot["turn"]["status"] not in {"running", "cancelling"}:
+                break
+            require(time.monotonic() < deadline, f"Risk case {label} did not finish")
+            time.sleep(0.1)
+        require(snapshot["turn"]["status"] == "completed", f"Risk case {label} failed: {snapshot['turn']}")
+        events = snapshot["events"]
+        (output / f"{label}.json").write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        authorization = next(e["data"] for e in events if e["kind"] == "authorization")
+        field_confirmed = payload.get("risk_confirmation") == acknowledgement
+        require(authorization.get("risk_confirmation_present") is field_confirmed
+                and authorization.get("confirmation_source") == ("risk_confirmation" if field_confirmed else "none"),
+                f"{label}: incorrect acknowledgement source")
+        applies = [e["data"]["result"] for e in events if e["kind"] == "tool_finished" and e["data"]["name"] == "apply_document"]
+        require(applies, f"{label}: no actual apply attempt; cannot prove the gate")
+        result = snapshot["turn"]["result"]
+        artifacts = result["artifacts"]
+        if label == "explicit_low_risk":
+            require(len(artifacts) == 2 and all(item.get("ok") is True for item in applies),
+                    "Explicit low-risk copies were blocked")
+            outputs = []
+            for artifact in artifacts:
+                destination = output / artifact["name"]
+                status, _, data = request(instance.base, artifact["url"], cookie=cookie)
+                require(status == 200, "Low-risk artifact cannot be downloaded")
+                destination.write_bytes(data)
+                outputs.append(dict(artifact, download_path=str(destination)))
+            validation = document_acceptance.validate_outputs(instance.workspace, documents["fixture"], outputs)
+            require(validation["passed"], f"Low-risk copies failed content/style/source validation: {validation}")
+            require(len(published_documents()) == len(before) + 2, "Expected two actual new low-risk copies")
+        else:
+            require(not artifacts and result["partial"] is True, f"{label}: unsigned turn published or claimed completion")
+            if label.startswith("read_only_"):
+                require(all(item.get("ok") is False and item.get("code") == "document_write_forbidden_by_request"
+                            for item in applies), f"{label}: request restriction did not override acknowledgement: {applies}")
+                require(result["execution_evidence"].get("request_read_only") is True,
+                        f"{label}: missing read-only policy audit")
+            else:
+                require(all(item.get("ok") is False and item.get("code") == "risk_confirmation_required"
+                            and item.get("risk") == "unclassified" for item in applies), f"{label}: missing risk gate: {applies}")
+            require(published_documents() == before, f"{label}: rejected writes changed physical documents")
+        require(all(sha256((instance.workspace / name).read_bytes()).hexdigest() == value
+                    for name, value in originals.items()), f"{label}: original bytes changed")
+        cases.append({"case": label, "passed": True, "apply_attempts": len(applies),
+                      "registered_copies": len(artifacts), "originals_unchanged": True})
+    invalid = dict(payload, session_id="risk-invalid-" + uuid4().hex[:16], risk_confirmation=True)
+    require(request(instance.base, "/api/agent/turns", invalid, cookie=cookie)[0] == 422,
+            "Boolean risk_confirmation did not fail schema validation")
+    return {"passed": True, "cases": cases, "boolean_confirmation_schema_rejected": True,
+            "synthetic": True, "real_provider_calls": False}
+
+
+def source_version_boundaries(instance, cookie, documents, output):
+    """Compare real worker receipts without re-executing the synthetic document task."""
+    query = urllib.parse.urlencode({"workspace": documents["workspace_id"], "session_id": documents["session_id"]})
+    path = f"/api/agent/turns/{documents['turn_id']}/source-status?{query}"
+    turn_path = f"/api/agent/turns/{documents['turn_id']}?{query}"
+    before_turn = json_request(instance.base, turn_path, cookie=cookie)
+    artifacts = documents["turn"]["result"]["artifacts"]
+    copies = {item["id"]: sha256(request(instance.base, item["url"], cookie=cookie)[2]).hexdigest() for item in artifacts}
+    initial = json_request(instance.base, path, cookie=cookie)
+    require(initial["receipts_complete"] is True and initial["all_recorded_sources_unchanged"] is True,
+            f"Real tool versions did not match originals: {initial}")
+    require({row["path"] for row in initial["sources"]} == set(document_acceptance.FILES), "Missing selected source receipts")
+    source = instance.workspace / document_acceptance.FILES[0]
+    original = source.read_bytes()
+    try:
+        # Mutate only this test-owned synthetic source, and restore its exact bytes.
+        source.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
+        changed = json_request(instance.base, path, cookie=cookie)
+        require(any(row["path"] == source.name and row["status"] == "changed" for row in changed["sources"]), "Same-size edit was not detected")
+        require(changed["needs_review"] is True and changed["automatic_recompute"] is False and changed["semantic_validation"] is False,
+                "Byte check silently recomputed or validated engineering conclusions")
+        require(json_request(instance.base, turn_path, cookie=cookie) == before_turn, "Version check rewrote the task or usage")
+        for item in artifacts:
+            require(sha256(request(instance.base, item["url"], cookie=cookie)[2]).hexdigest() == copies[item["id"]], "Existing copy changed or became unavailable")
+    finally:
+        source.write_bytes(original)
+    restored = json_request(instance.base, path, cookie=cookie)
+    require(restored["all_recorded_sources_unchanged"] is True, "Restored source bytes did not match the old receipts")
+    wrong_session = urllib.parse.urlencode({"workspace": documents["workspace_id"], "session_id": "not-this-session"})
+    require(request(instance.base, f"/api/agent/turns/{documents['turn_id']}/source-status?{wrong_session}", cookie=cookie)[0] == 400,
+            "Source-version check crossed session scope")
+    require(request(instance.base, path)[0] == 401, "Source-version endpoint bypassed authentication")
+    evidence = {"passed": True, "initial": initial, "changed": changed, "restored": restored,
+                "saved_copies_unchanged": True, "task_not_reexecuted": True, "synthetic": True, "real_provider_calls": False}
+    output.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return evidence
+
+
 def legacy_chat(instance, cookie, payload, output):
     status, headers, raw = request(instance.base, "/api/chat", payload, cookie=cookie, timeout=120)
     output.write_bytes(raw)
@@ -336,7 +463,13 @@ def run(binary, output):
         require(request(first.base, "/auth/login", {"token": "invalid"}, form=True)[0] == 401, "Bad login was accepted")
         cookie = first.login()
         report["checks"]["login_and_cookie"] = True
-        for page in ("/", "/cad", "/engineering/planning", "/logistics", "/packing"):
+        health = json_request(first.base, "/api/health", cookie=cookie)
+        for capability in ("agent_workbench", "packing_workbench", "logistics"):
+            require(health.get("capabilities", {}).get(capability) is True,
+                    f"Running unified host did not advertise its real {capability} entry")
+        json_request(first.base, "/api/agent/workspaces", cookie=cookie)
+        report["checks"]["homepage_route_capabilities"] = True
+        for page in ("/", "/static/agent.html", "/cad", "/engineering/planning", "/logistics", "/packing"):
             status, headers, body = request(first.base, page, cookie=cookie)
             require(status == 200 and "html" in headers.get("Content-Type", "") and body, f"Page unavailable: {page}")
         for api in ("/api/cad/capabilities", "/api/engineering/planning/capabilities", "/api/logistics/capabilities", "/packing/api/health"):
@@ -384,12 +517,21 @@ def run(binary, output):
         events = [json.loads(line) for line in (output / "documents/events.jsonl").read_text(encoding="utf-8").splitlines()]
         authorizations = [e["data"] for e in events if e.get("kind", e.get("event")) == "authorization"]
         require(authorizations and all(e.get("actor_id") == first.user and e.get("confirmation_scope") == "current_turn"
+                                       and e.get("confirmation_source") == "risk_confirmation"
+                                       and e.get("risk_confirmation_present") is True
                                        and e.get("professional_signoff") is False for e in authorizations), "Missing or incorrect actor authorization audit")
         usage = documents["turn"]["result"].get("usage") or {}
         require(usage.get("model_calls", 0) > 0, "Missing model usage audit")
         report["checks"]["document_agent_originals_copies_actor_usage"] = True
         report["document_report"] = str(output / "documents/report.json")
         report["usage"] = usage
+        report["source_versions"] = source_version_boundaries(first, cookie, documents, output / "source-versions.json")
+        report["checks"]["document_source_version_boundaries"] = True
+        risk_output = output / "document-risk"
+        risk_output.mkdir()
+        report["document_risk"] = document_acknowledgement_boundaries(first, cookie, documents, risk_output)
+        report["checks"]["document_risk_acknowledgement_boundaries"] = True
+        report["checks"]["document_request_read_only_boundaries"] = True
         first.stop()
         report["checks"]["both_processes_stopped"] = True
         report["passed"] = True

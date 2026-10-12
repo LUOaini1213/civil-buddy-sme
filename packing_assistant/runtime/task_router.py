@@ -21,7 +21,10 @@ _TASK_PHRASES = {
     "bid-tech": ("技术标", "技术响应草稿"),
     "construction": ("施工方案", "专项方案", "专项施工方案"),
     "admin-office": ("会务清单", "会议安排", "整理会务", "接待清单"),
+    "admin-doc": ("会议纪要",),
     "method-hazard": ("危大识别", "危大判定", "是否危大", "危大工程"),
+    "subcontract": ("分包结算表头", "劳务结算表头"),
+    "claim": ("索赔意向", "调概事项草稿"),
 }
 _DETERMINER = re.compile(r"(解析|分析|梳理|检查|核对)(?:一下|下)?(?:这份|这个|这一份|该份|该|此份|此|本|这)(?=招标|投标|磋商|谈判|采购|响应|技术标)")
 _AMBIGUOUS_REASONS = {
@@ -42,7 +45,7 @@ ACTION_VERBS = {
               r"填(?=一?[份个张下]|写|报)", r"补(?=一?[份个张]|写|填)", r"(?:弄|记|搞|改)一下"),
     # 「给我一份 / 来一份 / 出个 / 要一份」：要的是东西，不是解释。量词是关键——「给我讲讲」「来了多少人」不带。
     "give": (r"(?:给我|帮我|替我|为我)\s*(?:出|来|弄|搞|开|列)?\s*一?[份个张版](?!人)", r"(?:出|来|搞|弄|开|列)(?=一?[份个张版](?!人))",
-             r"(?:要|需要)一[份个张版]", r"出(?=日报|周报|月报|方案|计划|台账|清单|纪要|交底|报表)"),
+             r"(?:要|需要)一[份个张版]", r"出(?=日报|周报|月报|方案|计划|台账|清单|纪要|交底|报表|(?:分包|劳务)?结算表头|索赔意向|调概事项草稿)"),
 }
 QUESTION_MARKS = {
     "core": ("什么", "如何", "怎么", "为什么", "能做什么", "需要哪些", "有哪些", "是否", "能否", "能不能", "区别", "含义"),
@@ -74,9 +77,11 @@ _EN_CLAUSE = r"(?:^|(?<=，)|(?<=[.!?;:]\s))\s*"
 _EN_LEAD = r"(?:(?:please|pls|kindly|also|now|first|then|just|so|ok|okay|and|go\s+ahead\s+and|help\s+me|i\s+need\s+you\s+to|let[’']?s)[\s,]+)*"
 _EN_VERBS = ("write", "draft", "prepare", "generate", "create", "produce", "compile", r"make(?!\s+sure)", "update", "revise",
              "amend", "edit", "redo", r"fill\s+(?:in|out|up)", r"put\s+together", "summari[sz]e", "parse", "extract", "review",
-             "check", "plan", "pack", "list", "tabulate", "outline", "calculate", r"work\s+out", "record")
+             "check", "plan", "pack", "list", "tabulate", "outline", "calculate", r"work\s+out", r"go\s+through", "record")
+_EN_POST_NAMES = (("packing plan", "pack-ship"), ("shipping plan", "pack-ship"), ("shipment plan", "pack-ship"),
+                  ("lifting plan", "construction"))
 _EN_DELIVERABLES = "|".join(r"\s+".join(map(re.escape, phrase.split())) for phrase in sorted(
-    {p for p, _ in contract_strong() if p.isascii() and " " in p and p.split()[0] not in ("the", "this", "how")}, key=len, reverse=True))
+    {p for p, _ in (*contract_strong(), *_EN_POST_NAMES) if p.isascii() and " " in p and p.split()[0] not in ("the", "this", "how")}, key=len, reverse=True))
 _EN_VERB = "(?:" + "|".join(_EN_VERBS) + r")(?![-\w])"
 _EN_AUX = r"(?:is|are|was|were|am|do|does|did|has|have|had|can|could|should|would|will|shall|may|might|must)"
 _EN_OBJECT = (r"\s+(?:up\s+)?(?:(?:a|an|the|this|these|those|our|my|your|one|(?:today|tomorrow|yesterday)[’']?s|(?:this|next)\s+week[’']?s)(?![-\w])"
@@ -84,12 +89,21 @@ _EN_OBJECT = (r"\s+(?:up\s+)?(?:(?:a|an|the|this|these|those|our|my|your|one|(?:
 _EN_STATUS = (r"\b(?:" + _EN_AUX + r"|be|been|isn[’']?t|wasn[’']?t|went|got|came|\w+ed\s+by|approved|rejected|sent|received|submitted"
               r"|attached|done|completed|cancell?ed|postponed|delayed|moved|attend\w*)\b")
 _EN_WHEN = r"(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|\d{1,2}(?::\d{2})?\s*[ap]\.?m\b|\d{1,2}:\d{2})"
+# "Do the site diary" is an imperative only when the known document is its
+# whole object. "Do the site diary fields include ...?" is still a question.
+_EN_DO_COMMAND = (r"(?i:" + _EN_CLAUSE + _EN_LEAD + r"do\s+(?:up\s+)?(?:(?:a|an|the|this|our|my)\s+)?(?:"
+                  + _EN_DELIVERABLES + r")(?![-\w])(?=\s*(?:$|[,.!?;]|(?:for|on|about|with|using|from)\b)))")
+_EN_DO = re.compile(_EN_DO_COMMAND)
+_EN_DATE_HEADER = (r"(?i:" + _EN_CLAUSE + r"(?:" + _EN_DELIVERABLES + r")\s+"
+                   r"\d{1,4}(?:[/.-]\d{1,2}){1,2}\s*:\s*(?!\s*(?:" + _EN_STATUS + r"|$)))")
 _EN_ACTION = ("(?i:" + _EN_CLAUSE + _EN_LEAD + r"(?:" + _EN_VERB + _EN_OBJECT + r"|(?:calculate|work\s+out)\s+how\s+(?:many|much)\b)"
-              + "|" + _EN_CLAUSE + r"(?:(?:today[’']?s|tomorrow[’']?s|a|an|new)\s+)?(?:" + _EN_DELIVERABLES + r")(?:e?s)?\s*"
+              + "|" + _EN_CLAUSE + r"(?:(?:today[’']?s|tomorrow[’']?s|a|an|new)\s+)?(?:" + _EN_DELIVERABLES + r")(?:e?s)?(?:\s+notes?)?\s*"
               + r"(?:[:\-–—](?!\s*" + _EN_STATUS + r")|(?:for|on|about)\b(?:(?!" + _EN_STATUS + r")[^:.!?;]){0,120}:(?!\d)"
               + r"|(?:for|on|about)\b(?:(?!" + _EN_STATUS + "|" + _EN_WHEN + r")[^:]){0,300}$)"
               + "|" + _EN_CLAUSE + _EN_LEAD + r"(?:(?:i|we)\s+(?:need|want|would\s+like)|give\s+me|send\s+me)\s+(?:(?:a|an|the|today[’']?s|new)\s+)?(?:"
-              + _EN_DELIVERABLES + r")(?!\s+from\b))")
+              + _EN_DELIVERABLES + r")(?![-\w]|\s+from\b)"
+              + "|" + _EN_CLAUSE + _EN_LEAD + r"need\s+(?:(?:a|an|the|new)\s+)?(?:" + _EN_DELIVERABLES + r")(?![-\w]|\s+from\b|\s*\?))"
+              + "|" + _EN_DO_COMMAND + "|" + _EN_DATE_HEADER)
 _EN_QUESTION = ("(?i:" + _EN_CLAUSE + r"(?:(?:so|and|but|ok|okay|hi|hey|also|then|just|quick\s+question)[\s,]+)*"
                 r"(?:what|whats|how|why|when|where|who|whom|whose|which|isn[’']?t|aren[’']?t|" + _EN_AUX + r"(?!\s+not\b))(?![-\w])"
                 r"|\bwhether\b|\b(?:check|see|confirm|find\s+out)\s+if\b)")
@@ -100,7 +114,29 @@ _EN_FOLLOWUP = (r"(?i:\b(?:and\s+then|then|after\s+that|afterwards|next)[\s,，]
 # "Can you pack these into 40HQ?" asks for the plan, not whether it is possible.
 _EN_POLITE = re.compile(r"(?i)^\s*(?:(?:please|pls|kindly|hi|hey|ok|okay)[\s,，]+)?(?:can|could|would|will)\s+you\s+(?:please\s+|kindly\s+)?(?="
                         + _EN_VERB + ")")
+# A bounded courtesy prefix is not a request to schedule, remind or explain.
+# Strip it only before a real imperative with an object. Questions, conditional
+# timing, narration and explicit future dates keep the normal read-only rules.
+_EN_CONVENIENCE = re.compile(r"(?i)^\s*(?:(?:please|pls|kindly)[\s,，]+)?"
+    r"(?:when\s+you\s+(?:get|have)\s+(?:a|the)\s+(?:chance|moment)|at\s+your\s+convenience)"
+    r"(?:\s*[,，]\s*|\s+)(?=" + _EN_LEAD + r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+|kindly\s+)?)?"
+    + _EN_VERB + _EN_OBJECT + ")")
+_EN_REPORTED = re.compile(r"(?i)^\s*(?:the\s+(?:PM|PE|QS|engineer|client|manager|estimator|team)|my\s+(?:colleague|manager|engineer)|he|she|they)"
+                          r"\s+(?:said|says|wrote|writes|asked|asks|requested|requests|told\s+me)\b")
 _EN_STOP = re.compile(r"[.!?;]\s+")
+
+
+def _request_head(text: str) -> str:
+    return _EN_CONVENIENCE.sub("", text, count=1)
+
+
+def _reported_only(text: str) -> bool:
+    if not _EN_REPORTED.match(text):
+        return False
+    # A separate user imperative after a sentence remains actionable. A comma
+    # inside reported speech does not turn the quoted person's task into ours.
+    return not any(_ACTION.match(_request_head(text[m.end():])) or _EN_POLITE.match(_request_head(text[m.end():]))
+                   for m in re.finditer(r"[.!?]\s+", text))
 
 
 def compile_intent(verbs=("core",), questions=("core",), reads=("core",), english=False):
@@ -114,9 +150,21 @@ def compile_intent(verbs=("core",), questions=("core",), reads=("core",), englis
 
 
 _QUESTION, _READ_REQUEST, _ACTION, _FOLLOWUP_ACTION = compile_intent(**ACTION_VARIANTS["shipped"])
+# A stated missing role ("谁批还没定先空着") is material for a draft, not a
+# question cancelling an earlier write request. Actual questions, including a
+# question mark on the same clause, still retain the read-only path.
+_STATED_UNKNOWN_ROLE = re.compile(
+    r"(?:这个|那个|这项|该项)?谁(?:批|审批|签认|负责|主持|记录|带队|开车|做)"
+    r"(?:还)?(?:没(?:(?:说)?定(?:下来)?|确定)|未确定)(?:先(?:空着|留空))?"
+    r"(?=$|[，,。；;！!\n])"
+)
+_STATED_UNKNOWN_AMOUNT = re.compile(
+    r"多少(?:个?人|台|吨|方|天|工日|台班)(?:还)?(?:没(?:定(?:下来)?|确定|报)|未定|未确定|未提供)"
+    r"(?:先(?:空着|留空))?(?=$|[，,。；;！!\n])"
+)
 # Contract strong phrases in Latin script, matched on word boundaries (plural s allowed).
 _LATIN_STRONG = tuple((re.compile(r"(?<![a-z0-9_-])" + r"\s+".join(map(re.escape, phrase.split())) + r"(?:e?s)?(?![a-z0-9_-])", re.I),
-                       phrase, eid) for phrase, eid in contract_strong() if phrase.isascii())
+                       phrase, eid) for phrase, eid in (*contract_strong(), *_EN_POST_NAMES) if phrase.isascii())
 _QUOTED = re.compile(r'```[\s\S]*?```|`[^`\n]*`|“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』|"[^"\n]*"|(?<!\w)\'[^\'\n]*\'')
 _REFERENCE_END = re.compile(r"的(?:流程|注意事项|注意点|步骤|原因|含义|区别|意义|作用|风险|要求|方法|思路)[？?。！!\s]*$")
 _SEQUENCE = re.compile(r"先.+(?:再|然后)|之后|随后|接着", re.S)
@@ -145,7 +193,7 @@ _PACKING_WORD = re.compile(r"(?i)pack(?:ing)?|panel|loading|crate|container|ship
 _TENDER_WORD = re.compile(r"(?i)(?<![a-z])(?:tender|itt|bid|rfp|invitation)|招标|标书|投标")
 _LINK_CUE = re.compile(
     r"(?i)\b(?:link(?:s|ed|ing)?|match(?:es|ed|ing)?|(?:cross-)?check(?:s|ed|ing)?|against|compl(?:y|ies|iance|iant)"
-    r"|meet(?:s|ing)?|clauses?|statements?|logistics\s+(?:section|response|requirements?)|shipping\s+requirements?)\b"
+    r"|meet(?:s|ing)?|fits?|respects?|conform\w*|satisf\w*|clauses?|statements?|logistics\s+(?:section|response|requirements?)|shipping\s+requirements?)\b"
     r"|联动|对照|核对|比对|匹配|满足|符合|条款|物流要求|运输要求|装柜要求|物流章节")
 # A link request put as "how do I ... / why is ... / what does ..." asks about the link; "does X meet Y?", "check
 # whether X meets Y" and "which statements does the plan support?" ask for it to be run.
@@ -160,7 +208,12 @@ _LINK_REFUSED = re.compile(
 
 def _link_read_only(text: str) -> bool:
     """An explanation or a question about the link ("Explain ... using Y.xlsx as context"): a topic, not authorization."""
-    clean = _FILE.sub("〔文件〕", _positive_text(_QUOTED.sub("〔引用〕", text)))
+    unquoted = _QUOTED.sub("〔引用〕", text)
+    if _EXPLICIT_NO_FILES.search(unquoted):
+        return True
+    if _reported_only(unquoted):
+        return True
+    clean = _FILE.sub("〔文件〕", _request_head(_positive_text(unquoted)))
     return bool(_READ_REQUEST.search(clean) or _ASKS_ABOUT.search(clean))
 
 
@@ -209,8 +262,8 @@ _LINK_NOT_ASKED = re.compile(
     + _LINK_ZH_VERB + r"|已经[^，。；;？?]{0,20}?" + _LINK_ZH_VERB + r"|" + _LINK_ZH_VERB + r"过(?!程)"
     + r"|(?:提醒我|回头|以后|改天|明天|下周|下个月|晚点|稍后)[^，。；;？?]{0,20}?" + _LINK_ZH_VERB)
 _LINK_ASKED = re.compile(
-    r"(?i)(?:^|[.?!;:]\s+|[,，]\s*)\W*(?:(?:please|pls|kindly|now|then|just|also|and|so|ok|okay|can\s+you|could\s+you|would\s+you"
-    r"|will\s+you)[\s,]+)*(?:(?:does|do|will|is|are|can|could)\b[^.?!]{0,200}?\b(?:compl(?:y|ies|iant|iance)|meets?|satisf\w*|fits?|conform\w*)"
+    r"(?i)(?:^|[.?!;:]\s+|[,，]\s*|\s[-—–]\s*)\W*(?:(?:please|pls|kindly|now|then|just|also|and|so|ok|okay|can\s+you|could\s+you|would\s+you"
+    r"|will\s+you)[\s,]+)*(?:(?:does|do|will|is|are|can|could)\b[^.?!]{0,200}?\b(?:compl(?:y|ies|iant|iance)|meets?|satisf\w*|fits?|respects?|conform\w*)"
     r"|(?:link|match|(?:cross-)?check|compare|verify|reconcile|answer|write|draft|prepare|respond|plan|pack|tell\s+me\s+which)\b)"
     r"|\b(?:check|see|verify|confirm|find\s+out)\s+(?:whether|if)\b|\bwhich\s+(?:\w+\s+){0,2}(?:statements?|clauses?)\b"
     r"|(?:^|[，,。；;：:！!\n])\s*(?:请|帮我|麻烦|先|再|现在)*\s*(?:核对|对照|比对|匹配|联动|检查|按|用|根据|把)"
@@ -246,6 +299,7 @@ def link_not_asked(message: str) -> bool:
 
 
 def _asks_for_link_run(text: str) -> bool:
+    text = _request_head(text)
     rest = _FILE.sub(" ", text)
     if _ASKS_ABOUT.search(rest):
         return False
@@ -265,14 +319,72 @@ def _positive_text(message: str) -> str:
                     if part.strip() and not _NEGATED.match(part.strip()))
 
 
+_EN_PHYSICAL_ACTION = re.compile(r"(?i:" + _EN_CLAUSE + _EN_LEAD
+    + r"(?:crate|load|ship)(?:\s+and\s+(?:crate|load|ship))*\s+"
+      r"(?:(?:the|these|those|our)\s+)?(?:panels?|crates?|cargo|containers?|[\w.-]+\.(?:xlsx|xlsm|xls|csv)\b))")
+_EN_SHIPMENT_ACTION = re.compile(r"(?i:" + _EN_CLAUSE + _EN_LEAD
+    + r"(?:plan|prepare|calculate|work\s+out)\s+(?:the\s+|a\s+|our\s+)?shipment\b)")
+_EN_CONTAINER = re.compile(r"\b(?:20|40|45)\s*['’]?\s*(?:GP|HQ|HC|DC|FT|foot|feet)\b|\bcontainers?\b", re.I)
+_EN_COUNT_QUERY = re.compile(r"(?i:" + _EN_CLAUSE + _EN_LEAD
+    + r"how\s+many\s+(?:(?:20|40|45)\s*['’]?\s*(?:GP|HQ|HC|DC|FT|foot|feet)\s+)?containers?\b)")
+_ZH_COUNT_QUERY = re.compile(r"(?:要|需要|用|算|占)(?:多少|几)(?:个|只)?柜|(?:柜数|集装箱数)(?:多少|几)|算(?:一下|下)?(?:柜数|集装箱数)")
+
+
+def _english_packing_action(text: str) -> bool:
+    """An actual physical operation, not 'load a page' or a generic spreadsheet."""
+    return bool(_EN_PHYSICAL_ACTION.search(text) and (_PACKING_WORD.search(text) or _EN_CONTAINER.search(text))
+                or _EN_SHIPMENT_ACTION.search(text) and _TABLE_FILE.search(text) and _EN_CONTAINER.search(text))
+
+
+def _packing_count_request(text: str) -> bool:
+    return bool((_EN_COUNT_QUERY.search(text) or _ZH_COUNT_QUERY.search(text)) and _TABLE_FILE.search(text)
+                and not re.search(r"\b(?:should|if|might|remind|explain|why|whether)\b|怎么|如何|解释|说明|要不要|应不应该|如果", text, re.I))
+
+
+def _english_file_post(text: str) -> str:
+    # These are task candidates only. The intake still verifies roles, file
+    # contents, units and geometry; filenames never invent engineering inputs.
+    clean = _positive_text(_QUOTED.sub("〔引用〕", text))
+    if _english_packing_action(clean) or _packing_count_request(clean):
+        return "pack-ship"
+    if (_ACTION.search(clean) and re.search(r"\bMOS\b[^.!?;]{0,120}\b(?:brackets?|anchoring|installation|gondolas?|facades?|formwork|construction|lifting|panels?)\b", clean, re.I)):
+        # MOS is not a global alias: an unexplained acronym could mean something
+        # else. Only an action with an explicit construction object selects here.
+        return "construction"
+    documents = list(_DOC_FILE.finditer(clean))
+    if len(documents) == 1 and _TENDER_WORD.search(documents[0].group()) and _ACTION.search(clean):
+        return "bid-compliance" if re.search(r"\b(?:review|check|missing[-\s]+forms?|rejection|compliance)\b", clean, re.I) else "bid-parse"
+    return ""
+
+
+_EXPLICIT_NO_FILES = re.compile(
+    r"\b(?:do\s+not|don['’]t|never|without)\s+(?:write|create|generate|save|produce)\s+(?:any\s+|the\s+)?(?:files?|deliverables?)\b"
+    r"|\b(?:do\s+not|don['’]t|never)\s+(?:run|execute)\s+anything\b"
+    r"|(?:^|[.!?;，,]\s*)\s*(?:please\s+)?(?:no\s+files|read[-\s]+only(?:\s+mode)?)(?:\s+please)?\s*(?=$|[.!?;，,])", re.I)
+
+
 def _intent(text: str) -> str:
     # Quoted operations describe source material, not actions authorized by this
     # turn. Keep the original text separately for selecting the relevant post.
-    text = _positive_text(_QUOTED.sub("〔引用〕", text))
+    text = _QUOTED.sub("〔引用〕", text)
+    if _EXPLICIT_NO_FILES.search(text):
+        return "chat"
+    if _reported_only(text):
+        return "chat"
+    text = _request_head(_positive_text(text))
     if polite := _EN_POLITE.match(text):
         text = text[polite.end():].rstrip(" ?？")
+    # Mask only the auxiliary-shaped imperative's first verb; all remaining
+    # question words still win. Do not turn 'Do the ... fields include ...?' into
+    # an instruction merely because its opening words name a known document.
+    if _EN_DO.match(text):
+        text = re.sub(r"\bdo\b", "make", text, count=1, flags=re.I)
+    text = _STATED_UNKNOWN_ROLE.sub("〔职责待补〕", text)
+    text = _STATED_UNKNOWN_AMOUNT.sub("〔数量待补〕", text)
     base = understand(text)
     read_request = bool(_QUESTION.search(text) or _READ_REQUEST.search(text))
+    if _packing_count_request(text) and not _READ_REQUEST.search(text):
+        read_request = False
     if read_request:
         followup_action = False
         for match in _FOLLOWUP_ACTION.finditer(text):
@@ -287,7 +399,7 @@ def _intent(text: str) -> str:
                 followup_action = True
                 break
         return "both" if followup_action else "chat"
-    if _ACTION.search(text):
+    if _ACTION.search(text) or _english_packing_action(text) or _packing_count_request(text):
         return "both" if base == "both" else "run"
     return base
 
@@ -386,15 +498,19 @@ def route_task(message: str, expert_ids: list[str] | None = None) -> dict:
         explicit = bool(ids)
         if explicit:
             result["reason"] = "按任务中明确点名的岗位执行。"
-    if not explicit and wants_link(text):
-        ids = ["bid-parse"]
-        result["reason"] = "招标与装柜联动：先读招标的物流条款，再按条款柜型用点名的装箱单真算，逐条写应答并记联动。"
+    if wants_link(text) and (not explicit or ids == ["bid-parse"]):
+        # Selecting the same specialist must not suppress a genuine linked
+        # operation. Keep other explicit post selections and all no-write,
+        # question, quotation and reported-speech safeguards unchanged.
+        if not explicit:
+            ids = ["bid-parse"]
+            result["reason"] = "招标与装柜联动：先读招标的物流条款，再按条款柜型用点名的装箱单真算，逐条写应答并记联动。"
         phrase = any(p in text for p in _LINK_ZH) or bool(_LINK_EN.search(text))
         if link_not_asked(text):
             # "Should I check Y.xlsx against X.md?", "I already checked ...", "要不要把 ... 对照一下？": about the link,
             # not a request for it. Nothing runs, whatever the verbs say.
             result["intent"] = "chat"
-        elif result["intent"] == "chat" and _FILE.search(text) and not _link_read_only(text) and (
+        elif result["intent"] == "chat" and _FILE.search(text) and not _link_read_only(message) and (
                 (phrase and not _QUESTION.search(text)) or (_names_tender_and_list(text) and _asks_for_link_run(text))):
             # "按招标 X.md 和 Y.xlsx 出物流应答" names its inputs: it asks for the run. So does "check whether Y.xlsx meets
             # the clauses of X.md", "does Y.xlsx comply with X.md?" or "Match X.md against Y.xlsx"; "how do I check
@@ -430,7 +546,8 @@ def route_task(message: str, expert_ids: list[str] | None = None) -> dict:
                 found = [(m.start(), m.end(), phrase, eid) for pattern, phrase, eid in _LATIN_STRONG
                          if eid in roster and (m := pattern.search(matchable, pos))]
                 return [h for h in found if not any(o[1] - o[0] > h[1] - h[0] and o[0] < h[1] and h[0] < o[1] for o in found)]
-            latin = latin_from(0) if not hits else []
+            chinese_named_post = bool(hits)
+            latin = latin_from(0) if not chinese_named_post else []
             if latin:
                 polite = _EN_POLITE.match(matchable)
                 verbs = [found.start() for found in (_ACTION.search(matchable), _FOLLOWUP_ACTION.search(matchable)) if found]
@@ -438,6 +555,13 @@ def route_task(message: str, expert_ids: list[str] | None = None) -> dict:
                 start, _, phrase, eid = min(latin_from(anchor) or latin)
                 hits[eid] = max(hits.get(eid, (0, 0)), (len(phrase), -start))
                 matched_labels.setdefault(phrase, set()).add(eid)
+            file_post = _english_file_post(matchable) if not chinese_named_post else ""
+            if file_post and not _READ_REQUEST.search(matchable):
+                # An operation on a named file can identify the job even when
+                # only a contextual 'the ITT' was matched earlier.
+                if file_post == "pack-ship" or not hits:
+                    hits = {file_post: (1, 0)}
+                    matched_labels = {"named input operation": {file_post}}
             # A shared label alone cannot justify selecting two different duties.
             ambiguous = {eid for label, owners in matched_labels.items() if len(owners) > 1
                          for eid in owners if hits.get(eid, (0,))[0] <= len(label)}

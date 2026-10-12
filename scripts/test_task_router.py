@@ -10,6 +10,23 @@ from packing_assistant.runtime.expert_skills import match_skill
 
 
 class TaskRouterTests(unittest.TestCase):
+    def test_selecting_bid_parse_preserves_current_link_operation_and_read_only_veto(self):
+        positive = "Link the tender north_itt.md to the packing list glazing_panels.xlsx and write the logistics response."
+        for selected in (None, ["bid-parse"]):
+            route = route_task(positive, selected)
+            self.assertEqual(route["intent"], "run")
+            self.assertEqual(route["expert_ids"], ["bid-parse"])
+        for request in (
+            positive + " Do not write any files.",
+            "Explain how to link north_itt.md to glazing_panels.xlsx.",
+            'Explain the instruction "Link north_itt.md to glazing_panels.xlsx".',
+            "My colleague linked north_itt.md to glazing_panels.xlsx yesterday.",
+            "Should I link north_itt.md to glazing_panels.xlsx?",
+        ):
+            with self.subTest(request=request):
+                self.assertEqual(route_task(request, ["bid-parse"])["intent"], "chat")
+        self.assertEqual(route_task(positive, ["pm-daily"])["expert_ids"], ["pm-daily"])
+
     def test_frequent_tasks_route_without_requiring_long_post_names(self):
         for text, eid in (("检查投标响应", "bid-compliance"), ("整理日报", "pm-daily"),
                           ("帮我制定备份策略", "it-data"), ("帮我写钢构说明", "steel"),
@@ -32,12 +49,56 @@ class TaskRouterTests(unittest.TestCase):
                 self.assertEqual(route["intent"], "chat")
                 self.assertEqual(route["workflow"], "")
 
+    def test_stated_unknown_approver_does_not_cancel_an_explicit_draft_request(self):
+        for request in ("请生成用印审批表，文件名称：资料交接单，这个谁批还没定先空着。",
+                        "写会议纪要，谁负责还没确定，先留空。",
+                        "起草用印申请，谁签认未确定先留空"):
+            with self.subTest(request=request):
+                self.assertEqual(route_task(request, ["admin-doc"])["intent"], "run")
+        for question in ("谁批还没定？", "生成用印审批表，谁批还没定？", "谁来审批用印申请？",
+                         "谁负责还没确定，怎么填写会议纪要？", "这个谁批还没定，请解释审批流程",
+                         "不要生成用印审批表，这个谁批还没定先空着。"):
+            with self.subTest(question=question):
+                self.assertEqual(route_task(question, ["admin-doc"])["intent"], "chat")
+
+    def test_stated_unknown_planning_inputs_do_not_cancel_explicit_drafts(self):
+        for request in ("生成资源负荷表头，2#楼二次结构上多少人还没定。",
+                        "编制资源计划，需用多少台还没定先留空。",
+                        "生成四周计划，压实度检测归谁做还没说定。",
+                        "生成资源负荷表头。3#楼砌筑下周上瓦工38个，塔吊TC5613吊砖，进场日子定的11月20日；2#楼二次结构上多少人还没定，只知道要用汽车吊，型号没报，材料是加气块，堆到东侧空地。"):
+            with self.subTest(request=request):
+                self.assertEqual("run", route_task(request, ["plan-resource"])["intent"])
+        for question in ("多少人还没定？", "生成资源负荷表头，上多少人还没定？",
+                         "需要多少台汽车吊？", "压实度检测归谁做还没说定？",
+                         "解释需要多少人还没定的原因", "不要生成资源计划，上多少人还没定先留空。",
+                         "生成资源计划，上多少人还没定，怎么填？"):
+            with self.subTest(question=question):
+                self.assertEqual("chat", route_task(question, ["plan-resource"])["intent"])
+
     def test_explicit_explanation_followed_by_deliverable_remains_both(self):
         for text in ("解释并生成备份策略", "介绍备份策略，然后生成一份模板", "先解释日报栏目，再整理项目日报",
                      "继续解释日报栏目，然后生成项目日报"):
             with self.subTest(text=text):
                 self.assertEqual(route_task(text)["intent"], "both")
         self.assertEqual(route_task("继续整理项目日报")["intent"], "run")
+
+    def test_explicit_subcontract_table_command_runs_but_questions_negation_and_quotes_do_not(self):
+        for text in ("出分包结算表头。", "出劳务结算表头，合同号我回头再找。", "出结算表头，缺项留空。"):
+            with self.subTest(request=text):
+                self.assertEqual("run", route_task(text, ["subcontract"])["intent"])
+        self.assertEqual(["subcontract"], route_task("出分包结算表头。")["expert_ids"])
+        for text in ("分包结算表头怎么出？", "出分包结算表头要多久？", "请不要出分包结算表头。", "解释出分包结算表头的流程。", "解释‘出分包结算表头’按钮的含义。", "是否支持出分包结算表头？"):
+            with self.subTest(question=text):
+                self.assertEqual("chat", route_task(text, ["subcontract"])["intent"])
+
+    def test_claim_intention_commands_run_but_questions_negations_and_quotes_do_not(self):
+        for text in ("出索赔意向草稿。", "出调概事项草稿，合同原文稍后贴。"):
+            with self.subTest(request=text):
+                self.assertEqual("run", route_task(text, ["claim"])["intent"])
+                self.assertEqual(["claim"], route_task(text)["expert_ids"])
+        for text in ("索赔意向怎么出？", "出索赔意向草稿要多久？", "请不要出索赔意向草稿。", "解释出调概事项草稿的流程。", "解释‘出索赔意向草稿’按钮。", "是否支持出索赔意向草稿？"):
+            with self.subTest(question=text):
+                self.assertEqual("chat", route_task(text, ["claim"])["intent"])
 
     def test_site_phrasings_ask_for_the_document_and_their_questions_do_not(self):
         # the benchmark (test/benchmarks/task_intent) holds the full sets; these are the pairs that must never drift apart

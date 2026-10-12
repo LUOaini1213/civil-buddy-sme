@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+from contextlib import closing
 import json
 import os
 import subprocess
@@ -204,14 +205,14 @@ def main() -> int:
 
     # ---- 6) prune（软删除）----
     print("[6] prune 软删除")
-    with sqlite3.connect(str(dbp)) as c2:
+    with closing(sqlite3.connect(str(dbp))) as c2:
         c2.execute("UPDATE runs SET started_at='2020-01-01T00:00:00' WHERE session_id LIKE 'fix-%'")
         c2.commit()
     n0 = st.prune(keep_days=90, keep_min_per_session=3)
     check("keep_min_per_session 保护", n0 == 0, f"archived={n0}")
     n = st.prune(keep_days=90, keep_min_per_session=0)
     check("prune 归档旧 run", n == 4, f"archived={n}")
-    with sqlite3.connect(str(dbp)) as c2:
+    with closing(sqlite3.connect(str(dbp))) as c2:
         archived = c2.execute("SELECT COUNT(*) FROM runs WHERE archived=1").fetchone()[0]
         ev_arch = c2.execute("SELECT COUNT(*) FROM events WHERE archived=1").fetchone()[0]
     check("archived 标记落库", archived == 4 and ev_arch == 8, f"runs={archived} events={ev_arch}")
@@ -225,6 +226,7 @@ def main() -> int:
         "db = str(checkpoint_db_path())\n"
         "c = sqlite3.connect(db)\n"
         "tabs = {r[0] for r in c.execute(\"SELECT name FROM sqlite_master WHERE type='table'\")}\n"
+        "c.close()\n"
         "print(json.dumps({'backend': type(cp).__name__, 'path': db,"
         " 'has_cp_tables': {'checkpoints', 'writes'} <= tabs}))\n",
         {"CB_STORAGE": "sqlite", "PACKING_LG_CHECKPOINT_PATH": str(dbp)},
@@ -234,6 +236,7 @@ def main() -> int:
     check("langgraph 表同库共存", lg["has_cp_tables"])
 
     print(f"\nRESULT: PASS={PASS} FAIL={FAIL}")
+    st.close()
     return 0 if FAIL == 0 else 1
 
 

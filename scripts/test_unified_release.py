@@ -78,6 +78,7 @@ class UnifiedReleaseTests(unittest.TestCase):
                              "workbench/scripts/run_tender_extract.py", "workbench/scripts/run_packing_sidecar.py",
                              "frontend/index.html", "frontend/manifest.webmanifest", "frontend/icons/cb-icon.svg",
                              "gateway/pages/demo.html", "examples/facade-demo/facade_itt_doc.md",
+                             "demo/static/modules/entry-availability.js", "scripts/test_linked_runtime_http.py",
                              "start-workbench.bat", "packing_assistant/civil.py", *release.EXTRA]:
                 self.assertIn(expected, names)
             self.assertEqual(package.read(release.BINARY_NAME), self.binary.read_bytes())
@@ -93,6 +94,8 @@ class UnifiedReleaseTests(unittest.TestCase):
             self.assertIn("不自动安装任何依赖", readme)
             self.assertIn("start-workbench.bat", readme)
             self.assertIn("不证明该 exe 由本次源码编译", readme)
+            self.assertIn("scripts/test_linked_runtime_http.py --binary bin/civil-workbench.exe", readme)
+            self.assertIn("不连接线上实例或真实模型服务", readme)
         self.assertEqual(json.loads(archive.with_suffix(".manifest.json").read_text(encoding="utf-8")), manifest)
         self.assertEqual(archive.with_suffix(".zip.sha256").read_text().split()[0], release.digest(archive))
         self.assertEqual((stage / release.BINARY_NAME).read_bytes(), self.binary.read_bytes())

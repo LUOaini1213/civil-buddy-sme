@@ -15,7 +15,89 @@ The launcher binds both services to loopback, starts `/static/agent.html`, and s
 
 The default view offers a model-free structural check and a model task. Configure the model in the page or through environment variables. A model task with `read-only` cannot apply a document patch. `workspace-write` permits new draft copies; original files cannot be replaced.
 
+For high-risk or unclassified automatic-mode document writes, type the exact
+acknowledgement in the separate confirmation box for this turn. Message text,
+pasted sources and earlier turns never supply it. Automatic mode may still read
+and preview without acknowledgement. Explicitly selecting a low-risk catalog post
+allows ordinary new copies without it; a model-loaded post or document capability
+cannot grant that exception. High-risk loads raise the gate for the whole proposed
+tool batch and remain sticky for the turn. This is a scope policy, not a semantic
+classification of every source document or a professional approval. Rebuild old
+binaries after changing this policy; local checks do not update a cloud server.
+
+Recognised read-only questions and explicit `preview only`, `no files`, or no-save
+instructions override document publication, including an otherwise valid risk
+acknowledgement. Reads and previews remain available; model attempts to apply are
+rejected before the worker writes and recorded as incomplete rather than saved.
+Quoted examples are not write instructions. `Do not modify the original; save a
+new copy` remains a valid copy request. Request recognition is bounded; use the
+actual `read-only` sandbox for an unconditional no-document-write guarantee.
+
+The bounded request recogniser, current-turn acknowledgement, sticky risk scope,
+write rejection and capability/audit metadata share
+`workbench/src/product/request_policy.rs`. Model batch risk is inspected before
+the first tool executes, and any escalation is recorded before an apply attempt.
+Sandbox enforcement and source/preview/hash validation remain independent gates
+in the tool host and worker; an acknowledgement does not override them. Offline
+policy tests cover the risk/acknowledgement/read-only/locale matrix, and the real
+worker model-loop tests verify the recorded policy before actual apply attempts.
+The Agent page renders these backend policy events in Chinese or English,
+including read-only restrictions and risk escalation. Missing or non-boolean
+fields remain unknown, not permission. Policy records are never saved-file
+receipts or professional sign-off; actual artifacts and tool results remain the
+evidence of execution.
+
+## Source-version checks
+
+After a turn stops, the Agent page compares current selected document bytes with
+the versions recorded by successful document/retrieval tools and registered
+artifacts. Opening a historical turn or refreshing the file list checks again;
+the Check source versions button performs an explicit recheck. The check is
+read-only, never reruns the model, never replaces originals or saved copies, and
+does not alter the historical task result, usage or tool receipts. Earlier copies
+remain downloadable even when a source changes.
+
+The scoped `/api/agent/turns/{turn}/source-status` endpoint distinguishes unchanged,
+changed, missing, mixed recorded versions, absent successful version receipts and
+unknown/unavailable checks. It accepts only the stopped turn's workspace/session
+and selected files; model claims and failed tools do not establish version receipts.
+Matching SHA-256 means matching bytes at check time, not comprehension, engineering
+validation or professional approval. Later changes require another check; there
+is no continuous filesystem watcher or automatic recomputation. Engineering project
+revision checks remain separate.
+
+Checks allow 25 MB per source, 100 MB total and at most 24 selected files. One
+reader runs per instance. A bounded trace read that cannot cover all receipts,
+an oversized/unavailable file or a timed-out check must remain unknown, not current.
+The client timeout does not kill a blocked filesystem read; its concurrency permit
+stays held until the reader exits. These are application-level path checks, not
+additional OS read confinement or protection against hostile filesystem races.
+
 ## Provider configuration
+
+The homepage's selected-specialist and selected-attachment turns use the existing
+fixed Python specialist/document pipeline, irrespective of language or attachment
+role hints. They preserve the exact selected identifiers, current acknowledgement,
+source-byte manifests and no-files intent. A selected `bid-parse` post must recognise
+the same genuine tender/packing link operation as automatic post selection, without
+overriding another explicitly selected post or allowing quoted/negated instructions.
+Unbound ordinary homepage chat retains its existing Rust path. Generic model work
+on selected local documents belongs to the Rust Agent workbench; the deterministic
+sidecar does not receive model credentials or run another model loop.
+The homepage audit reads both old Rust `trace.json` and current specialist
+`workbench.json` records from the same private session root, preserving the latter's
+exact selected-input hashes. Audit reads reject links/out-of-root paths; recorded
+write counts are receipts, not proof of current artifact existence or approval.
+
+`scripts/test_linked_runtime_http.py --binary <fresh-executable>` tests the real
+authenticated host's upload → clauses/plan/statements → Word download → restart
+→ selected panel/tender revision path on synthetic materials. It also checks
+unchanged reruns, prior-download preservation, duplicate-version rejection,
+explicit no-files requests and zero model calls. A successful report is evidence
+for that bounded same-machine workflow, not real-project or cross-computer acceptance.
+Windows startup ownership scans use native long-path spelling, so deep legitimate
+run directories remain inspectable after restart. This does not change configured
+workspace/state identity, skip foreign ownership markers or weaken link checks.
 
 For a named account and a single private job directory, use the launcher options `--user-id`, `--workspace` and `--token-file` together. The full [release and handoff guide](release-handoff.md) describes state ownership, login, project-package transfer, restart recovery and outstanding real-world acceptance. Named instances isolate users by separate processes and physical workspaces; they are not a shared-process multi-tenant service.
 
@@ -65,6 +147,12 @@ The fixed domain service also mounts the existing CAD, analysis, schedule, plann
 
 Speech uses a cancellable fixed process with an explicit prepare step for model download. Audio transcription produces editable text and never auto-submits. Missing faster-whisper/model assets are reported as unavailable. Browser speech fallback requires the existing explicit consent flow. The current acceptance environment did not exercise a real microphone or download a speech model.
 
+The legacy Python health endpoint reads only cached native speech-probe results;
+`asr=false` with `asr_probe=not_probed` means the optional engine has not been
+checked, not that it is missing. The separate speech status/prepare routes retain
+their actual import checks. Core startup does not load those native dependencies
+or wait for a speech probe, and no model download is triggered by health.
+
 Build a Windows source-plus-executable package after committing distribution sources:
 
 ```powershell
@@ -83,6 +171,15 @@ All seven workbench pages share `demo/static/theme.css`, the persisted appearanc
 
 
 ## Packing workbench integration
+
+The 2026-10-12 local regression also checks PDF table reading against drawn text
+positions. The reader tracks `Tm`, `Td`, `TD`, `TL` and `T*` directly for line
+origins: a library callback must not multiply absolute text leading by the font
+size and move wrapped text into another cell. Decoded source text is not corrected
+or guessed, and the original PDFs remain unchanged. The 28 grid checks and the
+existing eight-document/two-bid-set synthetic tender regression pass without
+lowering their floors. This is regression evidence, not complete PDF/OCR accuracy
+or verification of real project requirements.
 
 The navigation and home card expose `/packing`. The unified domain service reuses the existing packing UI and an explicit subset of gateway endpoints for uploads, deterministic packing, human confirmation, SSE progress, run recovery and Excel exports. The Rust bridge streams SSE immediately and uploads validated material-file bytes rather than forwarding a filesystem path. Packing state, exports and checkpoint databases live under the selected state root. Generic gateway agents and MCP dispatch are not exposed by this adapter; model credentials remain in the Rust host.
 

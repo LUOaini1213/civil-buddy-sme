@@ -46,7 +46,7 @@ _MONEY = re.compile(r"(?<![\dA-Za-z#.])" + _NUM + r"\s*(?:万元|亿元|万|亿|
                     r"|(?<![\dA-Za-z#.])" + _NUM + r"\s*[（(]\s*(?:万元|亿元|元)\s*[)）]"       # "预算金额：86(万元)" - a platform's form
                     r"|(?:S\$|US\$|HK\$|SGD|USD|RMB|CNY|PHP|PhP|Php|₱|¥|￥|\$)\s*" + _NUM + r"(?:\s*(?:万元|万|million|mil|k|K))?")
 _AREA = re.compile(r"(?<![\dA-Za-z#.])" + _NUM + r"\s*(?:万?平方米|万?平米|万?平方|万?平|㎡|m²|m2)(?![一-鿿])", re.I)
-_SCORE = re.compile(r"(?<![\dA-Za-z#.])" + _NUM + r"\s*分(?![钟公包部项期批别类析布配])")
+_SCORE = re.compile(r"(?<![\dA-Za-z#.])" + _NUM + r"\s*(?:分(?![钟公包部项期批别类析布配])|(?:marks?|points?)\b)", re.I)
 _MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
 _DATE = re.compile(r"\d{4}\s*[-/.年]\s*\d{1,2}\s*[-/.月]\s*\d{1,2}\s*[日号]?|\d{1,2}\s*月\s*\d{1,2}\s*[日号]"
                    r"|\d{1,2}(?:st|nd|rd|th)?\s+" + _MONTH + r"\.?,?\s+\d{4}|" + _MONTH + r"\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}"
@@ -125,6 +125,12 @@ _TASK_TALK = re.compile(
     r"^\s*(?:请|麻烦|烦请)?\s*(?:帮我|帮忙|给我|替我|我要|我想|老板让|经理让|领导让|出个|出一份|出一版|做个|做一份|整理成)"
     r"|^\s*(?:请|麻烦|烦请)\s*(?:解析|整理|核对|对照|检查|看|出|做)"
     r"|废标(?:检查|点|清单|对照|风险)|有没有废标|会不会废标|响应缺口|解析表|技术标目录|资料如下|如下[：:，,。]?\s*$")
+_OUTPUT_INSTRUCTION = re.compile(
+    r"^\s*(?:(?:未提供|缺失|未知|其余)[^。；;\n]{0,100}(?:保持|标为|留为|留作|写为)\s*(?:未检出|待填|未知|UNSPECIFIED|TBD)"
+    r"|(?:不要|禁止|不得)\s*(?:编造|推算|虚构)|不作(?:审批|批准|合格|签认)结论"
+    r"|(?:leave|keep)\s+(?:missing|unknown|unsupplied)\b[^.\n]{0,100}(?:unspecified|blank|unfilled)"
+    r"|do not\s+(?:invent|infer|approve)\b)", re.I,
+)
 
 
 #: "有没有废标点" holds 废标 and obliges nobody; these do
@@ -139,14 +145,17 @@ OCR_MARK = "〔OCR〕"  # office_job writes it above a scan's text: what follows
 
 def is_task_talk(piece: str) -> bool:
     """A clause that only says what the user wants done: no number, no ★, no obligation in it."""
-    return bool(_TASK_TALK.search(piece)) and not re.search(r"\d|[★☆＊]", piece) and not _OBLIGES.search(piece)
+    return bool(_OUTPUT_INSTRUCTION.search(piece)) or (
+        bool(_TASK_TALK.search(piece)) and not re.search(r"\d|[★☆＊]", piece) and not _OBLIGES.search(piece)
+    )
 
 
 #: A person who writes "招标要求：… / 我方情况：…" has said whose words follow. With text after the colon
 #: the block is the rest of that line (up to the next marker); alone on its line it is a heading and
 #: holds until the next one.
-_BLOCK = re.compile(r"(?:^|(?<=[。；;！!？?\s]))\s*(?P<theirs>招标正文|招标要求|招标文件要求|招标方要求|业主要求|甲方要求)\s*[：:]\s*"
-                    r"|(?:^|(?<=[。；;！!？?\s]))\s*(?P<ours>投标响应|我方响应|我方情况|我们的情况|我司情况|响应情况|投标文件响应)\s*[：:]\s*")
+_BLOCK = re.compile(r"(?:^|(?<=[。；;！!？?\s]))\s*(?P<theirs>招标正文|招标文本|招标要求|招标文件要求|招标方要求|业主要求|甲方要求|Tender text|Tender requirements)\s*[：:]\s*"
+                    r"|(?:^|(?<=[。；;！!？?\s]))\s*(?P<ours>投标响应|我方响应|我方情况|我们的情况|我司情况|响应情况|投标文件响应|Our response|Bid response)\s*[：:]\s*"
+                    r"|(?:^|(?<=[。；;！!？?\s]))\s*(?P<instruction>操作要求|输出要求|Output instructions|Task instructions)\s*[：:]\s*", re.I)
 
 
 def _table_row(line: str) -> Optional[str]:
@@ -184,7 +193,7 @@ def _segments(text: str, sides: str, *, tables: bool = False) -> List[Tuple[int,
         if raw_line[:marks[0].start()].strip():
             out.append((line_no, raw_line[:marks[0].start()], heading))
         for index, mark in enumerate(marks):
-            side = "theirs" if mark.group("theirs") else "ours"
+            side = "theirs" if mark.group("theirs") else "instruction" if mark.group("instruction") else "ours"
             stop = marks[index + 1].start() if index + 1 < len(marks) else len(raw_line)
             body = raw_line[mark.end():stop]
             if body.strip():
@@ -503,6 +512,9 @@ class TenderFacts:
     lots: List[str] = field(default_factory=list)  # as written, in order of first mention
     lot_scopes: Dict[str, str] = field(default_factory=dict)  # "一标段" -> "顶管加检查井"
     unplaced: List[str] = field(default_factory=list)
+    # Unknown fields are not silently made into commitments. Keep each occurrence's
+    # side, lot and input location separately, even when literal values repeat.
+    unplaced_records: List[Dict[str, object]] = field(default_factory=list)
     jurisdiction: str = "UNSPECIFIED"  # CN | SG | EU | DUAL, only when the text says so; never a default country
     addenda_unread: List[Dict[str, str]] = field(default_factory=list)  # changes an addendum makes where the reader cannot follow
 
@@ -527,6 +539,7 @@ class TenderFacts:
             "scores": [vars(s) for s in self.scores],
             "specials": [vars(s) for s in self.specials],
             "unplaced": list(self.unplaced),
+            "unplaced_records": [dict(r) for r in self.unplaced_records],
             **({"addenda_unread": list(self.addenda_unread)} if self.addenda_unread else {}),
         }
 
@@ -559,13 +572,15 @@ def _score_points(clause: str, previous: str, lot: str, line: int) -> List[Score
     for match in _SCORE.finditer(clause):
         head = clause[cursor:match.start()]
         cursor = match.end()
-        name = _clean_name(_SCORE_TAIL.sub("", _SCORE_LEAD.sub("", head)))
+        name = _clean_name(_SCORE_TAIL.sub("", _SCORE_LEAD.sub("", head))).rstrip(" :：")
         if not name and not points and previous:
             # "施工方案那块最重，占18.5分": the name is what the clause before was about
             name = _clean_name(_SCORE_TAIL.sub("", _SCORE_LEAD.sub("", previous)))
         if _width(name) > 24 or re.search(r"\d", name) or _OURS.search(name) or _LOT.search(name):
             name = ""
-        points.append(ScorePoint(name, re.sub(r"\s+", "", match.group(0)), lot, clause.strip(_EDGE), line))
+        score = (re.sub(r"\s+", "", match.group(0)) if "分" in match.group(0)
+                 else re.sub(r"\s+", " ", match.group(0)).strip())
+        points.append(ScorePoint(name, score, lot, clause.strip(_EDGE), line))
     return points
 
 
@@ -576,6 +591,63 @@ def _special_name(text: str) -> str:
 # ---------------------------------------------------------------------------
 # the walk
 # ---------------------------------------------------------------------------
+
+
+def _unmapped_values(clause: str, assigned: List[str]) -> List[Tuple[int, str]]:
+    """Literal, non-overlapping values not already assigned *in this clause*.
+
+    Mask identifiers that only number clauses/lots/addenda, keeping offsets intact.
+    A money/time/date literal takes precedence over its component bare numbers.
+    Never use another clause's values to decide that this occurrence was placed.
+    """
+    body = _NUMBERED_LINE.sub(lambda m: " " * len(m.group(0)), clause, count=1)
+    for pattern in (_LOT, _ADDENDUM):
+        body = pattern.sub(lambda m: " " * len(m.group(0)), body)
+    taken = [False] * len(body)
+    found: List[Tuple[int, str]] = []
+    bare = re.compile(r"(?<![\dA-Za-z#.\-])" + _NUM + r"(?![\d#])")
+    for pattern in (_DATE, _CLOCK, _DOC_CODE, _MONEY, _TIME, _AREA, _SCORE, bare):
+        for match in pattern.finditer(body):
+            start, end = match.span()
+            if any(taken[start:end]) or not re.search(r"\d", match.group(0)):
+                continue
+            taken[start:end] = [True] * (end - start)
+            literal = clause[start:end].strip()
+            compact = re.sub(r"\s+", "", literal)
+            before = r"(?<![\d.])" if compact[:1].isdigit() else ""
+            after = r"(?![\d.])" if compact[-1:].isdigit() else ""
+            if any(re.search(before + re.escape(compact) + after,
+                             re.sub(r"\s+", "", value)) for value in assigned if value):
+                continue
+            found.append((start, literal))
+    return sorted(found)
+
+
+def _keep_unmapped(facts: TenderFacts, clause: str, *, shown: str, quote: str,
+                   line: int, lot: str, origin: str, cue: Optional[re.Match],
+                   tender_side: bool, starts: Tuple[int, int, int]) -> None:
+    assigned = [m.value for m in facts.mentions[starts[0]:]]
+    assigned += [s.score for s in facts.scores[starts[1]:]]
+    assigned += [v for s in facts.specials[starts[2]:] for v in (s.name, s.detail)]
+    if lot in facts.lot_scopes:
+        assigned.append(facts.lot_scopes[lot])
+    values = _unmapped_values(clause, assigned)
+    # An unqualified bank guarantee can be a tender or performance security.
+    # Retain a personal statement without guessing which requirement it answers,
+    # including a pending statement that gives no amount at all.
+    unknown_guarantee = bool(cue is not None and not facts.mentions[starts[0]:]
+                             and re.search(r"\b(?:banker['’]s\s+guarantee|bank\s+guarantee|performance\s+(?:bond|guarantee|security))\b",
+                                           clause, re.I))
+    for side in ("tender", "ours", "unspecified"):
+        own_values = [value for offset, value in values
+                      if ("ours" if cue is not None and offset >= cue.start()
+                          else "tender" if tender_side else "unspecified") == side]
+        if own_values or (unknown_guarantee and side == "ours" and not values):
+            facts.unplaced_records.append({"side": side, "values": own_values, "lot": lot,
+                                           "line": line, "origin": origin, "note": shown,
+                                           "quote": quote.strip(), "field": "UNSPECIFIED",
+                                           **({"claim_only": True} if not own_values else {})})
+            facts.unplaced.append(shown)
 
 
 # Aliases are immutable vocabulary. Compile once rather than escape and look up
@@ -709,6 +781,8 @@ _NAME_END = (r"(?:工程|项目|大厦|广场|厂房|车间|仓库|住宅|公寓
 _NAME_TAIL = r"(?:第?[" + _CN_NUM + r"\d]{1,2}标段)?(?:(?:施工|监理|设计|勘察|采购|总承包)?的?招标.*|的.*)?$"
 _NAMED = re.compile(r"(?:项目|工程)(?:名称)?(?:是|为|叫|名为)\s*(" + _NAME + r"{4,36})$")
 _NAME_SHAPE = re.compile(r"^(" + _NAME + r"{2,34}?" + _NAME_END + r")" + _NAME_TAIL)
+_NAME_FOR_DRAFT = re.compile(r"(?:生成|编制|整理|起草)\s*(" + _NAME + r"{2,30}?" + _NAME_END
+                             + r"(?:[A-Za-z0-9]{1,6})?)的(?:技术标|投标|招标)")
 _NAME_BEFORE_LOT = re.compile(r"^(" + _NAME + r"{6,36}?)第?[" + _CN_NUM + r"\d]{1,2}标段")
 _NOT_A_NAME = re.compile(r"专项|技术标|解析|目录|缺口|我们|咱们|招标|投标|标段|这次|这个|本次|那个|分了|分为|一下|帮我|[是有在要把被给]"
                          r"|^(?:另一个|另外|还有|以及|关于|工作地点|地点|地址|驻|赴|去|到)"
@@ -724,6 +798,9 @@ def _project_name(sentence: str) -> str:
       城东安置房二期总建筑面积38600平     the same, standing right before the first field of its clause
       滨江路市政道路改造二标段           whatever stands before its lot
     """
+    requested = _NAME_FOR_DRAFT.search(sentence)
+    if requested and not _NOT_A_NAME.search(requested.group(1)):
+        return requested.group(1)
     for raw in re.split(r"[，,：:]", sentence):
         clause = raw.strip(_EDGE)
         said = _NAMED.search(clause)
@@ -779,6 +856,8 @@ def extract(text: str, *, sides: str = "auto") -> TenderFacts:
     lot_forms: Dict[str, str] = {}
     seen_clauses: List[str] = []
     for line_no, raw_line, block_side in _segments(text, sides, tables=True):
+        if block_side == "instruction":
+            continue
         if raw_line.lstrip().startswith((UNREAD_MARK, CUT_MARK, OCR_MARK)):
             continue
         # "标签：" at the start of a line governs the whole line: "已有证据：同类学校业绩一项，合同都在"
@@ -811,8 +890,11 @@ def extract(text: str, *, sides: str = "auto") -> TenderFacts:
         for sentence in _sentences(line_body):
             if not sentence.strip():
                 continue
+            if not document and sides != "none" and block_side != "theirs" and is_task_talk(sentence):
+                continue
             carried: Optional[str] = line_topic
             previous_clause = ""
+            sentence_ours = False
             origin, origin_from = "", 0
             for clause in _CLAUSE.split(sentence):
                 if not clause or not clause.strip(_EDGE):
@@ -835,12 +917,24 @@ def extract(text: str, *, sides: str = "auto") -> TenderFacts:
                 # ---- whose side, by position
                 absent = _NOT_GIVEN.search(clause)
                 cue = None if sides == "none" else _our_cue(clause, document=document)
+                if (cue is None and sentence_ours and sides != "none"
+                        and not _TENDER_SUBJECT.search(clause) and not _TENDER_SPEAKS.search(clause)
+                        and not re.search(r"要求", clause)):
+                    cue = re.match(r"", clause)
                 if block_side == "ours":
                     cue = re.match(r"", clause)  # under "投标响应：" every word is ours, a 须 included
                 elif block_side == "theirs":
                     cue = None
+                if cue is not None:
+                    sentence_ours = True
+                elif _TENDER_SUBJECT.search(clause) or _TENDER_SPEAKS.search(clause):
+                    sentence_ours = False
                 if label_is_ours and cue is None and sides != "none":
                     cue = re.match(r"", clause)  # the label said whose: everything on this line is ours
+                starts = (len(facts.mentions), len(facts.scores), len(facts.specials))
+                tender_side = bool(sides == "none" or block_side == "theirs"
+                                   or _TENDER_SUBJECT.search(clause) or _TENDER_SPEAKS.search(clause)
+                                   or re.search(r"\b(?:the\s+)?tender\s+(?:requires?|states?|specifies?)\b", clause, re.I))
                 hits = [] if line_topic in _ALWAYS_OURS | _STATEMENT_ONLY else _topic_hits(clause)
                 if line_topic and hits and not all(key == line_topic for _s, _e, key in hits):
                     # inside a labelled line only a second "标签：" starts a new field
@@ -873,6 +967,8 @@ def extract(text: str, *, sides: str = "auto") -> TenderFacts:
                     first_of_line = False
                     previous_clause = clause
                     if placed:
+                        _keep_unmapped(facts, clause, shown=shown, quote=raw_line, line=line_no,
+                                       lot=lot, origin=origin, cue=cue, tender_side=tender_side, starts=starts)
                         continue
                 first_of_line = False
                 for index, (start, end, key) in enumerate(hits):
@@ -995,6 +1091,8 @@ def extract(text: str, *, sides: str = "auto") -> TenderFacts:
                         placed = True
                 if not placed and re.search(r"\d", _LOT.sub(" ", _NUMBERED_LINE.sub("", clause, count=1))):
                     facts.unplaced.append(shown)  # a number nobody placed; "3. …" or "1标" alone is only a numbering
+                _keep_unmapped(facts, clause, shown=shown, quote=raw_line, line=line_no,
+                               lot=lot, origin=origin, cue=cue, tender_side=tender_side, starts=starts)
                 previous_clause = clause
             if origin:
                 # "补遗1号只把工期改成450天，保证金没提": what the rest of the sentence says is the addendum's
@@ -1017,8 +1115,11 @@ def extract(text: str, *, sides: str = "auto") -> TenderFacts:
     facts.scores = [ScorePoint(s.name, s.score, relot(s.lot), s.note, s.line) for s in facts.scores]
     facts.specials = [Special(s.name, s.detail, relot(s.lot), s.note, s.line, s.not_given) for s in facts.specials]
     facts.lot_scopes = {forms.get(key, key): scope for key, scope in facts.lot_scopes.items()}
+    facts.unplaced_records = [{**r, "lot": relot(str(r["lot"]))} for r in facts.unplaced_records]
     used = [s.detail for s in facts.specials if s.detail] + [m.value for m in facts.of("project") if m.value]
     facts.unplaced = [c for c in dict.fromkeys(facts.unplaced) if not any(u in c for u in used)]
+    kept_notes = set(facts.unplaced)
+    facts.unplaced_records = [r for r in facts.unplaced_records if r["note"] in kept_notes]
     # The net under everything above. A clause may have one number filed and another not
     # ("招标文件HD-018写的是工期365日历天": 365 filed, the document number not). Every number and
     # every document code of the text is either inside something that was filed, or its clause
@@ -1057,7 +1158,7 @@ def _line_sides(text: str, sides: str) -> List[Tuple[List[str], List[str]]]:
         ours: List[str] = []
         for stretch, side in grouped[line_no]:
             line = stretch.strip()
-            if not line or line.startswith((UNREAD_MARK, CUT_MARK, OCR_MARK)):
+            if side == "instruction" or not line or line.startswith((UNREAD_MARK, CUT_MARK, OCR_MARK)):
                 continue
             if sides == "none" or side == "theirs":
                 theirs.append(line)
@@ -1067,6 +1168,7 @@ def _line_sides(text: str, sides: str) -> List[Tuple[List[str], List[str]]]:
                 continue
             kept: List[str] = []
             touched = False
+            carry_ours = False
             for piece in _PIECE.split(line):
                 if not piece.strip():
                     continue
@@ -1074,13 +1176,18 @@ def _line_sides(text: str, sides: str) -> List[Tuple[List[str], List[str]]]:
                     touched = True
                     continue
                 cue = _our_cue(piece, document=document)
+                if (cue is None and carry_ours and not _TENDER_SUBJECT.search(piece)
+                        and not _TENDER_SPEAKS.search(piece) and not re.search(r"要求", piece)):
+                    cue = re.match(r"", piece)
                 if cue is None:
                     kept.append(piece)
+                    carry_ours = False
                     continue
                 touched = True
                 if piece[:cue.start()].strip(_EDGE):
                     kept.append(piece[:cue.start()])
                 ours.append(piece[cue.start():].strip())
+                carry_ours = not piece.rstrip().endswith(("。", ".", "；", ";", "！", "!", "？", "?"))
             theirs += [line] if not touched else [x.strip().strip("，,") for x in kept if x.strip().strip("，,")]
         out.append((theirs, ours))
     return out

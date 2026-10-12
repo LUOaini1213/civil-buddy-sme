@@ -193,6 +193,10 @@ test("boot: the real page reaches the real backend and applies its capabilities"
   assert.equal(cb().cbCapability("file_ref"), true);
   assert.equal($("send").disabled, true, "send is disabled while the composer is empty");
   assert.equal($("stop").hidden, true);
+  assert.equal($("cbAgentEntry").hasAttribute("href"), false);
+  assert.equal($("cbPackingEntry").hasAttribute("href"), false);
+  assert.equal($("cbLogisticsEntry").getAttribute("href"), "/logistics");
+  assert.match($("cbEntryAvailability").textContent, /Agent/);
 });
 
 test("send: tokens stream into the bubble and the turn ends with 回答完毕", async () => {

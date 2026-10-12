@@ -20,6 +20,7 @@ STATIC = (
     "manifest.webmanifest", "posts.js", "studio.js", "styles.css", "tickets.js", "voice.js",
     "sw.js", "modules/auth.js", "modules/toast.js", "modules/drafts.js", "modules/uploads.js",
     "modules/turn-stream.js", "modules/deliverables.js", "modules/session-watch.js", "modules/session-nav.js",
+    "modules/entry-availability.js",
     "agent.html", "agent.css", "agent.js", "theme.css", "theme.js", "workbench-shell.css",
     "i18n.js", "i18n-agent.js", "i18n-home.js", "i18n-engineering.js", "i18n-logistics.js",
     "icons/cb-icon-192.png", "icons/cb-icon-512.png", "icons/cb-icon.svg",

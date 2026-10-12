@@ -35,7 +35,7 @@ EXTRA = (
     "deploy/lightsail/Caddyfile", "deploy/lightsail/compose.override.yml",
     "deploy/lightsail/user-data.sh", "deploy/lightsail/civil-admin.sh", "deploy/lightsail/test-local.sh",
     "docs/civil-buddy/acceptance/sme-preview-checklist.md",
-    "scripts/unified_acceptance.py", "scripts/test_unified_runtime_http.py",
+    "scripts/unified_acceptance.py", "scripts/test_unified_runtime_http.py", "scripts/test_linked_runtime_http.py",
     "examples/facade-demo/README.md", "examples/facade-demo/facade_itt_doc.md",
     "examples/facade-demo/facade_panels.xlsx", "examples/facade-demo/facade_panels_rev_b.xlsx",
     "examples/facade-demo/facade_panels_zh.xlsx", "examples/facade-demo/daily_report_input.txt",
@@ -237,6 +237,20 @@ python scripts/build_unified_release.py --verify <压缩包路径>
 [文档技能](docs/civil-buddy/architecture/civil-buddy-document-skills.md)。
 Rust 开发可用 `cargo build --release --manifest-path workbench/Cargo.toml`；需要自行安装 Rust 工具链。
 完整测试和研究资料仍以完整源码仓库为准。
+
+## 本机离线回归
+
+已安装上述 Python 依赖后，下面两项使用本包 exe、合成资料、临时具名账号和
+本机脚本模型，不连接线上实例或真实模型服务，也不证明跨电脑或真实工程验收。
+测试会在本目录 `output/` 生成报告与临时状态；请勿把它们再打入分发包。
+
+```powershell
+$env:PYTHON_DOTENV_DISABLED='1'
+& ".\\.venv\\Scripts\\python.exe" scripts/test_unified_runtime_http.py --binary bin/civil-workbench.exe
+& ".\\.venv\\Scripts\\python.exe" scripts/test_linked_runtime_http.py --binary bin/civil-workbench.exe
+```
+
+版本名含 `local` / `debug` 的包仅供本地测试；不表示已经发布、部署，或取代参赛 `v0.7.0`。
 """
 
 

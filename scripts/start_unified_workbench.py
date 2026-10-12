@@ -21,6 +21,8 @@ import urllib.request
 import webbrowser
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from packing_assistant.filesystem import native_path as filesystem_path
 
 
 def validate_owned_directory(root: Path, *, state: bool) -> None:
@@ -30,6 +32,10 @@ def validate_owned_directory(root: Path, *, state: bool) -> None:
     can remove records or concurrently rearrange directories. identity.sqlite is
     reserved for private instance state, including damaged or partial databases.
     """
+    # Use native spelling for the entire scan, not only for later writes. A
+    # legitimate specialist run can exceed MAX_PATH; ownership/link checks must
+    # still inspect it completely. This does not alter the configured identity.
+    root = filesystem_path(root)
     workspace_binding = Path(".civil-buddy/instance-owner.sqlite")
     def present(path: Path) -> bool:
         try:
@@ -188,14 +194,14 @@ def main():
     domain_env = {k: v for k, v in os.environ.items() if k.upper() in
                   {"PATH", "SYSTEMROOT", "WINDIR", "PATHEXT", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "LANG"}}
     domain_token = secrets.token_urlsafe(48)
-    domain_env.update(PYTHONUTF8="1", PYTHON_DOTENV_DISABLED="1", CIVIL_OUT_ROOT=str(args.state_root / "domains"),
-                      CIVIL_DOMAIN_TOKEN=domain_token, CIVIL_DATA_ROOT=str(args.state_root / "legacy/data"),
-                      CIVIL_SANDBOX_ROOTS=str(args.state_root / "domains"),
-                      CIVIL_DOMAIN_WORKSPACE=str(args.state_root / "domains"),
-                      PACKING_OUTPUT_DIR=str(args.state_root / "packing"),
-                      PACKING_TRACE_DIR=str(args.state_root / "packing" / "traces"),
-                      CB_DB_PATH=str(args.state_root / "packing" / "civilbuddy.db"),
-                      PACKING_LG_CHECKPOINT_PATH=str(args.state_root / "packing" / "checkpoints.db"),
+    domain_env.update(PYTHONUTF8="1", PYTHON_DOTENV_DISABLED="1", CIVIL_OUT_ROOT=str(filesystem_path(args.state_root / "domains")),
+                      CIVIL_DOMAIN_TOKEN=domain_token, CIVIL_DATA_ROOT=str(filesystem_path(args.state_root / "legacy/data")),
+                      CIVIL_SANDBOX_ROOTS=str(filesystem_path(args.state_root / "domains")),
+                      CIVIL_DOMAIN_WORKSPACE=str(filesystem_path(args.state_root / "domains")),
+                      PACKING_OUTPUT_DIR=str(filesystem_path(args.state_root / "packing")),
+                      PACKING_TRACE_DIR=str(filesystem_path(args.state_root / "packing" / "traces")),
+                      CB_DB_PATH=str(filesystem_path(args.state_root / "packing" / "civilbuddy.db")),
+                      PACKING_LG_CHECKPOINT_PATH=str(filesystem_path(args.state_root / "packing" / "checkpoints.db")),
                       PACKING_LLM_AGENT="0", PACKING_SKIP_SKJOLBER="1", CIVIL_AGENT_MODE="steps")
     # Sidecar uses only its private store. Job material is selected by the host.
     for key in ("CIVIL_TOKEN", "CIVIL_TOKEN_SHA256", "CIVIL_INSTANCE_USER", "CIVIL_ALLOWED_WORKSPACES", "CIVIL_PUBLIC_ORIGIN", "PYTHONPATH"):

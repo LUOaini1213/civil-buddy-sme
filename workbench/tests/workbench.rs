@@ -128,6 +128,8 @@ async fn test_tool_pages_explain_missing_engine() {
     assert_eq!(v["capabilities"]["logistics"], false);
     assert_eq!(v["capabilities"]["engineering"], false);
     assert_eq!(v["capabilities"]["tender_collaboration"], false);
+    assert_eq!(v["capabilities"]["agent_workbench"], false);
+    assert_eq!(v["capabilities"]["packing_workbench"], false);
 }
 
 #[tokio::test]

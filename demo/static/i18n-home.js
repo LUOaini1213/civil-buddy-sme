@@ -2,6 +2,11 @@
 window.CBI18n?.add({
   "工作台导航": "Workbench navigation",
   "工作台": "Workbench",
+  "Agent 工程工作台": "Agent engineering workbench",
+  "箱单识别与物流材料": "Packing-list intake and logistics documents",
+  "入口可用性尚未确认。": "Entry availability has not been confirmed.",
+  "本实例未开放此入口；需部署对应后端服务。": "This entry is not enabled on this instance; deploy its backend service first.",
+  "本实例未开放：{entries}。可继续使用已开放的岗位任务。": "Not enabled on this instance: {entries}. Available specialist tasks remain usable.",
   "装箱拼柜": "Packing",
   "工程计算": "Engineering",
   "施工计划": "Construction planning",

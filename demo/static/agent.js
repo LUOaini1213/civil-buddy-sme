@@ -2,16 +2,17 @@ import { createAuth } from "./modules/auth.js";
 
 const STORE_KEY = "cb_agent_workspaces_v1";
 const RISK_PHRASE = "我明白，将由持证人员签认";
-const confirmedMessage = (text) => String(text || "").split(/[\n。;；]/).some((part) => part.trim() === RISK_PHRASE);
 const TERMINAL = new Set(["completed", "succeeded", "failed", "cancelled", "interrupted"]);
 const STATUS = { queued: "等待执行", running: "执行中", waiting_approval: "等待确认", cancelling: "正在停止", completed: "已完成", succeeded: "已完成", failed: "未完成", cancelled: "已停止", interrupted: "服务重启时中断" };
-const EVENT_NAMES = { status: "执行阶段", context: "上下文预算", model: "模型调用", tool_started: "工具开始", tool_finished: "工具结束", subtask_started: "子任务开始", subtask_finished: "子任务结束", artifact: "产物已保存", decision: "工程判断", error: "执行错误", done: "本轮结束" };
+const EVENT_NAMES = { status: "执行阶段", context: "上下文预算", model: "模型调用", write_policy: "本轮文档权限", tool_started: "工具开始", tool_finished: "工具结束", subtask_started: "子任务开始", subtask_finished: "子任务结束", artifact: "产物已保存", decision: "工程判断", error: "执行错误", done: "本轮结束" };
 const TURN_EVENTS = { "turn.started": "running", "turn.cancelling": "cancelling", "turn.completed": "completed", "turn.failed": "failed", "turn.cancelled": "cancelled", "turn.interrupted": "interrupted" };
 const idOf = (turn) => String(turn && (turn.turn_id || turn.id) || "");
 const object = (value) => value && typeof value === "object" && !Array.isArray(value);
 const printable = (value) => typeof value === "string" ? value : JSON.stringify(value, null, 2) || "";
 const displayPath = (value) => value.startsWith("\\\\?\\UNC\\") ? "\\\\" + value.slice(8) : value.startsWith("\\\\?\\") ? value.slice(4) : value;
 const engineeringKey = (value) => value.kind + ":" + value.project_id;
+const SHA256 = /^[a-f0-9]{64}$/i;
+const SOURCE_STATUS_LABELS = new Map([["unchanged", "字节版本相同"], ["changed", "源文件已变化"], ["missing", "源文件已缺失"], ["mixed_versions", "本轮记录了多个版本"], ["not_read", "无成功读取版本记录"], ["unknown", "尚不能核验"]]);
 const snapshotKey = (value) => JSON.stringify([value.kind, value.project_id, value.revision, value.source_sha256, value.inputs_sha256]);
 function engineeringSnapshot(data, expected) {
   const value = data?.selection;
@@ -42,6 +43,7 @@ export function createAgentWorkbench(deps) {
   const state = { capabilities: null, workspace: null, session: "", files: [], selected: new Set(), turn: null,
     seq: 0, artifacts: new Map(), engineeringResults: new Map(), epoch: 0, workspaceEpoch: 0, fileEpoch: 0, listEpoch: 0,
     contextData: null, taskRows: [], eventRows: [], modelConfig: null,
+    sourceReport: null, sourceChecking: false, sourceEpoch: 0, sourceError: "",
     engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, experts: [],
     opening: false, submitting: false, cancelling: false, modelBusy: false, modelConfigured: false, disposed: false };
   let saved = { lastRoot: "", workspaces: {} }, timer = null, controller = null, started = false;
@@ -66,11 +68,13 @@ export function createAgentWorkbench(deps) {
   function resetView() {
     stopPolling(); state.epoch += 1; state.listEpoch += 1; state.turn = null; state.seq = 0; state.eventRows = []; state.contextData = null; state.artifacts.clear(); state.engineeringResults.clear();
     state.submitting = false; state.cancelling = false;
+    state.sourceEpoch += 1; state.sourceReport = null; state.sourceChecking = false; state.sourceError = "";
     $("agentEvents").replaceChildren(); $("agentArtifacts").replaceChildren(); $("agentReply").textContent = t("结果将显示在这里。");
     if ($("agentEngineeringResults")) { $("agentEngineeringResults").replaceChildren(); $("agentEngineeringResults").hidden = true; }
     $("agentTurnStatus").textContent = t("尚未开始"); $("agentPartial").hidden = true; $("agentUsage").hidden = true;
     $("agentTurnActor").textContent = t("尚无任务发起者记录。");
     $("agentContextMeter").hidden = true; $("agentContextText").textContent = t("收到后端请求预算后显示；这不是任务完成进度。");
+    paintSourceVersions();
     controls();
   }
   function controls() {
@@ -78,9 +82,11 @@ export function createAgentWorkbench(deps) {
     const mode = $("agentMode").value;
     const supported = caps && caps.available === true && Array.isArray(caps.modes) && caps.modes.includes(mode)
       && Array.isArray(caps.sandbox) && caps.sandbox.includes($("agentSandbox").value);
-    const highRiskWrite = state.experts.find((item) => item.id === $("agentExpert").value)?.risk === "high" && $("agentSandbox").value === "workspace-write";
-    const confirmationPresent = $("agentRiskConfirmation").value.trim() === RISK_PHRASE || confirmedMessage($("agentMessage").value);
-    $("agentRiskWrap").hidden = !highRiskWrite;
+    const writing = mode === "model" && $("agentSandbox").value === "workspace-write";
+    const selectedRisk = state.experts.find((item) => item.id === $("agentExpert").value)?.risk;
+    const highRiskWrite = writing && selectedRisk === "high";
+    const confirmationPresent = $("agentRiskConfirmation").value.trim() === RISK_PHRASE;
+    $("agentRiskWrap").hidden = !(writing && selectedRisk !== "low");
     $("agentRiskConfirmation").disabled = state.submitting;
     $("agentSend").disabled = !state.workspace || state.opening || state.submitting || !!active() || state.engineeringLoading || state.engineeringRows.some((row) => row.loading) || !supported || (mode === "model" && !state.modelConfigured) || (highRiskWrite && !confirmationPresent);
     $("agentCancel").hidden = !active() || !(caps && caps.features && caps.features.cancel);
@@ -90,6 +96,7 @@ export function createAgentWorkbench(deps) {
     $("agentModelSave").disabled = state.modelBusy;
     $("agentRefreshEngineering").disabled = !state.workspace || state.opening || state.submitting || state.engineeringLoading;
     $("agentExpert").disabled = state.submitting;
+    $("agentCheckSources").disabled = caps?.features?.source_versions !== true || !state.workspace || !state.turn || !!active() || state.sourceChecking;
     paintEngineering();
   }
   function paintCapabilities(caps) {
@@ -113,6 +120,7 @@ export function createAgentWorkbench(deps) {
       ? t("服务端报告工具工作进程已启用操作系统写入隔离；文件写入仍受当前权限策略约束。") +
         (isolation.reads_confined === false ? t("不限制读取范围。") : "") + (isolation.network_confined === false ? t("不隔离网络访问。") : "")
       : isolation.policy === true ? t("当前启用应用权限策略；服务端未声明操作系统强制隔离。") : t("服务端尚未声明隔离能力。");
+    paintSourceVersions();
     controls();
   }
   async function loadCapabilities() {
@@ -144,6 +152,7 @@ export function createAgentWorkbench(deps) {
       state.files = Array.isArray(data.files) ? data.files.filter((file) => file && typeof file.path === "string") : [];
       const paths = new Set(state.files.map((file) => file.path)); state.selected = new Set([...state.selected].filter((path) => paths.has(path)));
       record().files = [...state.selected]; persist(); paintFiles();
+      if (state.turn && !active() && state.capabilities?.features?.source_versions === true) await checkSources();
     } catch (error) { if (state.workspace?.id === id && version === state.fileEpoch) notice(t("资料列表读取失败：") + error.message, true); }
   }
   function clearEngineering() {
@@ -225,7 +234,7 @@ export function createAgentWorkbench(deps) {
   }
   function expertNote() {
     const expert = state.experts.find((item) => item.id === $("agentExpert").value);
-    $("agentExpertNote").textContent = expert ? (t(expert.title) || t(expert.name)) + (expert.risk === "high" ? t("；该岗位涉及高风险工程内容，服务端会执行签认门禁。") : "") : t("由任务内容选择岗位；服务端决定可用工具和签认要求。");
+    $("agentExpertNote").textContent = expert ? (t(expert.title) || t(expert.name)) + (expert.risk === "high" ? t("；该岗位涉及高风险工程内容，服务端会执行签认门禁。") : "") : t("自动模式可读取和预览；保存副本前需本轮签认，或明确选择低风险岗位。模型加载岗位不能代替授权。");
   }
   async function loadExperts() {
     try {
@@ -305,6 +314,55 @@ export function createAgentWorkbench(deps) {
     const scope = data.scope === "request" ? t("本次请求") : t("后端报告");
     $("agentContextText").textContent = t("{scope}输入{kind} {used} / {budget}；输出预留 {reserve}，窗口 {limit}。", { scope, kind: data.estimated ? t("估算") : t("用量"), used: used.toLocaleString(), budget: (limit - reserve).toLocaleString(), reserve: reserve.toLocaleString(), limit: limit.toLocaleString() }) +
       (data.estimated ? t("估算不代表计费用量。") : "") + (data.omitted_history_messages > 0 ? t(" 本次省略 {count} 条历史消息。", { count: data.omitted_history_messages }) : "");
+  }
+  function sourceRows(report) {
+    return (Array.isArray(report?.sources) ? report.sources : []).filter((row) => object(row) && typeof row.path === "string").map((row) => {
+      const versions = Array.isArray(row.recorded_sha256) ? row.recorded_sha256 : [];
+      const validVersions = Array.isArray(row.recorded_sha256) && versions.every((hash) => typeof hash === "string" && SHA256.test(hash));
+      const distinct = new Set(versions.map((hash) => String(hash).toLowerCase()));
+      const currentHash = typeof row.current_sha256 === "string" && SHA256.test(row.current_sha256) ? row.current_sha256.toLowerCase() : null;
+      const complete = report.receipts_complete === true;
+      let status = SOURCE_STATUS_LABELS.has(row.status) ? row.status : "unknown";
+      if (!validVersions || (status !== "unknown" && !complete)
+        || (status === "unchanged" && !(distinct.size === 1 && distinct.has(currentHash)))
+        || (status === "changed" && !(distinct.size === 1 && currentHash && !distinct.has(currentHash)))
+        || (status === "mixed_versions" && !(distinct.size > 1 && currentHash))
+        || (status === "missing" && !(distinct.size > 0 && row.reason === "source_missing" && row.current_sha256 === null))
+        || (status === "not_read" && !(distinct.size === 0 && row.current_sha256 === null))) status = "unknown";
+      return { ...row, status };
+    });
+  }
+  function paintSourceVersions() {
+    const host = $("agentSources"), status = $("agentSourceStatus"); host.replaceChildren();
+    if (state.sourceChecking) { status.textContent = t("正在核验当前文件，旧结果不会自动重算。"); status.className = "muted small"; return; }
+    if (state.sourceError) { status.textContent = t("来源版本核验失败，不能确认旧结果仍适用：") + state.sourceError; status.className = "notice warning small"; return; }
+    const report = state.sourceReport;
+    if (!report) { status.textContent = t(state.capabilities?.features?.source_versions === false || (state.capabilities && state.capabilities.features?.source_versions !== true)
+      ? "当前服务未提供来源版本核验，不能确认旧结果仍适用。" : "尚未核验；任务停止后可对照工具记录检查当前文件。"); status.className = "muted small"; return; }
+    const rows = sourceRows(report);
+    const unchanged = rows.length > 0 && report.receipts_complete === true && rows.every((row) => row.status === "unchanged");
+    status.textContent = rows.length === 0 ? t("本轮没有可核验的文档来源记录。") : unchanged
+      ? t("核验时文件字节版本与工具记录相同；这不代表工程结论有效。")
+      : t("有来源变化、缺失或未核验项，旧结果需重新审查。保存的副本保留，不会自动重算。");
+    if (typeof report.checked_at === "string") status.textContent += " " + t("核验时间：{time}；后续变化需再次核验。", { time: report.checked_at });
+    status.className = !unchanged && rows.length > 0 ? "notice warning small" : "muted small";
+    for (const row of rows) {
+      const item = node("li"); item.append(node("strong", row.path), node("p", t(SOURCE_STATUS_LABELS.get(row.status)), "muted small"));
+      const details = node("details"); details.append(node("summary", t("查看工具记录与当前 SHA-256")), node("pre", printable({ recorded_sha256: row.recorded_sha256, current_sha256: row.current_sha256, reason: row.reason })));
+      item.appendChild(details); host.appendChild(item);
+    }
+  }
+  async function checkSources() {
+    if (state.capabilities?.features?.source_versions !== true || !state.workspace || !state.turn || active() || state.sourceChecking) return;
+    const epoch = state.epoch, version = ++state.sourceEpoch, id = idOf(state.turn), workspace = state.workspace.id, query = scoped();
+    state.sourceChecking = true; state.sourceReport = null; state.sourceError = ""; paintSourceVersions(); controls();
+    try {
+      const report = await request(`/api/agent/turns/${encodeURIComponent(id)}/source-status?${query}`);
+      if (!current(epoch) || state.sourceEpoch !== version || id !== idOf(state.turn)) return;
+      if (report.workspace !== workspace || report.turn_id !== id || report.scope !== "tool_source_byte_versions" || !Array.isArray(report.sources) || report.sources.length > 24 || report.sources.some((row) => !object(row) || typeof row.path !== "string")) throw new Error(t("来源版本响应缺少本任务的范围或记录。"));
+      state.sourceReport = report;
+    } catch (error) { if (current(epoch) && state.sourceEpoch === version && id === idOf(state.turn)) state.sourceError = error.message; }
+    finally { if (current(epoch) && state.sourceEpoch === version && id === idOf(state.turn)) { state.sourceChecking = false; paintSourceVersions(); controls(); } }
   }
   function paintArtifact(data) {
     if (!object(data)) return;
@@ -413,6 +471,12 @@ export function createAgentWorkbench(deps) {
     if (TURN_EVENTS[kind]) paintTurn({ status: TURN_EVENTS[kind], ...(data.result ? { result: data.result } : {}) });
     const li = node("li"), title = node("div", undefined, "event-title");
     title.append(node("strong", kind === "authorization" ? t("本轮权限记录") : t(EVENT_NAMES[kind]) || t(STATUS[TURN_EVENTS[kind]]) || kind), node("span", `#${event.seq}` + (event.actor_id ? t(" · 发起者：{actor}", { actor: event.actor_id }) : ""))); li.appendChild(title);
+    if (kind === "write_policy") {
+      const risk = t(data.risk === "low" ? "低风险" : data.risk === "high" ? "高风险" : data.risk === "unclassified" ? "未分类" : "未返回");
+      const acknowledged = data.scope === "current_turn" && data.confirmation_source === "risk_confirmation" && data.confirmation_present === true;
+      li.appendChild(node("p", t("风险范围：{risk}；本轮确认：{confirmation}。", { risk, confirmation: t(acknowledged ? "已登记（不是专业签认）" : data.confirmation_present === false ? "未确认" : "未返回") })));
+      li.appendChild(node("p", t(data.request_read_only === true ? "本轮请求只读，不能保存副本；确认口令不能解除此限制。" : data.request_read_only === false ? "请求未禁止保存；仍须通过风险确认、沙箱、预览和来源校验。" : "未返回本轮写入限制，请以实际工具结果为准。"), "muted small"));
+    }
     const text = data.message || data.text || data.summary || data.tool || data.name || data.phase || data.model;
     if (typeof text === "string") li.appendChild(node("p", text));
     if (Object.keys(data).length) { const details = node("details"); details.append(node("summary", t("查看事件数据")), node("pre", printable(data))); li.appendChild(details); }
@@ -427,7 +491,11 @@ export function createAgentWorkbench(deps) {
       if (!current(epoch) || id !== idOf(state.turn)) return;
       for (const event of (Array.isArray(data.events) ? data.events : []).slice().sort((a, b) => a.seq - b.seq)) eventFrame(event);
       paintTurn(data.turn);
-      if (TERMINAL.has(state.turn.status)) { notice(t(STATUS[state.turn.status]) + (state.turn.result?.partial ? t("，部分工作尚未完成。") : (win.CBI18n?.locale === "en" ? "." : "。")), state.turn.status === "failed"); await loadTurns(); }
+      if (TERMINAL.has(state.turn.status)) {
+        if (state.capabilities?.features?.source_versions === true && !state.sourceReport && !state.sourceError) await checkSources();
+        if (!current(epoch) || id !== idOf(state.turn)) return;
+        notice(t(STATUS[state.turn.status]) + (state.turn.result?.partial ? t("，部分工作尚未完成。") : (win.CBI18n?.locale === "en" ? "." : "。")), state.turn.status === "failed"); await loadTurns();
+      }
     } catch (error) {
       if (!current(epoch) || error.name === "AbortError") return;
       retry = true; delay = 2500; notice(t("连接暂时中断，将从已收到的事件继续恢复：") + error.message, true);
@@ -502,6 +570,7 @@ export function createAgentWorkbench(deps) {
       $("agentTurnActor").textContent = t("尚无任务发起者记录。");
       if (!state.contextData) $("agentContextText").textContent = t("收到后端请求预算后显示；这不是任务完成进度。");
     }
+    paintSourceVersions();
     for (const item of state.artifacts.values()) { paintArtifact(item); break; }
     for (const item of state.engineeringResults.values()) { paintEngineeringResult(item); break; }
     const events = state.eventRows.slice(); state.eventRows = []; state.seq = 0; $("agentEvents").replaceChildren();
@@ -531,12 +600,13 @@ export function createAgentWorkbench(deps) {
     $("agentExpert").addEventListener("change", () => { expertNote(); controls(); }); $("agentRefreshEngineering").addEventListener("click", loadEngineering);
     $("agentRiskConfirmation").addEventListener("input", controls); $("agentMessage").addEventListener("input", controls);
     $("agentCancel").addEventListener("click", cancel); $("agentRefreshFiles").addEventListener("click", loadFiles); $("agentRefreshTurns").addEventListener("click", loadTurns);
+    $("agentCheckSources").addEventListener("click", checkSources);
     $("agentNewSession").addEventListener("click", () => changeSession("", true)); $("agentSession").addEventListener("change", () => changeSession($("agentSession").value));
     await Promise.all([loadCapabilities(), loadExperts(), loadModel().catch((error) => { $("agentModelLabel").textContent = t("暂不可用"); $("agentModelStatus").textContent = t("模型设置暂不可用：") + error.message; })]);
     if (saved.lastRoot && state.capabilities?.available === true) await openWorkspace(saved.lastRoot);
   }
   function dispose() { win.removeEventListener("cb:languagechange", languageChanged); cancelVoice(); state.disposed = true; state.epoch += 1; stopPolling(); }
-  return { state, start, openWorkspace, loadFiles, loadTurns, loadEngineering, inspectEngineering, changeSession, showTurn, send, cancel, poll, saveModel, dispose };
+  return { state, start, openWorkspace, loadFiles, loadTurns, loadEngineering, inspectEngineering, changeSession, showTurn, send, cancel, poll, checkSources, saveModel, dispose };
 }
 
 if (typeof document !== "undefined" && document.getElementById("agentWorkbench")) {

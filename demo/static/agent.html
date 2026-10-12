@@ -80,7 +80,7 @@
           <button id="agentCancel" type="button" class="danger" hidden>停止当前任务</button>
         </div>
         <p id="agentExpertNote" class="muted small">正在读取可用岗位。</p>
-        <label id="agentRiskWrap" class="risk-confirmation" hidden>高风险岗位写入前，请完整输入：我明白，将由持证人员签认
+        <label id="agentRiskWrap" class="risk-confirmation" hidden>高风险或自动模式保存副本前，请在此框完整输入：我明白，将由持证人员签认。消息正文不算签认；只读检查和预览无需确认。
           <input id="agentRiskConfirmation" data-i18n-skip autocomplete="off" placeholder="我明白，将由持证人员签认" />
         </label>
         <p id="agentSandboxNote" class="muted small">正在读取权限能力。</p>
@@ -97,6 +97,11 @@
         <p id="agentPartial" class="notice warning" hidden>本轮只完成了部分工作，已保存的产物仍可下载。</p>
         <div id="agentReply" data-i18n-skip class="reply">结果将显示在这里。</div>
         <div id="agentArtifacts" data-i18n-skip class="artifact-list"></div>
+        <section class="source-versions" aria-labelledby="agentSourcesTitle">
+          <div class="section-title"><h3 id="agentSourcesTitle">来源文件版本</h3><button id="agentCheckSources" type="button" disabled>核验来源版本</button></div>
+          <p id="agentSourceStatus" data-i18n-skip class="muted small" role="status" aria-live="polite">尚未核验；任务停止后可对照工具记录检查当前文件。</p>
+          <ul id="agentSources" data-i18n-skip></ul>
+        </section>
         <details id="agentUsage" hidden><summary>实际调用用量</summary><pre id="agentUsageText"></pre></details>
       </section>
       <section class="panel" aria-labelledby="agentEventsTitle">

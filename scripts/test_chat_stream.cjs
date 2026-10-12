@@ -83,7 +83,10 @@ test("SSE checks a pre-aborted signal and absent response body", async () => {
    top-level function is a global the tests can call, exactly as the old sections were —
    without depending on comment markers in the source. boot() is not run; the harness's
    observation stubs (addMsg / addStatus / cbAnnounce / …) are re-applied after the load. */
-const MODULE_FILES = ["auth", "toast", "drafts", "uploads", "turn-stream", "deliverables", "session-watch", "session-nav"];
+const MODULE_FILES = ["auth", "toast", "drafts", "uploads", "turn-stream", "deliverables", "session-watch", "session-nav", "entry-availability"];
+for (const match of app.matchAll(/^import .* from "\.\/modules\/([^"/]+)\.js";/mg)) {
+  assert.ok(MODULE_FILES.includes(match[1]), `Page-logic harness must load the shipped module ${match[1]}`);
+}
 const classic = (src) => src.replace(/^export /mg, "").replace(/^import .*$/mg, "");
 const moduleSources = MODULE_FILES.map((name) => classic(fs.readFileSync(path.join(__dirname, "..", "demo", "static", "modules", name + ".js"), "utf8")));
 const appSource = classic(app).replace(/^boot\(\);\s*$/m, "/* boot() is not run in the harness */");
