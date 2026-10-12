@@ -107,6 +107,10 @@ sectionproperties 与 IFC/IDS 库，梁/框架、截面、IFC/IDS、工程 HTTP 
 它使用临时本机实例和合成资料，不配置模型；首次启动时缺库会失败，不允许把另一个
 解释器上的已安装依赖算到当前实例。解压包将 `--binary` 改为 `bin/civil-workbench.exe`。
 
+STEP 可选内核另装 `requirements-cad-step.txt`。以上两项加 `--with-step` 时，
+严格专项额外执行 STEP 4 项测试并禁止 skip；主入口额外核对服务端签认导出、
+实际文件重开、实体数、孔洞体积与包围尺寸。未指定该选项的 44 项工程测试不能算作 STEP 已通过。
+
 测试不得接真实大模型接口。设置 `PYTHON_DOTENV_DISABLED=1`，使用项目环境执行 `npm run check`，再按本轮检查矩阵执行工程专项和完整回归。`scripts/test_engineering_ifc.py` 使用真实安装的 IFC/IDS 库，但图纸为合成数据；依赖缺失导致 skip 不能当作该功能通过。`scripts/test_engineering_records.py` 检查重启恢复、中断、并发冲突、损坏记录和路径边界。结构、截面、甘特专项与 HTTP/浏览器证据也必须一并保留。
 
 本轮通过的深度检查命令为 `npm run check:full -- --only http-demo,runtime-api,office-job,pipeline,shadow-eval,rust`，共 6/6；其中 Rust 检查耗时 90.1 秒。与 102 项基础检查一起，覆盖当前检查矩阵全部 108 项任务。

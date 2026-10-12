@@ -59,6 +59,7 @@ EXPLICIT = (
     # 语音输入：页面加载 voice.js；本机识别需要术语表，装依赖的说明在 requirements-asr.txt 里
     "demo/asr_lexicon.txt", "requirements-asr.txt", "docs/voice-input.md",
     "requirements-cad.txt", "docs/civil-buddy/cad-to-3d.md",
+    "requirements-cad-step.txt", "examples/cad-to-3d/synthetic-section-config.json",
     "requirements-analysis.txt", "requirements-engineering.txt", "docs/civil-buddy/engineering-workbench.md",
     "requirements-planning.txt", "docs/civil-buddy/planning-workbench.md",
     "requirements-logistics.txt", "requirements-logistics-ocr.txt",

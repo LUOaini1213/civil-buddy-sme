@@ -30,6 +30,36 @@ class NativeGateTests(unittest.TestCase):
         self.assertEqual(len(gate.preflight_errors(entries)), 2)
         self.assertEqual(len(gate.preflight_errors([])), len(gate.DEPENDENCIES))
 
+    def test_step_is_explicit_and_missing_or_unsupported_kernel_fails(self):
+        entries = self.healthy_dependencies()
+        self.assertEqual(len(gate.preflight_errors(entries, with_step=True)), 2)
+        entries += [{"module": "cadquery", "available": True, "version": "2.8.0"},
+                    {"module": "OCP", "available": True, "version": "7.9.3.1.1"}]
+        self.assertEqual(gate.preflight_errors(entries, with_step=True), [])
+        entries[-2]["version"] = "2.7.0"
+        self.assertEqual(len(gate.preflight_errors(entries, with_step=True)), 1)
+        entries[-2]["version"] = "3.0.0"
+        self.assertEqual(len(gate.preflight_errors(entries, with_step=True)), 1)
+
+    def test_step_fixture_and_engine_are_hashed_when_requested(self):
+        sources = gate.source_snapshot(with_step=True)
+        for name in ("requirements-cad-step.txt", "scripts/test_cad_step.py",
+                     "examples/cad-to-3d/synthetic-section-config.json", "packing_assistant/cad3d/step.py"):
+            self.assertTrue(sources[name])
+
+    def test_requested_step_suite_is_required_for_green(self):
+        entries = self.healthy_dependencies() + [
+            {"module": "cadquery", "available": True, "version": "2.8.0"},
+            {"module": "OCP", "available": True, "version": "7.9.3.1.1"}]
+        def fixture_suite(name, minimum):
+            return {"passed": name != gate.STEP_SUITE[0], "tests_run": minimum, "skipped": []}
+        with patch.object(gate, "dependency_snapshot", return_value=entries), \
+                patch.object(gate, "run_suite", side_effect=fixture_suite) as run:
+            report = gate.run_acceptance(with_step=True)
+        self.assertEqual(run.call_count, 5)
+        self.assertEqual(report["tests_run"], 48)
+        self.assertFalse(report["passed"])
+
     def test_skipped_case_is_not_green(self):
         class Case(unittest.TestCase):
             @unittest.skip("fixture missing dependency")

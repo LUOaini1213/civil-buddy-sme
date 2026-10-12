@@ -40,6 +40,7 @@ EXTRA = (
     "scripts/native_engineering_runtime.py",
     "scripts/test_engineering_section.py", "scripts/test_engineering_ifc.py",
     "scripts/test_engineering_api.py", "scripts/test_cad_api.py",
+    "scripts/test_cad_step.py",
     "examples/facade-demo/README.md", "examples/facade-demo/facade_itt_doc.md",
     "examples/facade-demo/facade_panels.xlsx", "examples/facade-demo/facade_panels_rev_b.xlsx",
     "examples/facade-demo/facade_panels_zh.xlsx", "examples/facade-demo/daily_report_input.txt",
@@ -218,6 +219,7 @@ py -3.11 -m venv .venv
 旧启动器可能按原流程准备本地 `.venv`；统一入口不调用该安装流程。两种入口不要使用同一个端口同时运行。
 CAD、工程计算、排程、语音依赖分别见 `requirements-cad.txt`、`requirements-engineering.txt`、
 `requirements-planning.txt`、`requirements-asr.txt`，请只在同一虚拟环境内按需安装。
+STEP 实体导出另需 `requirements-cad-step.txt`（本包包含安装清单，不包含 CadQuery/OCP 内核）。
 Java/JVM、Office 或 OCR 引擎均不随包提供。
 
 文档副本只是待核查草稿；PDF 正文改写/OCR、Office 排版渲染与 Excel 公式重算尚未提供。
@@ -269,6 +271,8 @@ $env:PYTHON_DOTENV_DISABLED='1'
 第二项从临时具名账号登录 Rust 主入口，调用实际梁、截面及 IFC 求解器，检查签认导出门禁、
 版本冲突、真实进程重启恢复与跨账号隔离。两项必须使用同时安装主项目、CAD 和工程依赖的解释器；
 测试实例不配置模型，不能把另一套解释器的已安装依赖当成本实例可用。
+安装 STEP 依赖后，两项均可增加 `--with-step`：严格专项额外要求 STEP 的 4 项测试零跳过；
+主入口验收额外检查签认导出与实际 STEP 文件重开、实体数、孔洞体积和包围尺寸。
 """
 
 

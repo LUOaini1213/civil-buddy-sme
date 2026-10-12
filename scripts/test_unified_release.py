@@ -79,6 +79,7 @@ class UnifiedReleaseTests(unittest.TestCase):
                              "frontend/index.html", "frontend/manifest.webmanifest", "frontend/icons/cb-icon.svg",
                              "gateway/pages/demo.html", "gateway/idempotency.py", "examples/facade-demo/facade_itt_doc.md",
                              "demo/static/modules/entry-availability.js", "scripts/test_linked_runtime_http.py",
+                             "requirements-cad-step.txt", "examples/cad-to-3d/synthetic-section-config.json",
                              "start-workbench.bat", "packing_assistant/civil.py", *release.EXTRA]:
                 self.assertIn(expected, names)
             self.assertEqual(package.read(release.BINARY_NAME), self.binary.read_bytes())
@@ -137,6 +138,7 @@ class UnifiedReleaseTests(unittest.TestCase):
                         "scripts/native_engineering_acceptance.py", "scripts/test_frame_analysis.py",
                         "scripts/native_engineering_runtime.py", "scripts/test_unified_runtime_http.py",
                         "scripts/unified_acceptance.py",
+                        "scripts/test_cad_step.py",
                         "scripts/test_engineering_section.py", "scripts/test_engineering_ifc.py",
                         "scripts/test_engineering_api.py", "scripts/test_cad_api.py"}]
         sources += [path for name, path in release.legacy.release_inputs(ROOT).items()
@@ -176,7 +178,7 @@ class UnifiedReleaseTests(unittest.TestCase):
                                  "import sys; sys.path.insert(0,sys.argv[1]); "
                                  "from scripts import native_engineering_acceptance as g; "
                                  "from scripts import native_engineering_runtime as r; "
-                                 "assert all(g.source_snapshot().values()); "
+                                 "assert all(g.source_snapshot(with_step=True).values()); "
                                  "assert all(r.source_snapshot().values()); "
                                  "assert g.source_commit() == sys.argv[2]; print('native-gate-contained')",
                                  str(extracted), self.git("rev-parse", "HEAD").decode().strip()],

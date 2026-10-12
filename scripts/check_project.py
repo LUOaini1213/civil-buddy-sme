@@ -273,6 +273,7 @@ CHECKS = (
 )
 FULL_CHECKS = (
     Check("native-engineering", ("scripts/native_engineering_acceptance.py",), timeout=600),
+    Check("native-engineering-step", ("scripts/native_engineering_acceptance.py", "--with-step"), timeout=600),
     Check("native-engineering-runtime", ("scripts/native_engineering_runtime.py", "--binary",
           "workbench/target/debug/civil-workbench" + (".exe" if os.name == "nt" else "")), timeout=900),
     Check("http-demo", ("-m", "pytest", "demo/tests", "-q", "--basetemp=output/check-project-pytest")),

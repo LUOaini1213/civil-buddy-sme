@@ -11,6 +11,7 @@ import base64
 from copy import deepcopy
 from hashlib import sha256
 import importlib.util
+import io
 import json
 import math
 import os
@@ -33,11 +34,12 @@ CHECKS = (
     "saved_native_results_and_sources_restored", "section_recomputed_after_cache_reset",
     "both_process_families_stopped", "tested_sources_unchanged",
 )
+STEP_CHECKS = ("step_export_acknowledgement_and_source", "actual_step_reopens_dimensions_holes_and_volume")
 
 
-def preflight():
-    dependencies = gate.dependency_snapshot()
-    errors = gate.preflight_errors(dependencies)
+def preflight(*, with_step=False):
+    dependencies = gate.dependency_snapshot(with_step=with_step)
+    errors = gate.preflight_errors(dependencies, with_step=with_step)
     errors += [f"Missing core dependency: {module}" for module in
                ("uvicorn", "langgraph", "langchain_core", "openpyxl", "pypdf")
                if importlib.util.find_spec(module) is None]
@@ -46,8 +48,8 @@ def preflight():
     return dependencies, errors
 
 
-def source_snapshot():
-    sources = gate.source_snapshot()
+def source_snapshot(*, with_step=False):
+    sources = gate.source_snapshot(with_step=with_step)
     for name in ("scripts/native_engineering_runtime.py", "scripts/test_unified_runtime_http.py",
                  "scripts/unified_acceptance.py", "scripts/start_unified_workbench.py",
                  "demo/domain_service.py"):
@@ -71,14 +73,16 @@ def beam_reaction(model):
     return -load["w1_N_m"] * (load["x2_m"] - load["x1_m"]) * factor
 
 
-def run(binary: Path, output: Path):
+def run(binary: Path, output: Path, *, with_step=False):
     output.mkdir(parents=True, exist_ok=False)
-    dependencies, errors = preflight()
-    sources = source_snapshot()
+    dependencies, errors = preflight(with_step=with_step)
+    sources = source_snapshot(with_step=with_step)
+    required_checks = CHECKS + (STEP_CHECKS if with_step else ())
     errors += [f"Missing acceptance source: {name}" for name, digest in sources.items() if digest is None]
     report = {"schema": "civil-buddy.native-engineering-runtime.v1", "passed": False,
               "synthetic": True, "cross_computer": False, "real_provider_calls": False,
               "model_configured": False, "professional_approval": False,
+              "with_step": with_step,
               "binary": str(binary), "binary_sha256": sha256(binary.read_bytes()).hexdigest(),
               "source_commit": gate.source_commit(), "source_sha256": sources,
               "source_identity_note": "HEAD/package-declared commit plus hashes of actual tested files; not binary provenance",
@@ -88,7 +92,7 @@ def run(binary: Path, output: Path):
     started = time.monotonic()
 
     def checked(name):
-        require(name in CHECKS, "Unregistered native runtime check")
+        require(name in required_checks, "Unregistered native runtime check")
         report["checks"][name] = True
         print("[PASS] " + name, flush=True)
 
@@ -131,6 +135,39 @@ def run(binary: Path, output: Path):
         require(math.isclose(section["result"]["total_area_mm2"], 2000 * 1000 - 1000 * 500, rel_tol=1e-9), "Section hole/area changed")
         require(section["result"]["source_sha256"] == sha256(dxf).hexdigest(), "Section source hash does not match uploaded bytes")
         checked("actual_hollow_section_and_source_hash")
+
+        if with_step:
+            step_config = config("section")  # Explicit synthetic fixture length, never a real drawing default.
+            built = json_request(first.base, "/api/cad/build",
+                                 {"document_id": imported["document_id"], "config": step_config}, cookie=cookie)
+            require(built["model"]["source"]["sha256"] == sha256(dxf).hexdigest(), "STEP model lost original DXF hash")
+            export_body = {"model_id": built["model_id"], "format": "step", "confirmation": ""}
+            require(request(first.base, "/api/cad/export", export_body, cookie=cookie)[0] == 403, "Unsigned STEP export accepted")
+            export_body["confirmation"] = "我明白，将由持证人员签认"
+            status, headers, payload = request(first.base, "/api/cad/export", export_body, cookie=cookie, timeout=60)
+            require(status == 200 and "application/step" in headers.get("Content-Type", "")
+                    and payload.startswith(b"ISO-10303-21"), "Actual STEP export unavailable")
+            checked("step_export_acknowledgement_and_source")
+            import cadquery as cq
+            from OCP.STEPControl import STEPControl_Reader
+            from OCP.IFSelect import IFSelect_RetDone
+            reader = STEPControl_Reader()
+            require(reader.ReadStream("synthetic.step", io.BytesIO(payload)) == IFSelect_RetDone and reader.TransferRoots(), "Downloaded STEP cannot reopen")
+            shape = cq.Shape.cast(reader.OneShape())
+            step_model = built["model"]
+            expected_volume = sum(item["volume_m3"] for item in step_model["objects"])
+            require(shape.isValid() and len(shape.Solids()) == len(step_model["objects"])
+                    and math.isclose(shape.Volume() / 1e9, expected_volume, rel_tol=1e-7)
+                    and len(shape.Faces()) > 6, "STEP solids, hole or volume changed")
+            box = shape.BoundingBox()
+            for axis, name in enumerate(("xlen", "ylen", "zlen")):
+                require(math.isclose(getattr(box, name) / 1000,
+                                    step_model["bounds"]["max"][axis] - step_model["bounds"]["min"][axis], rel_tol=1e-7, abs_tol=1e-7), "STEP bounding dimensions changed")
+            (output / "synthetic.step").write_bytes(payload)
+            report["step"] = {"sha256": sha256(payload).hexdigest(), "bytes": len(payload),
+                              "source_sha256": sha256(dxf).hexdigest(), "synthetic_config": step_config,
+                              "expected_volume_m3": expected_volume, "reopened_volume_m3": shape.Volume() / 1e9}
+            checked("actual_step_reopens_dimensions_holes_and_volume")
 
         ifc_sources = {}
         for name in ("old.ifc", "new.ifc", "requirements.ids"):
@@ -214,9 +251,9 @@ def run(binary: Path, output: Path):
         report["results"] = {kind: item["snapshot"] for kind, item in restored.items()}
         first.stop()
         checked("both_process_families_stopped")
-        require(sources == source_snapshot(), "Acceptance sources changed during runtime")
+        require(sources == source_snapshot(with_step=with_step), "Acceptance sources changed during runtime")
         checked("tested_sources_unchanged")
-        report["passed"] = set(report["checks"]) == set(CHECKS) and all(report["checks"].values())
+        report["passed"] = set(report["checks"]) == set(required_checks) and all(report["checks"].values())
     except Exception as exc:
         report["error"] = {"type": type(exc).__name__, "message": str(exc)}
     finally:
@@ -235,12 +272,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, help="New output directory; never overwrite previous evidence")
+    parser.add_argument("--with-step", action="store_true", help="Also verify actual signed STEP export and artifact reopening")
     args = parser.parse_args()
     binary = args.binary.resolve()
     if not binary.is_file():
         parser.error("--binary must identify an existing compiled executable")
     output = (args.output or ROOT / "output" / ("native-runtime-" + time.strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:6])).resolve()
-    report = run(binary, output)
+    report = run(binary, output, with_step=args.with_step)
     print(json.dumps({"passed": report["passed"], "checks": len(report["checks"]),
                       "report": str(output / "report.json"), "error": report.get("error")}, ensure_ascii=False))
     return 0 if report["passed"] else 1

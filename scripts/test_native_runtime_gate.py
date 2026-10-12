@@ -48,6 +48,18 @@ class NativeRuntimeGate(unittest.TestCase):
             self.assertFalse(report["real_provider_calls"])
             self.assertEqual(json.loads((root / "report/report.json").read_text())["preflight_errors"], ["missing fixture engine"])
 
+    def test_step_preflight_failure_never_launches_host(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            binary = root / "synthetic-not-executed.exe"
+            binary.write_bytes(b"synthetic non-executed fixture")
+            with patch.object(native, "preflight", return_value=([], ["missing STEP kernel"])), \
+                    patch.object(native, "Instance") as instance:
+                report = native.run(binary, root / "report", with_step=True)
+            instance.assert_not_called()
+            self.assertTrue(report["with_step"])
+            self.assertFalse(report["passed"])
+
     def test_existing_evidence_directory_is_not_overwritten(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)

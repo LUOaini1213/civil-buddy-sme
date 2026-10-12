@@ -26,6 +26,7 @@ SUITES = (
     ("scripts.test_engineering_ifc", 9),
     ("scripts.test_engineering_api", 9),
 )
+STEP_SUITE = ("scripts.test_cad_step", 4)
 DEPENDENCIES = (
     ("Pynite", "PyniteFEA", "3.2.0"),
     ("sectionproperties", "sectionproperties", "3.10.2"),
@@ -42,6 +43,7 @@ DEPENDENCIES = (
     ("multipart", "python-multipart", None),
     ("dotenv", "python-dotenv", None),
 )
+STEP_DEPENDENCIES = (("cadquery", "cadquery", None), ("OCP", "cadquery-ocp", None))
 TRANSITIVE_DISTRIBUTIONS = (
     "numpy", "scipy", "numba", "llvmlite", "matplotlib", "cytriangle",
     "xmlschema", "elementpath", "deepdiff", "lxml", "starlette", "pydantic",
@@ -60,9 +62,9 @@ def offline_environment() -> dict[str, str]:
     return env
 
 
-def dependency_snapshot() -> list[dict]:
+def dependency_snapshot(*, with_step=False) -> list[dict]:
     entries = []
-    for module, distribution, pinned in DEPENDENCIES:
+    for module, distribution, pinned in DEPENDENCIES + (STEP_DEPENDENCIES if with_step else ()):
         entry = {"module": module, "distribution": distribution, "required_version": pinned}
         try:
             entry["available"] = importlib.util.find_spec(module) is not None
@@ -73,15 +75,24 @@ def dependency_snapshot() -> list[dict]:
     return entries
 
 
-def preflight_errors(entries: list[dict]) -> list[str]:
+def preflight_errors(entries: list[dict], *, with_step=False) -> list[str]:
     errors = []
     by_module = {entry["module"]: entry for entry in entries}
-    for module, distribution, pinned in DEPENDENCIES:
+    for module, distribution, pinned in DEPENDENCIES + (STEP_DEPENDENCIES if with_step else ()):
         entry = by_module.get(module, {})
         if not entry.get("available") or not entry.get("version"):
             errors.append(f"Missing dependency: {distribution}")
         elif pinned is not None and entry["version"] != pinned:
             errors.append(f"{distribution}: expected {pinned}, installed {entry['version']}")
+    if with_step and by_module.get("cadquery", {}).get("version"):
+        from packaging.specifiers import SpecifierSet
+        from packaging.version import Version, InvalidVersion
+        try:
+            supported = Version(by_module["cadquery"]["version"]) in SpecifierSet(">=2.8,<3")
+        except InvalidVersion:
+            supported = False
+        if not supported:
+            errors.append("CadQuery version must satisfy requirements-cad-step.txt: >=2.8,<3")
     return errors
 
 
@@ -127,12 +138,18 @@ def run_suite(name: str, minimum: int, *, loader=None) -> dict:
     return report
 
 
-def source_snapshot() -> dict[str, str | None]:
-    names = {name.replace(".", "/") + ".py" for name, _ in SUITES}
+def source_snapshot(*, with_step=False) -> dict[str, str | None]:
+    suites = SUITES + ((STEP_SUITE,) if with_step else ())
+    names = {name.replace(".", "/") + ".py" for name, _ in suites}
     names.update({"scripts/native_engineering_acceptance.py", "scripts/test_cad_api.py",
                   "demo/engineering_api.py", "demo/cad_api.py",
                   "requirements-analysis.txt", "requirements-engineering.txt",
                   "requirements-cad.txt", "requirements-planning.txt"})
+    if with_step:
+        names.update({"requirements-cad-step.txt", "packing_assistant/cad3d/step.py",
+                      "packing_assistant/cad3d/geometry.py",
+                      "examples/cad-to-3d/synthetic-hollow-section-mm.dxf",
+                      "examples/cad-to-3d/synthetic-section-config.json"})
     names.update(path.relative_to(ROOT).as_posix()
                  for path in (ROOT / "packing_assistant/engineering").rglob("*.py"))
     return {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
@@ -149,22 +166,24 @@ def source_commit() -> str | None:
     return json.loads(manifest.read_text(encoding="utf-8")).get("source_commit") if manifest.is_file() else None
 
 
-def run_acceptance() -> dict:
+def run_acceptance(*, with_step=False) -> dict:
     started = time.monotonic()
-    dependencies = dependency_snapshot()
-    sources = source_snapshot()
-    errors = preflight_errors(dependencies)
+    dependencies = dependency_snapshot(with_step=with_step)
+    sources = source_snapshot(with_step=with_step)
+    errors = preflight_errors(dependencies, with_step=with_step)
     if sys.flags.optimize:
         errors.append("Restart Python without -O: acceptance assertions must remain enabled")
     errors.extend(f"Missing acceptance source: {name}" for name, digest in sources.items() if digest is None)
-    suites = [] if errors else [run_suite(name, minimum) for name, minimum in SUITES]
-    sources_unchanged = sources == source_snapshot()
+    selected_suites = SUITES + ((STEP_SUITE,) if with_step else ())
+    suites = [] if errors else [run_suite(name, minimum) for name, minimum in selected_suites]
+    sources_unchanged = sources == source_snapshot(with_step=with_step)
     return {
         "schema": "civil-buddy.native-engineering-acceptance.v1",
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "passed": not errors and sources_unchanged and len(suites) == len(SUITES)
+        "passed": not errors and sources_unchanged and len(suites) == len(selected_suites)
                   and all(suite["passed"] for suite in suites),
         "input_type": "synthetic", "same_machine": True,
+        "with_step": with_step,
         "cross_computer_tested": False, "real_project_tested": False,
         "live_model_tested": False, "deployment_tested": False,
         "professional_approval": False,
@@ -183,6 +202,7 @@ def run_acceptance() -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, help="New JSON report path; existing files are never overwritten")
+    parser.add_argument("--with-step", action="store_true", help="Also require installed CadQuery/OCP and zero-skip STEP tests")
     args = parser.parse_args(argv)
     report_path = args.report or ROOT / "output/native-engineering" / (
         datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + ".json")
@@ -192,7 +212,7 @@ def main(argv=None) -> int:
     env = offline_environment()
     os.environ.clear()
     os.environ.update(env)
-    report = run_acceptance()
+    report = run_acceptance(with_step=args.with_step)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with report_path.open("x", encoding="utf-8") as output:
         json.dump(report, output, ensure_ascii=False, indent=2, allow_nan=False)
