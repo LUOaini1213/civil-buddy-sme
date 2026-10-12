@@ -77,7 +77,7 @@ class UnifiedReleaseTests(unittest.TestCase):
                              "workbench/Cargo.toml", "workbench/Cargo.lock", "scripts/start_unified_workbench.py",
                              "workbench/scripts/run_tender_extract.py", "workbench/scripts/run_packing_sidecar.py",
                              "frontend/index.html", "frontend/manifest.webmanifest", "frontend/icons/cb-icon.svg",
-                             "gateway/pages/demo.html", "examples/facade-demo/facade_itt_doc.md",
+                             "gateway/pages/demo.html", "gateway/idempotency.py", "examples/facade-demo/facade_itt_doc.md",
                              "demo/static/modules/entry-availability.js", "scripts/test_linked_runtime_http.py",
                              "start-workbench.bat", "packing_assistant/civil.py", *release.EXTRA]:
                 self.assertIn(expected, names)
@@ -117,7 +117,7 @@ class UnifiedReleaseTests(unittest.TestCase):
             self.assertFalse((set(private) | set(untracked)) & set(package.namelist()))
             self.assertIn(".env.example", package.namelist())
 
-    def test_extracted_package_reads_original_tender_without_a_checkout(self):
+    def test_extracted_package_imports_domain_and_reads_original_tender_without_a_checkout(self):
         # Use real runtime sources for this package, then execute only its
         # extracted script in an isolated interpreter. A PE stub stays unrun.
         sources = list((ROOT / "packing_assistant").rglob("*.py")) + [
@@ -128,8 +128,9 @@ class UnifiedReleaseTests(unittest.TestCase):
             ROOT / "contract/projects.v1.json",
             ROOT / "contract/kb_boosts.v1.json",
         ]
+        sources += list((ROOT / "demo").glob("*.py")) + list((ROOT / "gateway").glob("*.py"))
         sources += [path for name, path in release.legacy.release_inputs(ROOT).items()
-                    if name.startswith(("knowledge/", "knowledge_base/"))]
+                    if name.startswith(("knowledge/", "knowledge_base/", "demo/kb/"))]
         for source in sources:
             if "__pycache__" in source.parts:
                 continue
@@ -152,6 +153,15 @@ class UnifiedReleaseTests(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith(
             ("CIVIL_", "PACKING_", "OPENAI_", "DEEPSEEK_", "LLM_", "PYTHONPATH", "PYTHONHOME"))}
         env.update(PACKING_AGENT_ROOT=str(extracted), PYTHONUTF8="1", PYTHON_DOTENV_DISABLED="1")
+        domain_env = {**env, "CIVIL_DOMAIN_TOKEN": "synthetic-release-domain-import-token-only",
+                      "CIVIL_OUT_ROOT": str(self.folder / "domain-out"),
+                      "CIVIL_DATA_ROOT": str(self.folder / "domain-data")}
+        imported = subprocess.run([sys.executable, "-I", "-c",
+                                   "import sys; sys.path.insert(0,sys.argv[1]); import demo.domain_service; print('domain-imported')",
+                                   str(extracted)], cwd=self.folder, env=domain_env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45)
+        self.assertEqual(0, imported.returncode, imported.stderr.decode("utf-8", "replace"))
+        self.assertIn(b"domain-imported", imported.stdout)
         payload = {"tender_text": "Only this short synthetic prompt was shown to the model.",
                    "upload_dir": str(uploads), "files": [{"path": str(original), "name": "招标文件.txt"}]}
         process = subprocess.run([sys.executable, "-I", str(extracted / "workbench/scripts/run_tender_extract.py")],
