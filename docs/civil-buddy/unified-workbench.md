@@ -165,6 +165,19 @@ Use the actual filename printed by the builder for verification. The package inc
 
 ## Shared frontend appearance
 
+The shared homepage does not assume all services behind a reverse proxy belong
+to `/api/health`. After boot it separately reads `/api/agent/capabilities`,
+`/packing/api/health` and `/api/logistics/capabilities` in the background. Only
+HTTP 200 JSON matching the corresponding explicit service contract enables an
+entry; 401/403/404, HTML fallbacks, malformed responses and timed-out reads leave
+that entry disabled. Three concurrent probes use existing same-origin cookies,
+refuse redirects and have a 1.5-second client deadline. They never ask for a
+token, retry authentication, submit a task, configure a model or change write
+authorization. A new boot/login scope clears prior observations and rejects late
+results from the earlier scope; locale/model-badge repaints retain observations.
+The route flags remain separate from the homepage's `packing` task capability.
+This is entry discovery, not end-to-end acceptance of the service's operations.
+
 All seven workbench pages share `demo/static/theme.css`, the persisted appearance bootstrap in `theme.js`, and navigation/status components in `workbench-shell.css`. Domain layouts remain scoped to their page styles. Reuse the shared `--cb-*` tokens when adding surfaces; do not introduce a separate palette. The home composer folds the optional high-risk acknowledgment into a disclosure, automatically expanded when the server requires confirmation; the exact phrase gate is unchanged. Voice warnings use the same status treatment on the home and Agent pages.
 
 2026-09-21 validation: seven targeted offline gates passed (assets, JS/CSS syntax, chat streaming, UI modules, Agent UI, release packaging and real-page DOM); voice harness 13/13; existing CAD 51/51, engineering 14/14, planning 18/18 and date-plan gesture tests passed. Browser checks covered persisted light/dark themes, all seven pages at 390 px without document overflow, and representative desktop layouts at 1280 px. Voice warning presentation was checked with a static simulated warning; microphone recognition was not exercised.

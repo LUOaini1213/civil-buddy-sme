@@ -71,6 +71,26 @@ test("auth: named instance expiry opens the HttpOnly login flow without writing 
   assert.equal(response.status,401);assert.equal(calls,1);assert.equal(prompts,0);assert.equal(doc.cookie,"");assert.deepEqual(destinations,["/auth/login"]);
 });
 
+test("auth: passive capability reads do not prompt, redirect, write a cookie or retry a 401", async () => {
+  let prompts = 0; const calls = [], destinations = [], doc = {cookie: ""};
+  const win = {location: {assign: (url) => destinations.push(url)}, fetch: async (url, init) => {
+    calls.push([url, init]);
+    return new Response("{}", {status: 401, headers: {"x-civil-login": "/auth/login"}});
+  }};
+  const auth = createAuth({doc, win, prompt: () => { prompts += 1; return "must-not-use"; }});
+  auth.installFetchGuard();
+  assert.equal((await auth.metadataFetch("/api/agent/capabilities")).status, 401);
+  assert.equal(calls.length, 1); assert.equal(prompts, 0); assert.equal(doc.cookie, "");
+  assert.deepEqual(destinations, []);
+  assert.equal(calls[0][1].method, "GET");
+  assert.equal(calls[0][1].credentials, "same-origin");
+  assert.equal(calls[0][1].redirect, "error");
+  for (const [url, init] of [["https://other.invalid/api/health", {}], ["/api/sessions", {}],
+    ["/api/agent/capabilities", {method: "POST"}], ["/packing/api/health", {body: "payload"}]])
+    assert.throws(() => auth.metadataFetch(url, init), TypeError);
+  assert.equal(calls.length, 1);
+});
+
 test("auth: successful named health accepts the server-authenticated session without exposing its HttpOnly cookie", async () => {
   const doc={cookie:""}; const win={fetch:async()=>new Response("{}",{status:200,headers:{"x-civil-identity-mode":"named_single_user_instance"}})};
   const auth=createAuth({doc,win});assert.equal(auth.hasToken(),false);auth.installFetchGuard();

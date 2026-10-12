@@ -9,6 +9,15 @@ export function createAuth({ win, doc, prompt } = {}) {
   const ask = prompt || ((message) => (win && typeof win.prompt === "function" ? win.prompt(message) : null));
   let promptOpen = false;
   let namedSession = false;
+  const metadataPaths = new Set(["/api/agent/capabilities", "/packing/api/health", "/api/logistics/capabilities"]);
+  let metadataTransport = win && typeof win.fetch === "function" && !win.fetch.cbGuarded ? win.fetch.bind(win) : null;
+
+  function metadataFetch(url, init = {}) {
+    if (!metadataPaths.has(url) || (init.method || "GET").toUpperCase() !== "GET" || init.body != null)
+      throw new TypeError("Metadata probes only read fixed capability endpoints");
+    if (!metadataTransport) throw new TypeError("Passive metadata transport is unavailable");
+    return metadataTransport(url, { ...init, method: "GET", credentials: "same-origin", redirect: "error" });
+  }
 
   function hasToken() {
     return namedSession || String(doc.cookie || "").split(";").some((c) => c.trim().startsWith(`${TOKEN_COOKIE}=`));
@@ -36,6 +45,7 @@ export function createAuth({ win, doc, prompt } = {}) {
   function installFetchGuard() {
     if (!win || typeof win.fetch !== "function" || win.fetch.cbGuarded) return false;
     const rawFetch = win.fetch.bind(win);
+    metadataTransport = rawFetch;
     const guarded = async function cbFetch(input, init) {
       const res = await rawFetch(input, init);
       const url = typeof input === "string" ? input : (input && input.url) || "";
@@ -55,5 +65,5 @@ export function createAuth({ win, doc, prompt } = {}) {
     return true;
   }
 
-  return { hasToken, setToken, askToken, installFetchGuard };
+  return { hasToken, setToken, askToken, installFetchGuard, metadataFetch };
 }
