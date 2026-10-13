@@ -30,7 +30,8 @@ stay with people (`[TO FILL]`); nothing is booked or submitted.
 > This repository is the NUS-ISS "Show Me Your Agents" 2026 SME-track entry of Team Mintang
 > (PJ2U63AF). The pilot partner is not named here. **Every demo input is SYNTHETIC**
 > ([examples/facade-demo](examples/facade-demo/README.md)); no contractor's document or number is in
-> this repository.
+> this repository. The team placed 3rd in the SME Category of the NUS-ISS Show Me Your Agents
+> Hackathon 2026.
 
 **Submitted version.** The version submitted for NUS-ISS shortlisting is release
 [v0.7.0](https://github.com/LUOaini1213/civil-buddy-sme/tree/v0.7.0) (commit `0c0e803`); the figures and
@@ -151,9 +152,11 @@ Enforced in code, not in prompts; shipped as the security baseline (pull request
 ## Where it runs (AWS, stated honestly)
 
 - **Target:** one AWS Lightsail Linux instance per company, used by employees in a browser behind TLS.
-  **The Lightsail instance is not running yet** (we are waiting for the team's AWS account); no cloud host has
-  run the image. Meanwhile a temporary live instance of the same Docker image, behind its access token, runs on
-  our own machine behind a tunnel; its address is given to the organisers, not published here.
+- **What ran (checked 2026-09-28):** a team AWS Lightsail instance in Singapore, set up by hand, served the
+  workbench over HTTPS (Let's Encrypt certificate, Caddy as TLS reverse proxy, HSTS). Without the access token,
+  `/api/sessions` and `/api/tools` returned 401. It is not a per-company pilot server; its address was given to
+  the organisers, not published here. At that check the public health endpoint reported packing disabled on the
+  Lightsail workbench; the tender-packing link ran on a backup gateway on our own machine behind a temporary tunnel.
 - **Docker image:** CI's `docker-smoke` job (pull request #64, merge commit `16316df`) builds the
   gateway image on every push and checks that it refuses to start without `CIVIL_TOKEN` (exit 3),
   answers 401 without the token and 200 with it, parses the synthetic ITT through the API, and keeps a
