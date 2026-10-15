@@ -71,9 +71,13 @@
           <label>接口地址<input id="agentModelBase" type="url" required placeholder="兼容 OpenAI API 的 HTTPS 地址" spellcheck="false" /></label>
           <label>模型名称<input id="agentModelName" required placeholder="接口提供的模型名称" spellcheck="false" /></label>
           <label>API Key<input id="agentModelKey" type="password" autocomplete="new-password" placeholder="留空保留当前 Key" /></label>
-          <button id="agentModelSave" type="submit">保存并生效</button>
+          <div class="model-actions">
+            <button id="agentModelSave" type="submit">应用到本次运行</button>
+            <button id="agentModelReset" type="button">恢复启动配置</button>
+          </div>
         </form>
-        <p id="agentModelStatus" class="muted wrap" role="status">Key 不保存在浏览器存储中。</p>
+        <p class="muted small">模型设置在当前工作台进程内存中生效，同一进程的工程共用；重启后恢复启动配置。此处不保存密钥文件，也不将 Key 写入浏览器存储。</p>
+        <p id="agentModelStatus" data-i18n-skip class="muted wrap" role="status">正在读取模型配置…</p>
       </details>
       <form id="agentTaskForm" class="panel composer">
         <label for="agentMessage">要完成什么？</label>

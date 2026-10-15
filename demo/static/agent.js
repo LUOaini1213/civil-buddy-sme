@@ -97,7 +97,7 @@ export function createAgentWorkbench(deps) {
   const node = (tag, text, cls) => { const n = doc.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
   const state = { capabilities: null, workspace: null, session: "", files: [], selected: new Set(), selectedBindings: new Map(), turn: null,
     seq: 0, emptyEventPages: 0, nextTurnCursor: null, turnsLoading: false, sessionListEpoch: 0, sessionsLoading: false, nextSessionCursor: null, sessionHistoryMessage: null, artifacts: new Map(), artifactChecks: new Map(), engineeringResults: new Map(), epoch: 0, workspaceEpoch: 0, fileEpoch: 0, listEpoch: 0,
-    contextData: null, taskRows: [], eventRows: [], subtasks: new Map(), packingResults: new Map(), modelConfig: null, writeGateReason: null, sourceEvidence: null, modelInterpretationText: null,
+    contextData: null, taskRows: [], eventRows: [], subtasks: new Map(), packingResults: new Map(), modelConfig: null, modelNotice: null, writeGateReason: null, sourceEvidence: null, modelInterpretationText: null,
     engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, engineeringStatus: null, pendingPlanning: null, terminalNotice: false, experts: [],
     excelJobs: new Map(), excelActions: new Map(), excelLoading: false, excelError: "", excelTruncated: false, excelEpoch: 0,
     opening: false, submitting: false, cancelling: false, modelBusy: false, modelConfigured: false, disposed: false,
@@ -259,7 +259,11 @@ export function createAgentWorkbench(deps) {
     const response = await fetcher(url, init);
     let body;
     try { body = await response.json(); } catch (_) { throw new Error(t("服务返回了无法读取的数据（HTTP {status}）", { status: response.status })); }
-    if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : body.error || body.message || `HTTP ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(typeof body.detail === "string" ? body.detail : body.error || body.message || `HTTP ${response.status}`);
+      if (typeof body.code === "string") error.code = body.code;
+      throw error;
+    }
     return body;
   }
   const post = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -306,6 +310,7 @@ export function createAgentWorkbench(deps) {
     $("agentMoreTurns").hidden = !state.nextTurnCursor;
     $("agentMoreTurns").disabled = state.opening || state.turnsLoading;
     $("agentModelSave").disabled = state.modelBusy;
+    $("agentModelReset").disabled = state.modelBusy;
     $("agentRefreshEngineering").disabled = !state.workspace || state.opening || state.submitting || state.engineeringLoading;
     $("agentExpert").disabled = state.submitting;
     $("agentPackingControl").hidden = caps?.features?.packing_replan !== true;
@@ -1163,24 +1168,33 @@ export function createAgentWorkbench(deps) {
     if (!receipt) return;
     const valid = object(receipt) && receipt.schema_version === 1 && receipt.origin === "host"
       && receipt.scope === "this_turn_source_quotes" && receipt.model_claims_verified === false
+      && typeof receipt.attempted === "boolean" && typeof receipt.truncated === "boolean" && typeof receipt.collection_failed === "boolean"
       && receipt.engineering_truth === "not_verified" && Array.isArray(receipt.references) && receipt.references.length <= 12;
     if (!valid) { host.appendChild(node("p", t("来源回执格式无法核对，不能作为已验证证据。"), "notice warning")); return; }
-    if (!receipt.attempted && !receipt.references.length) { host.hidden = true; return; }
+    if (!receipt.attempted && !receipt.references.length && receipt.status === "no_quotes") { host.hidden = true; return; }
     host.appendChild(node("h3", t("本轮来源引文")));
     host.appendChild(node("p", t("仅核对引文、定位和当时文件哈希；不代表模型所有结论已验证，也不代表工程签认。"), "notice"));
+    const labels = { valid: "引文与核对时的文件一致", changed: "来源已变化，请按新版重新核对", invalid: "引文未通过核验", unavailable: "来源暂时无法核对", unverified: "引文尚未完成核验" };
+    const wellFormed = (reference) => object(reference) && typeof reference.source === "string" && reference.source.length <= 1024
+      && typeof reference.quote === "string" && [...reference.quote].length <= 1200 && object(reference.locator)
+      && JSON.stringify(reference.locator).length <= 2048 && /^[a-f0-9]{64}$/i.test(reference.source_sha256 || "") && Object.prototype.hasOwnProperty.call(labels, reference.status)
+      && (reference.status !== "valid" || reference.reason === "exact_quote_verified" && reference.current_source_sha256 === reference.source_sha256);
+    const statuses = { verified: "来源核验：本轮记录的引文均已核对", attention_required: "来源核验：需要人工检查", no_quotes: "来源核验：没有引文证明", unavailable: "来源核验：无法核验" };
+    let status = Object.prototype.hasOwnProperty.call(statuses, receipt.status) ? receipt.status : "unavailable";
+    if (status === "verified" && (!receipt.references.length || receipt.truncated || receipt.collection_failed
+      || receipt.references.some((reference) => !wellFormed(reference) || reference.status !== "valid"))) status = "attention_required";
+    const summary = node("p", t(statuses[status]), status === "verified" ? "notice" : "notice warning");
+    summary.dataset.sourceStatus = status; host.appendChild(summary);
+    host.appendChild(node("p", t("回执汇总本轮观察到的引用，包含失败尝试；超限时仅展示部分。后续成功不会自动消除先前失败，当前结果引用仍须逐条核对。"), "small"));
+    host.appendChild(node("p", t("文档副本保存与来源引文核验是两项独立结果；已保存不代表引文全部有效。"), "small"));
     if (receipt.checked_at) host.appendChild(node("p", t("核对时间：{time}", { time: receipt.checked_at }), "muted small"));
     if (receipt.truncated) host.appendChild(node("p", t("来源过多或内容超过回执限制；这里只列出部分引文，完整记录见执行过程。"), "notice warning"));
     if (receipt.collection_failed) host.appendChild(node("p", t("本轮部分检索或引用请求失败，请查看执行过程。"), "notice warning"));
     if (!receipt.references.length) host.appendChild(node("p", t("本轮没有可展示的来源引文，回答未获得引文一致性证明。"), "notice warning"));
-    const labels = { valid: "引文与核对时的文件一致", changed: "来源已变化，请按新版重新核对", invalid: "引文未通过核验", unavailable: "来源暂时无法核对", unverified: "引文尚未完成核验" };
     const reasons = { source_not_allowed: "该来源未被本轮选择", version_mismatch: "文件内容与检索时的哈希不同", source_changed_during_verification: "来源在核对过程中发生变化", quote_mismatch: "引文与原文不一致", locator_mismatch: "原文位置不一致", chunk_mismatch: "引文块标识不一致", invalid_reference: "引用格式无效", invalid_locator_or_quote: "引用位置或引文无效", invalid_verification_response: "校验服务未返回可核对的结果", verification_timeout: "来源核对超时，请重新检查", verification_unavailable: "来源或校验服务不可用", cancelled: "来源核对已取消" };
     for (const reference of receipt.references) {
       const card = node("article", undefined, "artifact");
-      const wellFormed = object(reference) && typeof reference.source === "string" && reference.source.length <= 1024
-        && typeof reference.quote === "string" && [...reference.quote].length <= 1200 && object(reference.locator)
-        && JSON.stringify(reference.locator).length <= 2048 && /^[a-f0-9]{64}$/i.test(reference.source_sha256 || "") && labels[reference.status]
-        && (reference.status !== "valid" || reference.reason === "exact_quote_verified");
-      if (!wellFormed) { card.appendChild(node("p", t("来源回执格式无法核对，不能作为已验证证据。"), "notice warning")); host.appendChild(card); continue; }
+      if (!wellFormed(reference)) { card.appendChild(node("p", t("来源回执格式无法核对，不能作为已验证证据。"), "notice warning")); host.appendChild(card); continue; }
       card.appendChild(node("strong", reference.source));
       card.appendChild(node("p", t(labels[reference.status]), reference.status === "valid" ? "muted" : "notice warning"));
       if (reasons[reference.reason]) card.appendChild(node("p", t(reasons[reference.reason]), "small"));
@@ -1370,22 +1384,51 @@ export function createAgentWorkbench(deps) {
     } catch (error) { if (current(epoch)) notice(t("停止请求失败，可重试：") + error.message, true); }
     finally { if (current(epoch)) { state.cancelling = false; controls(); } }
   }
-  async function loadModel() {
-    const cfg = await request("/api/llm-config"); state.modelConfig = cfg;
-    if (typeof cfg.configured !== "boolean") throw new Error(t("模型配置响应不完整"));
-    state.modelConfigured = cfg.configured; $("agentModelBase").value = cfg.base_url || ""; $("agentModelName").value = cfg.model || ""; $("agentModelKey").value = "";
-    $("agentModelLabel").textContent = cfg.configured ? cfg.model || t("已配置") : t("未配置，可先检查资料");
-    $("agentModelStatus").textContent = cfg.configured ? t("Key {key}；来源：{source}。", { key: cfg.key_masked || t("已设置"), source: cfg.source === "runtime" ? t("本次运行") : t("启动配置") }) : t("尚未配置模型；检查资料无需 Key。");
-    controls();
+  function modelError(error, key = "") {
+    const code = error.code || error.message;
+    if (code === "provider_key_required") return "切换接口来源需要重新填写该供应商的 Key；当前配置未修改。";
+    if (code === "invalid_provider_url") return "接口地址无效：请使用 HTTPS，或仅供本机测试的回环 HTTP 地址；不要包含账号、密码或查询参数。当前配置未修改。";
+    const message = String(error.message || error);
+    return (key ? message.split(key).join("[已隐藏]") : message).replace(/sk-[A-Za-z0-9_-]+/g, "[已隐藏]");
   }
-  async function saveModel() {
+  function paintModelStatus() {
+    const cfg = state.modelConfig, status = state.modelNotice;
+    $("agentModelLabel").textContent = cfg ? cfg.configured ? cfg.model || t("已配置") : t("未配置，可先检查资料") : t("暂不可用");
+    const parts = [];
+    if (status) parts.push(t(status.message) + (status.error ? t(status.error) : ""));
+    if (cfg) parts.push(cfg.configured
+      ? t("Key {key}；来源：{source}。", { key: cfg.key_masked || t("已设置"), source: cfg.source === "runtime" ? t("本次运行") : t("启动配置") })
+      : t("尚未配置模型；检查资料无需 Key。"));
+    parts.push(t("已配置仅表示已填写凭据，不代表鉴权通过或模型可用；应用设置不会调用模型。"));
+    $("agentModelStatus").textContent = parts.join(" ");
+  }
+  async function loadModel() {
+    const cfg = await request("/api/llm-config");
+    if (!object(cfg) || typeof cfg.configured !== "boolean") throw new Error("模型配置响应不完整");
+    let base = cfg.base_url || "";
+    if (base) {
+      try { const url = new URL(base); url.username = ""; url.password = ""; url.search = ""; url.hash = ""; base = url.toString().replace(/\/$/, ""); }
+      catch (_) { throw new Error("模型配置响应不完整"); }
+    }
+    // Retain only the public readback fields, never credentials from a malformed response.
+    state.modelConfig = { configured: cfg.configured, model: typeof cfg.model === "string" ? cfg.model : "", source: cfg.source,
+      key_masked: typeof cfg.key_masked === "string" && /^[^*\s]{0,4}\*+[^*\s]{0,4}$/.test(cfg.key_masked) ? cfg.key_masked : "" };
+    state.modelConfigured = cfg.configured; $("agentModelBase").value = base; $("agentModelName").value = state.modelConfig.model; $("agentModelKey").value = "";
+    paintModelStatus(); controls();
+  }
+  async function saveModel({ clear = false } = {}) {
     if (state.modelBusy) return;
     const key = $("agentModelKey").value.trim();
-    const payload = { base_url: $("agentModelBase").value.trim(), model: $("agentModelName").value.trim(), api_key: key };
-    state.modelBusy = true; $("agentModelKey").value = ""; controls(); let submitted = false;
-    try { await request("/api/llm-config", post(payload)); submitted = true; await loadCapabilities(); await loadModel(); $("agentModelStatus").textContent += t(" 已保存并核对。"); }
-    catch (error) { const message = key ? String(error.message).split(key).join(t("[已隐藏]")) : error.message; $("agentModelStatus").textContent = (submitted ? t("已提交，但当前配置未能核对：") : t("保存失败：")) + message; }
-    finally { state.modelBusy = false; controls(); }
+    const payload = clear ? { clear: true } : { base_url: $("agentModelBase").value.trim(), model: $("agentModelName").value.trim(), api_key: key };
+    state.modelNotice = { message: clear ? "正在恢复启动配置…" : "正在应用模型配置…" };
+    state.modelBusy = true; $("agentModelKey").value = ""; paintModelStatus(); controls();
+    try {
+      await request("/api/llm-config", post(payload)); await loadCapabilities(); await loadModel();
+      state.modelNotice = { message: clear ? "已恢复启动配置；本次覆盖已撤销，启动文件未修改。" : "已应用到本次运行并回读配置；重启后恢复启动配置。" };
+    } catch (error) {
+      const rejected = ["provider_key_required", "invalid_provider_url"].includes(error.code || error.message);
+      state.modelNotice = { message: rejected ? "应用失败：" : "未能确认设置是否生效，请刷新页面核对：", error: modelError(error, key) };
+    } finally { state.modelBusy = false; paintModelStatus(); controls(); }
   }
   function languageChanged() {
     if (state.disposed) return;
@@ -1414,11 +1457,7 @@ export function createAgentWorkbench(deps) {
     // latest server snapshot authoritative after repainting historical rows.
     if (displayedTurn) paintTurn(displayedTurn);
     paintTurns(); paintSessionHistory();
-    if (state.modelConfig) {
-      const cfg = state.modelConfig;
-      $("agentModelLabel").textContent = cfg.configured ? cfg.model || t("已配置") : t("未配置，可先检查资料");
-      $("agentModelStatus").textContent = cfg.configured ? t("Key {key}；来源：{source}。", { key: cfg.key_masked || t("已设置"), source: cfg.source === "runtime" ? t("本次运行") : t("启动配置") }) : t("尚未配置模型；检查资料无需 Key。");
-    }
+    if (state.modelConfig || state.modelNotice) paintModelStatus();
   }
   async function start() {
     if (started) return; started = true;
@@ -1428,6 +1467,7 @@ export function createAgentWorkbench(deps) {
     $("agentWorkspaceForm").addEventListener("submit", (event) => { event.preventDefault(); openWorkspace($("agentWorkspacePath").value, { manual: true }); });
     $("agentTaskForm").addEventListener("submit", (event) => { event.preventDefault(); send(); });
     $("agentModelForm").addEventListener("submit", (event) => { event.preventDefault(); saveModel(); });
+    $("agentModelReset").addEventListener("click", () => saveModel({ clear: true }));
     $("agentMode").addEventListener("change", controls); $("agentSandbox").addEventListener("change", () => {
       for (const action of state.excelActions.values()) action.confirmation = "";
       paintArtifacts(); controls();
@@ -1441,7 +1481,7 @@ export function createAgentWorkbench(deps) {
     $("agentRefreshSessions").addEventListener("click", () => loadSessions());
     $("agentMoreSessions").addEventListener("click", () => loadSessions({ more: true }));
     $("agentNewSession").addEventListener("click", () => changeSession("", true)); $("agentSession").addEventListener("change", () => changeSession($("agentSession").value));
-    await Promise.all([loadCapabilities(), loadExperts(), loadModel().catch((error) => { $("agentModelLabel").textContent = t("暂不可用"); $("agentModelStatus").textContent = t("模型设置暂不可用：") + error.message; })]);
+    await Promise.all([loadCapabilities(), loadExperts(), loadModel().catch((error) => { state.modelNotice = { message: "模型设置暂不可用：", error: modelError(error) }; paintModelStatus(); })]);
     if (state.disposed || state.workspaceEpoch !== startupWorkspaceEpoch) return;
     try { state.pendingPlanning = planningHandoff(win.location.search); }
     catch (error) { notice(t(error.message), true); return; }

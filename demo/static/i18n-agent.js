@@ -1,5 +1,11 @@
 /* Agent UI vocabulary. Source material and calculation values are never translated. */
 window.CBI18n?.add({
+  "来源核验：本轮记录的引文均已核对": "Source verification: recorded quotations for this turn checked",
+  "来源核验：需要人工检查": "Source verification: attention required",
+  "来源核验：没有引文证明": "Source verification: no quotation evidence",
+  "来源核验：无法核验": "Source verification: unavailable",
+  "回执汇总本轮观察到的引用，包含失败尝试；超限时仅展示部分。后续成功不会自动消除先前失败，当前结果引用仍须逐条核对。": "The receipt collects references observed in this turn, including failed attempts; limits may truncate the display. Later success does not clear earlier failures. Review each reference in the current result.",
+  "文档副本保存与来源引文核验是两项独立结果；已保存不代表引文全部有效。": "Saving a document copy and verifying source quotations are separate results. A saved copy does not mean every quotation is valid.",
   "检查资料模式：重新计算选定计划（默认只读取保存记录）": "Source-check mode: recompute selected plans (saved records are read by default)",
   "已保存施工计划": "Saved construction plan",
   "读取并核对新修订": "Read and review the new revision",

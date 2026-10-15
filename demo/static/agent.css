@@ -76,6 +76,8 @@ p { margin: 9px 0; }
 summary { cursor: pointer; min-height: 28px; }
 .model-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-top: 15px; }
 .model-grid button { align-self: end; }
+.model-actions { display: flex; flex-wrap: wrap; align-self: end; gap: 8px; }
+.model-actions button { flex: 1; }
 .model-settings summary { font-size: var(--cb-fs-sm); }
 .model-settings summary span { margin-left: 14px; font-size: var(--cb-fs-xs); }
 .composer > label { font-size: var(--cb-fs-md); font-weight: 600; margin-bottom: 10px; }

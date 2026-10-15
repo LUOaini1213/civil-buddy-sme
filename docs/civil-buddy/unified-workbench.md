@@ -103,6 +103,28 @@ Worker events retain the full original protocol and isolation diagnostics. For k
 
 ## Provider configuration details
 
+The page's **Apply for this run** action changes only the current workbench process.
+All projects opened in that process share the override. It is not written into a project,
+browser storage or a configuration file. Restarting restores the launch environment.
+**Restore startup configuration** removes the process override; it does not delete or edit
+the launch configuration file. Configuration read-back confirms the selected settings and
+whether a key is present, not successful provider authentication or model availability.
+
+For settings that survive a restart, keep a private environment file outside the release
+package and project materials, with consistent `CIVIL_API_KEY`, `CIVIL_API_BASE` and
+`CIVIL_MODEL` values. Supply its path through `--env-file` on every launch. Editing the file
+requires a restart to reload it. Do not include credentials in command arguments, a project
+handoff, a screenshot or a support log. Startup `--check` does not load or authenticate them.
+
+Leaving the key blank retains the current key only for the same provider origin (scheme,
+host and effective port). Changing the origin requires an explicitly entered new key before
+any configuration changes are applied. Provider URLs must use HTTPS, except for loopback
+HTTP on `localhost`, `127.0.0.1` or `[::1]`, and must not contain login credentials, a query
+or a fragment. Each newly admitted
+Agent turn holds one configuration snapshot for its main model loop and all children;
+changing settings affects subsequent turns. Repeating an idempotency key returns the
+existing task instead of running it again with the new configuration.
+
 ```dotenv
 DEEPSEEK_API_KEY=your-key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
@@ -121,6 +143,15 @@ DeepSeek Chat Completions requests explicitly disable thinking for the initial t
 Jev uses the [TypeSafe System One API](https://docs.typesafe.ai/introduction/quickstart). The host defines candidates/questions from selected evidence. Off makes no Jev calls; shadow records validated proposals. For document evidence, assist may schedule an additional read-only review when the fixed candidate and confidence gate pass. The initial 0.9 confidence threshold is an unevaluated product setting, not a claimed accuracy guarantee. Jev cannot permit a write, change solver numbers or approve an engineering conclusion. The packing replan adapter below records engineering proposals in shadow mode even when assist is configured; changing a packing strategy based on Jev remains disabled pending calibration.
 
 ## Execution guarantees and limits
+
+Source-quote receipts cover all references observed during the current turn, including
+failed verification attempts and references found by child agents. The host independently
+checks that union against the selected source bytes. A later valid reference does not erase
+an earlier invalid reference. `attention_required` therefore remains visible when any of
+those checks fails; a new turn starts a new collection. `unavailable`, truncated or failed
+collection is not a verified result. This receipt checks quotes and locations, not whether
+every business claim in the reply is correct or complete. Successfully saving a document
+copy and verifying all observed quotes are separate outcomes.
 
 Document publication summaries come from this turn's registered copies and source/output hashes.
 An explicit write request with no artifact, a failed tool, or an unapplied preview is reported as incomplete;

@@ -578,6 +578,7 @@ test("Agent sources: host receipts preserve literal source identity across langu
   await showDelivery(h);
   const host = h.$("agentSourceEvidence");
   assert.equal(host.hidden, false);
+  assert.equal(host.querySelector('[data-source-status="verified"]').classList.contains("warning"), false);
   assert.match(host.textContent, /引文与核对时的文件一致/);
   assert.match(host.textContent, /不代表模型所有结论已验证/);
   assert.equal(host.querySelector("blockquote").textContent, reference.quote);
@@ -615,6 +616,59 @@ test("Agent sources: model prose cannot manufacture a receipt and malformed host
     assert.equal(host.querySelectorAll("blockquote").length, 0);
     if (receipt === undefined) assert.equal(host.hidden, true);
     else assert.match(host.textContent, /不能作为已验证证据/);
+  }
+});
+
+test("Agent sources: saved copies never clear invalid B2 references or this-turn failed attempts", async (t) => {
+  const bad = sourceReference({ source: "current.xlsx", locator: { sheet: "Sheet1", cell: "B2" }, quote: "6", status: "invalid", reason: "locator_mismatch" });
+  const good = sourceReference({ source: "requirements.pdf", quote: "允许数值为 6", locator: { page: 1 } });
+  const artifact = deliveryArtifact(), receipt = { ...sourceReceipt([bad, good]), status: "attention_required" };
+  const h = harness((url, init) => {
+    if (url === "/api/agent/turns" && init) return response({ turn_id: "mixed-source", session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/mixed-source/events?")) return response({ events: [], turn: { status: "completed", result: { reply: "新副本已保存。", artifacts: [artifact], source_evidence: receipt } } });
+  }); t.after(h.close); installLanguage(h); await showDelivery(h);
+  const host = h.$("agentSourceEvidence");
+  assert.ok(host.querySelector('[data-source-status="attention_required"].warning'));
+  assert.equal(host.querySelectorAll("blockquote").length, 2); assert.match(host.textContent, /B2.*待核对引文/);
+  assert.match(host.textContent, /包含失败尝试.*后续成功不会自动消除先前失败/);
+  assert.match(host.textContent, /已保存不代表引文全部有效/); assert.ok(h.$("agentArtifacts").querySelector("a"));
+  h.win.CBI18n.setLocale("en");
+  assert.ok(host.querySelector('[data-source-status="attention_required"].warning'));
+  assert.match(host.textContent, /including failed attempts.*Later success does not clear earlier failures/);
+  assert.match(host.textContent, /saved copy does not mean every quotation is valid/);
+  assert.equal(host.querySelector("blockquote").textContent, "6");
+  assert.doesNotMatch(host.textContent, /resolved|not used|已解决|未采用/i);
+});
+
+test("Agent sources: unknown and contradictory overall statuses cannot claim every quotation passed", async (t) => {
+  for (const status of ["unavailable", "future_status", "verified"]) {
+    const references = [sourceReference({ status: "invalid", reason: "quote_mismatch" })];
+    const h = harness(receiptRoute({ ...sourceReceipt(references), status })); t.after(h.close); await showDelivery(h);
+    const host = h.$("agentSourceEvidence");
+    assert.ok(host.querySelector(`[data-source-status="${status === "verified" ? "attention_required" : "unavailable"}"].warning`));
+    assert.equal(host.querySelectorAll("blockquote").length, 1);
+    assert.equal(host.querySelector('[data-source-status="verified"]'), null);
+  }
+  const h = harness(receiptRoute({ ...sourceReceipt([]), attempted: false, status: "unavailable" })); t.after(h.close); await showDelivery(h);
+  assert.equal(h.$("agentSourceEvidence").hidden, false);
+  assert.ok(h.$("agentSourceEvidence").querySelector('[data-source-status="unavailable"].warning'));
+});
+
+test("Agent sources: malformed receipt flags and missing or contradictory current hashes fail closed", async (t) => {
+  for (const field of ["attempted", "truncated", "collection_failed"]) for (const value of [undefined, "false", 0]) {
+    const receipt = { ...sourceReceipt([sourceReference()]), [field]: value };
+    const h = harness(receiptRoute(receipt)); t.after(h.close); await showDelivery(h);
+    const host = h.$("agentSourceEvidence");
+    assert.match(host.textContent, /回执格式无法核对/);
+    assert.equal(host.querySelector('[data-source-status="verified"]'), null, `${field}=${value} cannot establish verification`);
+    assert.equal(host.querySelectorAll("blockquote").length, 0);
+  }
+  for (const hash of [undefined, "b".repeat(64), "invalid-hash"]) {
+    const h = harness(receiptRoute(sourceReceipt([sourceReference({ current_source_sha256: hash })]))); t.after(h.close); await showDelivery(h);
+    const host = h.$("agentSourceEvidence");
+    assert.ok(host.querySelector('[data-source-status="attention_required"].warning'));
+    assert.match(host.textContent, /回执格式无法核对/);
+    assert.doesNotMatch(host.textContent, /本轮记录的引文均已核对|引文与核对时的文件一致/);
   }
 });
 
@@ -964,6 +1018,91 @@ test("Agent UI: model mode needs a configured model; saving does not retain or e
   h.$("agentModelName").value = "configured-flash"; h.$("agentModelKey").value = "private-fixture-key"; await h.app.saveModel();
   assert.equal(posted.api_key, "private-fixture-key"); assert.equal(h.$("agentModelKey").value, ""); assert.equal(h.$("agentSend").disabled, false);
   assert.doesNotMatch([...h.saved.values.values()].join(""), /private-fixture-key/); assert.doesNotMatch(h.doc.body.textContent, /private-fixture-key/);
+  assert.match(h.$("agentModelStatus").textContent, /不代表鉴权通过或模型可用/);
+  assert.equal(h.calls.filter(call => call.init?.method === "POST").length, 2, "only workspace open and configuration apply; no automatic model task");
+});
+
+test("Agent settings: real form apply and restore are temporary, bilingual and never replay a task", async (t) => {
+  let cfg = { configured: false, source: "env", model: "startup-model", base_url: "https://startup.invalid/v1" };
+  const h = harness((url, init) => {
+    if (url === "/api/agent/capabilities") return response({ ...caps, models: { configured: cfg.configured } });
+    if (url !== "/api/llm-config") return;
+    if (init) cfg = JSON.parse(init.body).clear
+      ? { configured: false, source: "env", model: "startup-model", base_url: "https://startup.invalid/v1" }
+      : { configured: true, source: "runtime", model: "temporary-model", base_url: "https://temporary.invalid/v1", key_masked: "****" };
+    return response(cfg);
+  }); t.after(h.close); installLanguage(h); await h.ready();
+  assert.equal(h.$("agentModelSave").textContent, "应用到本次运行");
+  h.$("agentModelBase").value = "https://temporary.invalid/v1"; h.$("agentModelName").value = "temporary-model";
+  h.$("agentModelKey").value = "synthetic-private-credential";
+  h.$("agentModelForm").dispatchEvent(new h.win.Event("submit", { bubbles: true, cancelable: true }));
+  await waitFor(() => !h.app.state.modelBusy && h.app.state.modelConfigured);
+  assert.match(h.$("agentModelStatus").textContent, /已应用到本次运行并回读配置/);
+  h.win.CBI18n.setLocale("en");
+  assert.match(h.$("agentModelStatus").textContent, /Applied for this run.*Restarting restores startup settings/);
+  assert.match(h.$("agentModelStatus").textContent, /not that authentication or model availability has been verified/);
+  h.$("agentModelReset").click(); await waitFor(() => !h.app.state.modelBusy && !h.app.state.modelConfigured);
+  assert.match(h.$("agentModelStatus").textContent, /Startup settings restored.*startup file is unchanged/);
+  assert.equal(h.$("agentModelName").value, "startup-model"); assert.equal(h.$("agentModelKey").value, "");
+  h.win.CBI18n.setLocale("zh-CN"); assert.match(h.$("agentModelStatus").textContent, /本次覆盖已撤销，启动文件未修改/);
+  const posts = h.calls.filter(call => call.url === "/api/llm-config" && call.init);
+  assert.equal(posts.length, 2); assert.deepEqual(posts[1].body, { clear: true });
+  assert.equal(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+  assert.doesNotMatch(JSON.stringify(h.app.state.modelNotice) + h.doc.body.textContent + [...h.saved.values.values()].join(""), /synthetic-private-credential/);
+});
+
+test("Agent settings: new-provider key rejection and redacted errors survive language changes", async (t) => {
+  for (const code of ["provider_key_required", "invalid_provider_url", null]) {
+    const h = harness((url, init) => {
+      if (url === "/api/llm-config" && init) return response(code
+        ? { ok: false, code, error: code }
+        : { detail: "cannot use synthetic-private-credential sk-example-hidden" }, 400);
+    }); t.after(h.close); installLanguage(h); await h.ready();
+    h.$("agentModelBase").value = "https://different.invalid/v1"; h.$("agentModelKey").value = code ? "" : "synthetic-private-credential";
+    await h.app.saveModel();
+    assert.match(h.$("agentModelStatus").textContent, code ? /应用失败/ : /未能确认设置是否生效.*刷新页面核对/);
+    if (code === "provider_key_required") assert.match(h.$("agentModelStatus").textContent, /重新填写该供应商的 Key；当前配置未修改/);
+    if (code === "invalid_provider_url") assert.match(h.$("agentModelStatus").textContent, /HTTPS.*仅供本机测试的回环 HTTP/);
+    h.win.CBI18n.setLocale("en"); assert.match(h.$("agentModelStatus").textContent, code ? /Could not apply settings/ : /Could not confirm whether settings took effect.*Refresh the page/);
+    if (code === "provider_key_required") assert.match(h.$("agentModelStatus").textContent, /requires a key for that provider.*configuration is unchanged/);
+    if (code === "invalid_provider_url") assert.match(h.$("agentModelStatus").textContent, /Use HTTPS, or loopback HTTP for local testing only/);
+    assert.doesNotMatch(h.doc.body.textContent + JSON.stringify(h.app.state.modelNotice), /synthetic-private-credential|sk-example-hidden/);
+    h.win.CBI18n.setLocale("zh-CN"); assert.match(h.$("agentModelStatus").textContent, code ? /应用失败/ : /未能确认设置是否生效/);
+    assert.equal(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+  }
+});
+
+test("Agent settings: public readback never retains unexpected credentials or URL secrets", async (t) => {
+  const h = harness((url) => url === "/api/llm-config" ? response({ configured: true, source: "env", model: "public-model",
+    base_url: "https://secret-user:secret-password@provider.invalid/v1?api_key=secret-query#secret-fragment",
+    api_key: "unexpected-plaintext-credential", key_masked: "unexpected-plaintext-credential" }) : undefined);
+  t.after(h.close); await h.app.start();
+  assert.equal(h.$("agentModelBase").value, "https://provider.invalid/v1");
+  assert.equal(h.$("agentModelKey").value, "");
+  assert.doesNotMatch(JSON.stringify(h.app.state.modelConfig) + h.doc.body.textContent + h.$("agentModelBase").value, /secret-user|secret-password|secret-query|secret-fragment|unexpected-plaintext-credential/);
+  assert.equal(h.calls.filter(call => call.init?.method === "POST").length, 0);
+});
+
+test("Agent settings: an ambiguous POST never claims rejection or retries and fresh startup only reads back", async (t) => {
+  for (const failure of ["transport", "parse"]) {
+    let cfg = { configured: true, model: "before", base_url: "https://provider.invalid/v1", source: "runtime", key_masked: "****" };
+    const route = (url, init) => {
+      if (url !== "/api/llm-config") return;
+      if (init) {
+        cfg = { ...cfg, model: "applied-but-unconfirmed" };
+        if (failure === "transport") throw new Error("synthetic connection lost after apply");
+        return new Response("unreadable JSON", { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return response(cfg);
+    };
+    const h = harness(route); t.after(h.close); installLanguage(h); await h.app.start(); await h.app.saveModel();
+    assert.match(h.$("agentModelStatus").textContent, /未能确认设置是否生效.*刷新页面核对/);
+    h.win.CBI18n.setLocale("en"); assert.match(h.$("agentModelStatus").textContent, /Could not confirm whether settings took effect.*Refresh the page/);
+    assert.equal(h.calls.filter(call => call.init?.method === "POST").length, 1);
+    const reload = harness(route); t.after(reload.close); await reload.app.start();
+    assert.equal(reload.$("agentModelName").value, "applied-but-unconfirmed");
+    assert.equal(reload.calls.filter(call => call.init?.method === "POST").length, 0);
+  }
 });
 
 test("Agent UI: artifact downloads must stay on this host and in this workspace", () => {

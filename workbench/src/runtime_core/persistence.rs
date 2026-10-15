@@ -175,10 +175,23 @@ impl RuntimeCore {
         key: &str,
         request_sha256: &str,
     ) -> Result<TurnStart> {
-        if key.is_empty() || key.len() > 128 || !key.bytes().all(|b| b.is_ascii_graphic()) {
-            return Err(RuntimeError::InvalidId(key.chars().take(128).collect()));
-        }
+        validate_turn_key(key)?;
         self.start_turn(workspace, session, request, Some((key, request_sha256)))
+    }
+
+    /// Recover an already accepted delivery when no current model key is set.
+    /// This never creates a turn, lease, cancellation token or event. Admission
+    /// authorization and current source checks remain the caller's obligation.
+    pub fn existing_turn_keyed(
+        &self,
+        workspace: &WorkspaceContext,
+        session: &SessionId,
+        key: &str,
+        request_sha256: &str,
+    ) -> Result<Option<TurnRecord>> {
+        validate_turn_key(key)?;
+        let db = self.0.db.lock().map_err(|_| RuntimeError::Poisoned)?;
+        read_keyed_turn(&db, workspace.id(), session, key, request_sha256)
     }
 
     fn start_turn(
@@ -193,13 +206,7 @@ impl RuntimeCore {
         if let Some((key, fingerprint)) = key {
             // Checked before the busy rule: a retry of a still-running turn
             // must get that turn back, not 409.
-            let found: Option<(String, String, String)> = tx.query_row("SELECT session_id,request_sha256,turn_id FROM runtime_turn_keys WHERE workspace_id=?1 AND idempotency_key=?2",
-                params![workspace.id(), key], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
-            if let Some((stored_session, stored_fingerprint, turn)) = found {
-                if stored_session != session.as_str() || stored_fingerprint != fingerprint {
-                    return Err(RuntimeError::IdempotencyConflict);
-                }
-                let record = read_turn(&tx, workspace.id(), session, &TurnId::parse(turn)?)?;
+            if let Some(record) = read_keyed_turn(&tx, workspace.id(), session, key, fingerprint)? {
                 return Ok(TurnStart::Existing(record));
             }
         }
@@ -658,6 +665,31 @@ impl Drop for TurnLease {
 
 fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+fn validate_turn_key(key: &str) -> Result<()> {
+    if key.is_empty() || key.len() > 128 || !key.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(RuntimeError::InvalidId(key.chars().take(128).collect()));
+    }
+    Ok(())
+}
+
+fn read_keyed_turn(
+    db: &Connection,
+    workspace: &str,
+    session: &SessionId,
+    key: &str,
+    fingerprint: &str,
+) -> Result<Option<TurnRecord>> {
+    let found: Option<(String, String, String)> = db.query_row(
+        "SELECT session_id,request_sha256,turn_id FROM runtime_turn_keys WHERE workspace_id=?1 AND idempotency_key=?2",
+        params![workspace, key], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    ).optional()?;
+    let Some((stored_session, stored_fingerprint, turn)) = found else { return Ok(None); };
+    if stored_session != session.as_str() || stored_fingerprint != fingerprint {
+        return Err(RuntimeError::IdempotencyConflict);
+    }
+    read_turn(db, workspace, session, &TurnId::parse(turn)?).map(Some)
 }
 
 fn read_turn(

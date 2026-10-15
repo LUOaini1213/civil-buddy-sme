@@ -182,33 +182,15 @@ struct LlmConfigIn {
     clear: bool,
 }
 
-async fn llm_config_set(Json(req): Json<LlmConfigIn>) -> Json<Value> {
+async fn llm_config_set(Json(req): Json<LlmConfigIn>) -> Result<Json<Value>, ApiError> {
     if req.clear {
         crate::config::set_runtime_llm(None);
-        return llm_config_get().await;
+        return Ok(llm_config_get().await);
     }
-    let cur = crate::config::llm_config();
-    let api_key = if req.api_key.trim().is_empty() {
-        cur.api_key
-    } else {
-        req.api_key.trim().to_string()
-    };
-    let base_url = if req.base_url.trim().is_empty() {
-        cur.base_url
-    } else {
-        req.base_url.trim().trim_end_matches('/').to_string()
-    };
-    let model = if req.model.trim().is_empty() {
-        cur.model
-    } else {
-        req.model.trim().to_string()
-    };
-    crate::config::set_runtime_llm(Some(crate::config::LlmConfig {
-        api_key,
-        base_url,
-        model,
-    }));
-    llm_config_get().await
+    crate::config::update_runtime_llm(&req.api_key, &req.base_url, &req.model).map_err(|code| {
+        (StatusCode::BAD_REQUEST, Json(json!({"ok":false,"code":code,"error":code})))
+    })?;
+    Ok(llm_config_get().await)
 }
 
 /* ===== ux(round19) 项目 / 会话索引 handlers =====

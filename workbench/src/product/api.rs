@@ -605,10 +605,24 @@ async fn start(
     super::controlled_sources::validate_selection(&st, &ws, &req.files, &req.file_bindings)
         .map_err(bad)?;
     packing::bind_selections(&ws, &req.files, &mut req.packing_sources).map_err(bad)?;
-    if req.mode == "model" && crate::config::llm_config().api_key.is_empty() {
+    // Secret-bearing configuration is owned only by this accepted task. Never
+    // put it in the request, fingerprint, history, events or an API response.
+    let model_config = (req.mode == "model").then(crate::config::llm_config);
+    let fingerprint = super::tools::sha256(&serde_json::to_vec(&req).map_err(bad)?);
+    if model_config.as_ref().is_some_and(|config| config.api_key.is_empty()) {
+        if let Some(key) = &key {
+            let existing = st.runtime.existing_turn_keyed(&ws, &session, key, &fingerprint)
+                .map_err(|e| match e {
+                    crate::runtime_core::RuntimeError::IdempotencyConflict => error(StatusCode::UNPROCESSABLE_ENTITY, e),
+                    _ => bad(e),
+                })?;
+            if let Some(record) = existing {
+                return Ok((StatusCode::OK, Json(json!({"turn_id":record.turn_id,"session_id":session,"replayed":true,
+                    "status":record.status,"result":record.result}))));
+            }
+        }
         return Err(bad("请先配置模型 API Key，或使用资料检查模式"));
     }
-    let fingerprint = super::tools::sha256(&serde_json::to_vec(&req).map_err(bad)?);
     let mut stored_request = serde_json::to_value(&req).map_err(bad)?;
     stored_request["actor_id"] = json!(st.auth.owner());
     stored_request["identity_mode"] = st.auth.capabilities()["mode"].clone();
@@ -648,7 +662,7 @@ async fn start(
         "unclassified_document_writes":"blocked","model_risk_clearance":false,
         "professional_signoff":false})).map_err(bad)?;
     let response = json!({"turn_id":lease.turn_id(),"session_id":session});
-    tokio::spawn(agent::run(st, ws, req, lease));
+    tokio::spawn(agent::run(st, ws, req, lease, model_config));
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
 async fn turns(
