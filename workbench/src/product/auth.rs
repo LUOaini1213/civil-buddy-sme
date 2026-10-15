@@ -11,7 +11,7 @@ use axum::{
     routing::{get, post},
     Form, Json, Router,
 };
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, OptionalExtension};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -158,6 +158,9 @@ impl InstanceAuth {
     pub fn requires_token(&self) -> bool {
         self.digest.is_some()
     }
+    pub fn public_origin_configured(&self) -> bool {
+        self.public_origin.is_some()
+    }
     pub fn capabilities(&self) -> Value {
         json!({"user_id":self.owner,"mode":if self.requires_token(){"named_single_user_instance"}else{"local_single_user"},
             "authentication_required":self.requires_token(),"multi_tenant":false,"workspace_allowlist_enforced":self.requires_token(),
@@ -175,7 +178,7 @@ impl InstanceAuth {
             reject_owned_overlap(&state, true)?;
             reject_owned_overlap(root, false)?;
         }
-        let mut db = Connection::open(folder.join("identity.sqlite")).map_err(|e| e.to_string())?;
+        let mut db = crate::sqlite::open(folder.join("identity.sqlite")).map_err(|e| e.to_string())?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS instance_owner(id INTEGER PRIMARY KEY CHECK(id=1),user_id TEXT NOT NULL,workspace_root TEXT NOT NULL)").map_err(|e| e.to_string())?;
         let tx = db.transaction().map_err(|e| e.to_string())?;
         let root = self
@@ -210,7 +213,7 @@ impl InstanceAuth {
             if std::fs::symlink_metadata(&binding).is_ok() {
                 reject_links(&binding)?;
             }
-            let mut db = Connection::open(binding).map_err(|e| e.to_string())?;
+            let mut db = crate::sqlite::open(binding).map_err(|e| e.to_string())?;
             db.busy_timeout(Duration::from_secs(5))
                 .map_err(|e| e.to_string())?;
             db.execute_batch("CREATE TABLE IF NOT EXISTS workspace_owner(id INTEGER PRIMARY KEY CHECK(id=1),user_id TEXT NOT NULL,state_root TEXT NOT NULL)").map_err(|e| e.to_string())?;

@@ -21,6 +21,7 @@
     <nav class="cb-app-nav" aria-label="工作台导航">
       <a href="/static/index.html">工作台</a>
       <a href="/static/agent.html" aria-current="page">Agent</a>
+      <a href="/static/project-control.html">项目资料与问题</a>
       <a href="/packing">装箱拼柜</a>
       <a href="/cad">CAD</a>
       <a href="/engineering">工程计算</a>
@@ -42,16 +43,24 @@
       <p id="agentWorkspaceStatus" class="muted wrap" role="status">尚未选择文件夹</p>
       <div class="section-title"><h2>本次资料</h2><button id="agentRefreshFiles" type="button" class="quiet" disabled>刷新</button></div>
       <p class="muted small">勾选的文件随下一条任务提交；切换文件夹会分别保留选择。</p>
+      <p id="agentFilesStatus" data-i18n-skip class="notice warning small" role="status" aria-live="polite" hidden></p>
       <div id="agentFiles" data-i18n-skip class="file-list"><p class="muted">打开文件夹后显示可读资料。</p></div>
       <div class="section-title"><h2>工程计算来源</h2><button id="agentRefreshEngineering" type="button" class="quiet" disabled>刷新</button></div>
       <p class="muted small">最多选 4 个已保存项目。读取当前快照后加入；模型不能修改几何或原始参数。</p>
       <p id="agentEngineeringStatus" class="muted small" role="status">打开工程文件夹后可选择。</p>
       <div id="agentEngineering" data-i18n-skip class="engineering-list"></div>
+      <label id="agentPlanningActionLabel" class="engineering-check" hidden><input id="agentPlanningRecalculate" type="checkbox">检查资料模式：重新计算选定计划（默认只读取保存记录）</label>
       <div class="section-title"><h2>会话</h2><button id="agentNewSession" type="button" class="quiet" disabled>新会话</button></div>
       <label class="sr-only" for="agentSession">当前会话</label>
       <select id="agentSession" data-i18n-skip disabled></select>
+      <div id="agentSessionHistory" hidden>
+        <button id="agentRefreshSessions" type="button" class="quiet" disabled>刷新会话</button>
+        <button id="agentMoreSessions" type="button" class="quiet" hidden>加载更早会话</button>
+        <p id="agentSessionHistoryStatus" class="muted small" role="status" data-i18n-skip></p>
+      </div>
       <div class="section-title"><h2>执行记录</h2><button id="agentRefreshTurns" type="button" class="quiet" disabled>刷新</button></div>
       <div id="agentTurns" data-i18n-skip class="turn-list"><p class="muted">本会话暂无执行记录。</p></div>
+      <button id="agentMoreTurns" type="button" class="quiet" hidden>加载更早任务</button>
     </aside>
     <section class="main-panel" aria-label="任务执行">
       <div id="agentCapability" class="notice" role="status">正在检测 Agent 能力…</div>
@@ -62,9 +71,13 @@
           <label>接口地址<input id="agentModelBase" type="url" required placeholder="兼容 OpenAI API 的 HTTPS 地址" spellcheck="false" /></label>
           <label>模型名称<input id="agentModelName" required placeholder="接口提供的模型名称" spellcheck="false" /></label>
           <label>API Key<input id="agentModelKey" type="password" autocomplete="new-password" placeholder="留空保留当前 Key" /></label>
-          <button id="agentModelSave" type="submit">保存并生效</button>
+          <div class="model-actions">
+            <button id="agentModelSave" type="submit">应用到本次运行</button>
+            <button id="agentModelReset" type="button">恢复启动配置</button>
+          </div>
         </form>
-        <p id="agentModelStatus" class="muted wrap" role="status">Key 不保存在浏览器存储中。</p>
+        <p class="muted small">模型设置在当前工作台进程内存中生效，同一进程的工程共用；重启后恢复启动配置。此处不保存密钥文件，也不将 Key 写入浏览器存储。</p>
+        <p id="agentModelStatus" data-i18n-skip class="muted wrap" role="status">正在读取模型配置…</p>
       </details>
       <form id="agentTaskForm" class="panel composer">
         <label for="agentMessage">要完成什么？</label>
@@ -80,6 +93,12 @@
           <button id="agentCancel" type="button" class="danger" hidden>停止当前任务</button>
         </div>
         <p id="agentExpertNote" class="muted small">正在读取可用岗位。</p>
+        <div id="agentPackingControl" hidden>
+          <label for="agentPackingSource">箱单重排核对（可选）</label>
+          <select id="agentPackingSource" data-i18n-skip aria-describedby="agentPackingHelp"><option value="">本轮不重排</option></select>
+          <p id="agentPackingHelp" class="muted small">先勾选含柜型、柜数上限和运输要求的结构化箱单 JSON 文件，再在此选择。最多两轮复算，保留原件；结果供核对，不作装运放行。检查资料模式无需模型。</p>
+        </div>
+        <p id="agentWriteGateNote" data-i18n-skip class="notice warning small" role="status" hidden></p>
         <label id="agentRiskWrap" class="risk-confirmation" hidden>高风险岗位写入前，请完整输入：我明白，将由持证人员签认
           <input id="agentRiskConfirmation" data-i18n-skip autocomplete="off" placeholder="我明白，将由持证人员签认" />
         </label>
@@ -94,10 +113,22 @@
       <section class="panel" aria-labelledby="agentResultTitle">
         <div class="section-title"><h2 id="agentResultTitle">任务结果</h2><span id="agentTurnStatus" class="status-tag">尚未开始</span></div>
         <p id="agentTurnActor" class="muted small">尚无任务发起者记录。</p>
-        <p id="agentPartial" class="notice warning" hidden>本轮只完成了部分工作，已保存的产物仍可下载。</p>
+        <p id="agentPartial" class="notice warning" hidden>本轮只完成了部分工作，请查看结果和执行记录中的未完成项。</p>
+        <p id="agentReplyProvenance" class="muted small" data-i18n-skip hidden></p>
         <div id="agentReply" data-i18n-skip class="reply">结果将显示在这里。</div>
+        <details id="agentModelInterpretation" data-i18n-skip hidden>
+          <summary id="agentModelInterpretationTitle"></summary>
+          <div id="agentModelInterpretationText" class="reply"></div>
+        </details>
+        <section id="agentSourceEvidence" data-i18n-skip aria-live="polite" hidden></section>
         <div id="agentArtifacts" data-i18n-skip class="artifact-list"></div>
         <details id="agentUsage" hidden><summary>实际调用用量</summary><pre id="agentUsageText"></pre></details>
+      </section>
+      <section id="agentExcelSection" class="panel" aria-labelledby="agentExcelTitle" hidden>
+        <div class="section-title"><h2 id="agentExcelTitle">Excel 公式重算</h2><button id="agentExcelRefresh" type="button">刷新重算记录</button></div>
+        <p id="agentExcelEngineStatus" data-i18n-skip class="muted small"></p>
+        <p id="agentExcelJobsStatus" data-i18n-skip class="small" role="status" aria-live="polite"></p>
+        <div id="agentExcelJobs" data-i18n-skip class="excel-jobs"></div>
       </section>
       <section class="panel" aria-labelledby="agentEventsTitle">
         <div class="section-title"><h2 id="agentEventsTitle">执行过程</h2><span class="muted small">按后端事件恢复</span></div>
@@ -106,6 +137,7 @@
       <p class="muted small footer-note">文档产物为内部草稿。工程数字依据原始资料和计算工具，签认由相应专业人员完成。</p>
     </section>
   </main>
+  <script src="/static/vendor/marked.min.js"></script>
   <script type="module" src="/static/agent.js"></script>
   <script src="/static/voice.js?v=unified1"></script>
 </body>

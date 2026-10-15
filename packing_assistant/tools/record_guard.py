@@ -93,11 +93,34 @@ def sentences(text: str) -> List[Dict[str, Any]]:
 def facts_from(name: str, result: Dict[str, Any], facts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fold one tool result into the turn's facts. Only results that carry record or plan figures add anything."""
     facts = facts if facts is not None else {}
-    if not isinstance(result, dict) or result.get("ok") is False:
+    if not isinstance(result, dict):
+        return facts
+    if name == "pack_plan":
+        # A refused calculation is evidence too. Previously it contributed no
+        # facts, so an invented loaded-container mass survived as a warning-only
+        # untraced number. Only a subsequent successful fit clears this state.
+        if result.get("ok") is not True or result.get("can_fit") is not True:
+            facts["packing_refusal"] = {"error": str(result.get("error") or result.get("error_code") or "no_usable_plan"), "origin": "pack_plan"}
+            for key in ("max_gross_kg", "max_cargo_kg", "container_tare_kg", "container_type"):
+                facts.pop(key, None)
+            return facts
+        facts.pop("packing_refusal", None)
+    if result.get("ok") is False:
         return facts
     if name == "read_link_record" or result.get("schema") == "tender.link_record.view.v1":
         facts["statuses"] = {str(s.get("id")): str(s.get("status")) for s in result.get("statements") or [] if s.get("id")}
         facts["clauses"] = {str(c.get("clause")): str(c.get("text") or "") for c in result.get("clauses") or [] if c.get("clause")}
+        if result.get("plan_available") is False or result.get("plan_refusal"):
+            refusal = result.get("plan_refusal") or {}
+            if (facts.get("packing_refusal") or {}).get("origin") != "pack_plan":
+                facts["packing_refusal"] = {"error": str(refusal.get("error") or refusal.get("source") or "no_usable_plan"), "origin": "read_link_record"}
+            for key in ("max_gross_kg", "max_cargo_kg", "container_tare_kg", "container_type"):
+                facts.pop(key, None)
+            return facts
+        if (facts.get("packing_refusal") or {}).get("origin") == "pack_plan":
+            return facts  # A historical read cannot undo this turn's failed calculation.
+        if result.get("plan_available") is True:
+            facts.pop("packing_refusal", None)
         if result.get("container_type"):
             facts["container_type"] = str(result["container_type"]).upper()
         _masses(facts, result.get("heaviest_container") or {})

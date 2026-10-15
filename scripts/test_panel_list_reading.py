@@ -15,9 +15,11 @@ headers gave the demo's 6 x 40HQ). What is read now, and how:
   asks       in English (lang="en", the tender <-> packing link) a needs-human question names the sheet row and
              the mark; the link reply names the columns it did not read; the Chinese questions are unchanged
   unchanged  the 33 table fixtures and the three demo lists parse byte-identically (sha256 of the canonical parse,
-             taken at cab9249 before the change); the demo stays 6 x 40HQ and rev B 8 x 40HQ
+             taken at cab9249 before the change)
   mixed      examples/facade-demo/facade_panels_mixed.xlsx (SYNTHETIC: title block, typical / corner / spandrel
-             panels, a bracket crate, a TOTAL row) plans 9 x 40HQ with every piece and kilogram conserved
+             panels, a bracket crate, a TOTAL row) preserves every source requirement. Geometry-only synthetic
+             controls retain the historical 6 / 8 / 9-container numeric checks; source lists requiring upright
+             A-frame transport stop for declared packaged data. The controls do not satisfy those requirements.
 
 Every sheet here is SYNTHETIC and built in a temp folder. No model, no network. ~15 s.
 """
@@ -42,7 +44,7 @@ for _key in [k for k in os.environ if k.endswith("_API_KEY")]:
 
 import openpyxl  # noqa: E402
 
-from packing_assistant.tools.pack_ship_solve import rows_blocking_plan, run_plan  # noqa: E402
+from packing_assistant.tools.pack_ship_solve import rows_blocking_plan, rows_packaging_not_cargo, run_plan  # noqa: E402
 from packing_assistant.tools.table_mapper import build_column_map, parse_table_file  # noqa: E402
 
 FIXTURE_DIRS = ("test/generic_tables", "test/excel/synthetic", "test/benchmarks/excel")
@@ -97,6 +99,73 @@ class Reading(unittest.TestCase):
 
     def dims(self, parsed):
         return [(m["length_mm"], m["width_mm"], m["height_mm"], m["weight_kg"], m["quantity"]) for m in parsed["materials"]]
+
+    def geometry_control(self, source):
+        """A separately named test input, never a replacement source or shipping result."""
+        wb = openpyxl.load_workbook(source)
+        ws = wb.active
+        header_row = parse_table_file(source)["reading"]["header_row"]
+        note_column = next(cell.column for cell in ws[header_row] if str(cell.value).lower() in {"note", "remarks"})
+        for row in ws.iter_rows(min_row=header_row + 1):
+            if row[note_column - 1].value:
+                row[note_column - 1].value = "Geometry-only SYNTHETIC control; handling tested separately"
+        target = self.dir / ("geometry-only-" + source.name)
+        wb.save(target); wb.close()
+        return target
+
+    def test_cover_sheet_discovers_one_visible_material_header(self):
+        wb = openpyxl.Workbook()
+        wb.active.title = "Cover"
+        wb.active.append(["SYNTHETIC project cover, no cargo table"])
+        wb.create_sheet("Instructions").append(["Read these notes before using the synthetic list"])
+        data = wb.create_sheet("Cargo data")
+        data.append(["SYNTHETIC cargo schedule"])
+        data.append(["Mark", "Description", "Qty", "Length (mm)", "Width (mm)", "Height (mm)", "Unit Wt (kg)"])
+        data.append(["C1", "Synthetic crate", 3, 1000, 800, 600, 100])
+        hidden = wb.copy_worksheet(data); hidden.title = "Old hidden list"; hidden.sheet_state = "hidden"
+        path = self.dir / "synthetic-cover-and-data.xlsx"; wb.save(path); wb.close()
+        before = hashlib.sha256(path.read_bytes()).hexdigest()
+        parsed = parse_table_file(path)
+        self.assertTrue(parsed["ok"], parsed)
+        self.assertEqual((parsed["reading"]["sheet"], parsed["reading"]["header_row"], parsed["reading"]["rows"]), ("Cargo data", 2, [3]))
+        self.assertEqual(parsed["reading"]["sheet_selection"], "unique_material_header")
+        self.assertNotIn("Old hidden list", parsed["reading"]["scanned_visible_sheets"])
+        result = run_plan(file_path=str(path))
+        self.assertEqual((result["source"], result["conservation"]["pieces_in"], result["conservation"]["kg_in"]), ("solver", 3, 300))
+        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
+
+    def test_cover_with_two_material_sheets_requires_explicit_selection(self):
+        wb = openpyxl.Workbook(); wb.active.title = "Cover"; wb.active.append(["SYNTHETIC cover"])
+        for title, quantity in (("East cargo", 2), ("West cargo", 5)):
+            ws = wb.create_sheet(title)
+            ws.append(["id", "name", "quantity", "weight_kg", "length_mm", "width_mm", "height_mm"])
+            ws.append([title, "Synthetic crate", quantity, 100, 1000, 800, 600])
+        path = self.dir / "synthetic-ambiguous-sheets.xlsx"; wb.save(path); wb.close()
+        parsed = parse_table_file(path)
+        self.assertFalse(parsed["ok"]); self.assertEqual(parsed["materials"], [])
+        self.assertEqual(parsed["reading"]["sheet_selection"], "ambiguous_sheets")
+        self.assertEqual(parsed["reading"]["sheet_candidates"], ["East cargo", "West cargo"])
+        self.assertIn("Select one worksheet", parsed["errors"][0])
+        plan = run_plan(file_path=str(path)); self.assertFalse(plan["ok"]); self.assertNotIn("containers_used", plan)
+        selected = parse_table_file(path, sheet="West cargo")
+        self.assertEqual((selected["reading"]["sheet"], selected["materials"][0]["quantity"]), ("West cargo", 5))
+        missing = parse_table_file(path, sheet="Does not exist")
+        self.assertFalse(missing["ok"]); self.assertEqual(missing["reading"]["sheet_selection"], "sheet_not_found")
+        # A familiar worksheet name is not authorization to ignore a second
+        # candidate when the actual opening sheet is a cover.
+        wb = openpyxl.load_workbook(path); wb["East cargo"].title = "materials"; wb.save(path); wb.close()
+        named = parse_table_file(path)
+        self.assertFalse(named["ok"])
+        self.assertEqual(named["reading"]["sheet_candidates"], ["materials", "West cargo"])
+
+    def test_cover_and_empty_sheets_produce_no_material_plan(self):
+        wb = openpyxl.Workbook(); wb.active.title = "Cover"; wb.active.append(["SYNTHETIC cover"])
+        wb.create_sheet("Empty"); wb.create_sheet("Notes").append(["No cargo data supplied"])
+        path = self.dir / "synthetic-no-material-sheet.xlsx"; wb.save(path); wb.close()
+        parsed = parse_table_file(path)
+        self.assertFalse(parsed["ok"]); self.assertEqual(parsed["materials"], [])
+        plan = run_plan(file_path=str(path)); self.assertEqual((plan["source"], plan["error"]), ("unparsed", "no_materials"))
+        self.assertNotIn("containers_used", plan)
 
     # words ---------------------------------------------------------------------------------------------------
     def test_schedule_words(self):
@@ -253,7 +322,7 @@ class Reading(unittest.TestCase):
     def test_packaging_equipment_rows_go_to_a_person_not_into_crates(self):
         # A steel A-frame stillage listed like a panel was packed as 4 more "panels" (a sealed list: 20 pcs / 7,816 kg
         # instead of 16 / 6,136). Now the row stops the plan and the question names it; a panel whose remark or name
-        # says it rides on a stillage is still cargo, and goods on a pallet (the generic tables) still plan.
+        # says it rides on a stillage is still cargo. It now separately needs transport data before automatic boxing.
         head = ["Mark", "Description", "Qty", "Length (mm)", "Width (mm)", "Depth (mm)", "Unit Wt (kg)", "Remarks"]
         rows = [head,
                 ["UCW-E1", "Unitised panel east (SYNTHETIC)", 6, 3900, 1500, 220, 398, "ship on A-frame stillage"],
@@ -264,16 +333,20 @@ class Reading(unittest.TestCase):
         en = run_plan(file_path=str(path), container_type="40HQ", lang="en")
         self.assertEqual((en["ok"], en["source"], en["error"]), (False, "needs_human", "packaging_not_cargo"))
         asks = [(n["reason"], n.get("sheet_row")) for n in en["needs_human"]]
-        self.assertEqual(asks, [("packaging_not_cargo", 4), ("packaging_not_cargo", 5)])
+        self.assertEqual(asks, [("packaging_not_cargo", 4), ("packaging_not_cargo", 5),
+                               ("unsupported_transport_requirements", 2)])
+        self.assertEqual(en["needs_human"][2]["requirements"]["note"], "ship on A-frame stillage")
         self.assertTrue(en["needs_human"][0]["ask"].startswith("Row 4 (RK-01) reads as packaging or transport equipment"),
                         en["needs_human"][0]["ask"])
         self.assertIn("A-frame stillage", en["needs_human"][1]["ask"])
         zh = run_plan(file_path=str(path), container_type="40HQ")
         self.assertIn("包装 / 运输器具", zh["needs_human"][0]["ask"])
-        # without the two equipment rows the same list plans, the panels on stillages included
+        # Without the equipment rows it is cargo, but the explicit A-frame transport
+        # instruction still cannot be enforced by automatic boxing.
         path = self.sheet("stillage_panels_only.xlsx", rows[:3])
         plan = run_plan(file_path=str(path), container_type="40HQ", lang="en")
-        self.assertEqual((plan["source"], plan["conservation"]["pieces_in"]), ("solver", 10))
+        self.assertEqual((plan["source"], plan["error"]), ("needs_human", "unsupported_transport_requirements"))
+        self.assertFalse(any(n["reason"] == "packaging_not_cargo" for n in plan["needs_human"]))
         # goods on a pallet are cargo (the generic tables)
         self.assertEqual(rows_blocking_plan([{"id": "PLT-01", "name": "Motor pallet", "quantity": 1, "weight_kg": 80,
                                               "length_mm": 1200, "width_mm": 1000, "height_mm": 900}]), [])
@@ -282,8 +355,8 @@ class Reading(unittest.TestCase):
         # independent review of PR #76: on 8282779 any cargo word in the row made it cargo, so "Glass stillage",
         # "A-frame for panels", "Returnable rack for glazing units", "Stillage unit" and "玻璃周转架" were crated as panels
         def stops(**row):
-            return bool(rows_blocking_plan([{**row, "quantity": 1, "weight_kg": 400, "length_mm": 4200, "width_mm": 1800,
-                                             "height_mm": 2100}]))
+            return bool(rows_packaging_not_cargo([{**row, "quantity": 1, "weight_kg": 400, "length_mm": 4200, "width_mm": 1800,
+                                                  "height_mm": 2100}]))
 
         for name in ("Glass stillage, returnable", "A-frame for panels", "Returnable rack for glazing units",
                      "Stillage unit, galvanised", "Glass panel stillage, steel", "玻璃周转架"):
@@ -522,18 +595,26 @@ class Reading(unittest.TestCase):
         self.assertEqual((files, rows), (36, 127))
         self.assertEqual(digest, FIXTURE_PARSE_SHA256)
 
-    def test_demo_lists_plan_as_before_and_the_mixed_list_plans(self):
-        demo = run_plan(file_path=str(ROOT / DEMO_LISTS[0]))
-        rev_b = run_plan(file_path=str(ROOT / DEMO_LISTS[2]))
+    def test_source_transport_refusals_and_separate_geometry_controls(self):
+        sources = [ROOT / DEMO_LISTS[0], ROOT / DEMO_LISTS[2], ROOT / "examples/facade-demo/facade_panels_mixed.xlsx"]
+        before = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in sources}
+        for source in sources:
+            result = run_plan(file_path=str(source), lang="en")
+            self.assertEqual((result["source"], result["error"]), ("needs_human", "unsupported_transport_requirements"))
+            self.assertTrue(all("A-frame" in r["requirements"]["note"] for r in result["needs_human"]))
+            self.assertNotIn("containers_used", result)
+        demo = run_plan(file_path=str(self.geometry_control(sources[0])))
+        rev_b = run_plan(file_path=str(self.geometry_control(sources[1])))
         self.assertEqual((demo["containers_used"], demo["can_fit"]), (6, True))
         self.assertEqual((rev_b["containers_used"], rev_b["can_fit"]), (8, True))
-        mixed = run_plan(file_path=str(ROOT / "examples/facade-demo/facade_panels_mixed.xlsx"), lang="en")
+        mixed = run_plan(file_path=str(self.geometry_control(sources[2])), lang="en")
         self.assertEqual((mixed["ok"], mixed["can_fit"], mixed["containers_used"], mixed["container_type"]), (True, True, 9, "40HQ"))
         cons = mixed["conservation"]
         self.assertEqual((cons["ok"], cons["pieces_in"], cons["pieces_out"], cons["kg_in"], cons["kg_out"]), (True, 34, 34, 14600.0, 14600.0))
         reading = mixed["parse"]["reading"]
         self.assertEqual((reading["header_row"], reading["skipped_summary_rows"], reading["unmapped_columns"]),
                          (4, [{"row": 15, "text": "TOTAL"}], []))
+        self.assertEqual(before, {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in sources})
 
 
 if __name__ == "__main__":

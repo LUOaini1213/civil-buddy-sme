@@ -72,6 +72,8 @@ def main() -> int:
     ws["A2"] = "钢筋"
     ws["B2"] = "12吨"
     wb2.save(ledger)
+    wb2.close()
+    original_ledger = ledger.read_bytes()
     from packing_assistant.office_job import job_files_blob, list_job_files
 
     listed = list_job_files()
@@ -92,18 +94,20 @@ def main() -> int:
     wt = Path(wh["files"][0]["path"]).read_text(encoding="utf-8")
     assert "钢筋" in wt
     assert "12吨" in wt
-    patched = openpyxl.load_workbook(ledger)
-    assert "收发" in patched.sheetnames
-    assert patched["收发"]["A2"].value == "钢筋"
-    assert patched["收发"]["B2"].value == "12吨"
-    drafts = [n for n in patched.sheetnames if n.startswith("CB草稿")]
-    assert drafts, patched.sheetnames
+    assert ledger.read_bytes() == original_ledger, "automatic export must preserve the user's original workbook bytes"
+    copies = [Path(item["path"]) for item in wh["files"] if str(item.get("path", "")).endswith(".xlsx")]
+    assert copies and all(path.resolve() != ledger.resolve() for path in copies), copies
     found = False
-    for n in drafts:
-        for row in patched[n].iter_rows(max_row=20, max_col=8, values_only=True):
-            if row and any(cell and "钢筋" in str(cell) for cell in row):
-                found = True
-    assert found, [list(patched[n].iter_rows(max_row=8, values_only=True)) for n in drafts]
+    for path in copies:
+        exported = openpyxl.load_workbook(path)
+        try:
+            for sheet in exported:
+                for row in sheet.iter_rows(max_row=20, max_col=8, values_only=True):
+                    if row and any(cell and "钢筋" in str(cell) for cell in row):
+                        found = True
+        finally:
+            exported.close()
+    assert found, copies
     print("PASS office_job")
     return 0
 

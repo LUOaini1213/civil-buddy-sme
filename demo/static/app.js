@@ -396,7 +396,7 @@ function cbApplyHealth(health) {
   if (badge) {
     badge.textContent = configured ? cbHomeText("模型已配置") : offline ? cbHomeText("离线工作台可用") : cbHomeText("未配置模型");
     badge.className = configured || offline ? "pill ok" : "pill warn";
-    badge.title = configured ? cbHomeText("开放式问答使用当前配置；岗位工具按任务运行。") :
+    badge.title = configured ? cbHomeText("已配置凭据，尚不代表鉴权通过或模型可用；岗位工具按任务运行。") :
       offline ? cbHomeText("无需 API Key 即可使用当前离线岗位功能。") : cbHomeText("可浏览岗位与知识库，模型能力尚未配置。");
   }
   const byUrl = $("btnAttachUrl");
@@ -2418,13 +2418,15 @@ function cbLlmFillModels(vendor) {
   }
 }
 
-let cbLlmBusy = false;
+let cbLlmBusy = false, cbLlmView = null;
 
 function cbLlmSetBusy(busy) {
   cbLlmBusy = busy;
   for (const id of ["cbLlmVendor", "cbLlmBase", "cbLlmModel", "cbLlmKey", "cbLlmContext", "cbLlmReserve", "cbLlmSemantic", "cbLlmSave", "cbLlmReset"]) {
     if ($(id)) $(id).disabled = busy;
   }
+  for (const id of ["cbLlmContext", "cbLlmReserve"]) if ($(id)) $(id).disabled = busy || cbLlmView?.cfg?.supports_context !== true;
+  if ($("cbLlmSemantic")) $("cbLlmSemantic").disabled = busy || cbLlmView?.cfg?.supports_semantic_summary !== true;
   if ($("cbLlm")) $("cbLlm").setAttribute("aria-busy", String(busy));
 }
 
@@ -2443,16 +2445,21 @@ function cbLlmNormalize(cfg) {
   }
   const masked = typeof cfg.key_masked === "string" && /^[^*\s]{0,4}\*+[^*\s]{0,4}$/.test(cfg.key_masked)
     ? cfg.key_masked : cbHomeText("已隐藏");
-  const semantic = cfg.semantic_summary !== undefined ? cfg.semantic_summary : cfg.context && cfg.context.semantic_summary;
+  const semantic = cfg.semantic_summary !== undefined ? cfg.semantic_summary : cfg.context?.semantic_summary;
   if (semantic !== undefined && typeof semantic !== "boolean") throw new Error(cbHomeText("工作台返回的语义摘要设置无效。"));
+  const supportsContext = !!cfg.context && Number.isSafeInteger(cfg.context.limit) && Number.isSafeInteger(cfg.context.reserve)
+    && cfg.context.limit >= 1024 && cfg.context.limit <= 2000000 && cfg.context.reserve >= 128 && cfg.context.reserve < cfg.context.limit;
   return { configured: cfg.configured, model: cfg.model, base_url: base, key_masked: masked, source: cfg.source, context: cfg.context,
-    semantic_summary: semantic === true };
+    supports_context: supportsContext, supports_semantic_summary: typeof semantic === "boolean", semantic_summary: semantic };
 }
 
 function cbLlmError(error, secret) {
+  const code = error && (error.code || error.message);
+  if (code === "provider_key_required") return "切换接口来源需要重新填写该供应商的 Key；当前配置未修改。";
+  if (code === "invalid_provider_url") return "接口地址无效：请使用 HTTPS，或仅供本机测试的回环 HTTP 地址；不要包含账号、密码或查询参数。当前配置未修改。";
   let text = String(error && error.message || error);
-  if (secret) text = text.split(secret).join(cbHomeText("[已隐藏]"));
-  return text.replace(/sk-[A-Za-z0-9_-]+/g, cbHomeText("[已隐藏]"));
+  if (secret) text = text.split(secret).join("[已隐藏]");
+  return text.replace(/sk-[A-Za-z0-9_-]+/g, "[已隐藏]");
 }
 
 async function cbLlmRequest(payload) {
@@ -2464,30 +2471,38 @@ async function cbLlmRequest(payload) {
       ...(payload === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     });
     if (!response.ok) {
-      if (response.status === 404) throw new Error(cbHomeText("当前工作台未提供模型设置，可继续使用已支持的岗位功能。"));
+      if (response.status === 404) throw new Error("当前工作台未提供模型设置，可继续使用已支持的岗位功能。");
+      const body = typeof response.clone === "function" ? await response.clone().json().catch(() => null) : null;
+      if (["provider_key_required", "invalid_provider_url"].includes(body?.code || body?.error)) {
+        const error = new Error(body.code || body.error); error.code = body.code || body.error; throw error;
+      }
       throw new Error(await apiError(response) || "HTTP " + response.status);
     }
     try { return await response.json(); }
     catch (_) {
-      const error = new Error(cbHomeText("工作台返回了无法读取的模型配置。"));
+      const error = new Error("工作台返回了无法读取的模型配置。");
       error.submitted = payload !== undefined;
       throw error;
     }
   } catch (error) {
-    if (error.name === "AbortError") throw new Error(cbHomeText("请求超时，请检查本地工作台状态。"));
+    if (error.name === "AbortError") throw new Error("请求超时，请检查本地工作台状态。");
     throw error;
   } finally { clearTimeout(timeout); }
 }
 
-function cbLlmPaint(cfg, note, tone) {
+function cbLlmPaint(cfg, note, tone, detail = "") {
+  // Public readback and redacted messages only; this view never enters storage.
+  cbLlmView = { cfg, note, tone, detail };
   const st = $("cbLlmStatus");
   if (!st) return;
   st.className = "cb-llm-status" + (tone ? " " + tone : "");
-  if (!cfg) { st.textContent = note || cbHomeText("读取失败：工作台未响应。"); return; }
+  const feedback = (note ? cbHomeText(note) : "") + (detail ? cbHomeText(detail) : "");
+  if (!cfg) { st.textContent = feedback || cbHomeText("读取失败：工作台未响应。"); return; }
   const src = cfg.source === "runtime" ? cbHomeText("本次运行（界面设置）") : cbHomeText("启动配置");
-  st.textContent = (note ? note + "。" : "") + (cfg.configured
+  st.textContent = (feedback ? feedback + " " : "") + (cfg.configured
     ? cbHomeText("当前：") + cfg.model + " · " + cfg.base_url + " · Key " + cfg.key_masked + cbHomeText(" · 来源 ") + src
-    : cbHomeText("尚未配置开放式问答模型（来源 ") + src + cbHomeText("）。填写后点「保存并生效」，无需重启。"));
+    : cbHomeText("尚未配置开放式问答模型（来源 ") + src + cbHomeText("）。填写后点「应用到本次运行」，无需重启。"))
+    + " " + cbHomeText("已配置仅表示已填写凭据，不代表鉴权通过或模型可用；应用设置不会调用模型。");
 }
 
 function cbLlmApply(cfg, note) {
@@ -2496,13 +2511,16 @@ function cbLlmApply(cfg, note) {
     cbLlmFillModels(vendor);
     if ($("cbLlmBase")) $("cbLlmBase").value = cfg.base_url || "";
     if ($("cbLlmModel")) $("cbLlmModel").value = cfg.model || "";
-    if (cfg.context) {
+    if ($("cbLlmContextSettings")) $("cbLlmContextSettings").hidden = !cfg.supports_context;
+    if ($("cbLlmSemanticSettings")) $("cbLlmSemanticSettings").hidden = !cfg.supports_semantic_summary;
+    if ($("cbLlmOptionalNote")) $("cbLlmOptionalNote").hidden = cfg.supports_context || cfg.supports_semantic_summary;
+    if (cfg.supports_context) {
       state.context = { ...state.context, ...cfg.context, lastReport: null };
       if ($("cbLlmContext")) $("cbLlmContext").value = cfg.context.limit;
       if ($("cbLlmReserve")) $("cbLlmReserve").value = cfg.context.reserve;
       paintContext(estimateLocalContext());
     }
-    state.context.semantic_summary = cfg.semantic_summary === true;
+    state.context.semantic_summary = cfg.supports_semantic_summary && cfg.semantic_summary === true;
     if ($("cbLlmSemantic")) $("cbLlmSemantic").checked = cfg.semantic_summary === true;
     if ($("cbLlmKey")) $("cbLlmKey").value = "";
     cbLlmPaint(cfg, note, note ? "ok" : "");
@@ -2513,14 +2531,14 @@ function cbLlmApply(cfg, note) {
 async function cbLlmLoad() {
   if (cbLlmBusy) return null;
   cbLlmSetBusy(true);
-  cbLlmPaint(null, cbHomeText("正在读取模型配置…"));
+  cbLlmPaint(null, "正在读取模型配置…");
   if ($("cbLlmKey")) $("cbLlmKey").value = "";
   try {
     const cfg = cbLlmNormalize(await cbLlmRequest());
     cbLlmApply(cfg);
     return cfg;
   } catch (e) {
-    cbLlmPaint(null, cbHomeText("读取失败：") + cbLlmError(e), "err");
+    cbLlmPaint(null, "读取失败：", "err", cbLlmError(e));
     return null;
   } finally { cbLlmSetBusy(false); }
 }
@@ -2528,18 +2546,17 @@ async function cbLlmLoad() {
 async function cbLlmSubmit(payload, okNote) {
   if (cbLlmBusy) return;
   cbLlmSetBusy(true);
-  cbLlmPaint(null, payload.clear ? cbHomeText("正在恢复启动配置…") : cbHomeText("正在保存模型配置…"));
-  const secret = String(payload.api_key || "");
+  cbLlmPaint(null, payload.clear ? "正在恢复启动配置…" : "正在应用模型配置…");
+  const secret = String(payload.api_key || "").trim();
   if ($("cbLlmKey")) $("cbLlmKey").value = "";
-  let submitted = false;
   try {
     await cbLlmRequest(payload);
-    submitted = true;
     const cfg = cbLlmNormalize(await cbLlmRequest());
     cbLlmApply(cfg, okNote);
   } catch (e) {
-    const prefix = submitted || e.submitted ? cbHomeText("设置已提交，但当前配置未能核对，请重新打开设置：") : "保存失败：";
-    cbLlmPaint(null, prefix + cbLlmError(e, secret), "err");
+    const rejected = ["provider_key_required", "invalid_provider_url"].includes(e.code || e.message);
+    const prefix = rejected ? "应用失败：" : "未能确认设置是否生效，请刷新页面核对：";
+    cbLlmPaint(null, prefix, "err", cbLlmError(e, secret));
   } finally { cbLlmSetBusy(false); }
 }
 
@@ -2587,19 +2604,20 @@ function cbLlmWire() {
   const save = $("cbLlmSave");
   if (save) {
     save.addEventListener("click", () => {
-      cbLlmSubmit({
+      const cfg = cbLlmView?.cfg;
+      const payload = {
         api_key: $("cbLlmKey").value,
         base_url: $("cbLlmBase").value,
         model: $("cbLlmModel").value,
-        context_limit: Number($("cbLlmContext").value),
-        output_reserve: Number($("cbLlmReserve").value),
-        semantic_summary: !!$("cbLlmSemantic").checked,
-      }, "模型已切换");
+      };
+      if (cfg?.supports_context) { payload.context_limit = Number($("cbLlmContext").value); payload.output_reserve = Number($("cbLlmReserve").value); }
+      if (cfg?.supports_semantic_summary) payload.semantic_summary = !!$("cbLlmSemantic").checked;
+      cbLlmSubmit(payload, "已应用到本次运行并回读配置；重启后恢复启动配置。");
     });
   }
   const reset = $("cbLlmReset");
   if (reset) {
-    reset.addEventListener("click", () => cbLlmSubmit({ clear: true }, cbHomeText("已恢复启动配置")));
+    reset.addEventListener("click", () => cbLlmSubmit({ clear: true }, "已恢复启动配置；本次覆盖已撤销，启动文件未修改。"));
   }
 }
 
@@ -4150,6 +4168,7 @@ if ("serviceWorker" in navigator && typeof navigator.serviceWorker.register === 
 
 // A language change repaints chrome without clearing the current draft or making a model call.
 window.addEventListener?.("cb:languagechange", () => {
+  if (cbLlmView) cbLlmPaint(cbLlmView.cfg, cbLlmView.note, cbLlmView.tone, cbLlmView.detail);
   cbContextMemoryUiRefresh();
   cbApplyHealth(state.health); cbRunPaint(!!runState.active || !!runState.watched);
   renderSummon(); cbCapabilityCatalog(); cbOnboardRender(); cbProjRender();

@@ -42,6 +42,6 @@ The integration lives on `codex/unified-workbench-20260921`. Original user and t
 
 ## Unverified or intentionally unsupported
 
-PDF body rewriting/OCR; Office visual rendering; spreadsheet formula recalculation or full formula semantic validation; real microphone/ASR model quality; live Jev/calibrated confidence; arbitrary code/shell tools; automatic IFC/planning Agent tools; engineering approval. File structure/hash checks do not imply layout correctness or engineering truth. The existing Python CLI and its older policies remain a separately documented compatibility entry.
+PDF body rewriting/OCR; Office visual rendering; unrestricted spreadsheet formula support or independent full formula/design validation; real microphone/ASR model quality; live Jev/calibrated confidence; arbitrary code/shell tools; automatic IFC/planning Agent tools; engineering approval. The optional [local desktop Excel channel](../unified-workbench.md#optional-local-excel-recalculation) recalculates only admitted registered XLSX copies, verifies saved results and semantic preservation, and records a new child artifact. It is disabled by default and cannot be invoked by model tools. File structure/hash checks and an engine receipt do not imply visual layout correctness or engineering truth. The existing Python CLI and its older policies remain a separately documented compatibility entry.
 
 See [startup and capability details](../unified-workbench.md). Distribution packages contain no credentials and require Python dependencies separately.

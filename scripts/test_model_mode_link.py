@@ -16,6 +16,9 @@
   record_guard   the claim checks one by one, with the sentences that must pass
   workflow       a request the rules route to a fixed workflow runs in steps in model mode too
 No real model and no network: ``complete`` is always a script.
+Successful numerical comparisons use separately named GEOMETRY-ONLY synthetic copies. The original facade
+workbook retains its transport requirements and has separate refusal assertions; the numerical controls do
+not demonstrate compliance with upright/A-frame/no-stack requirements.
 """
 from __future__ import annotations
 
@@ -43,7 +46,9 @@ from packing_assistant.runtime.turn import deterministic_first, run_turn  # noqa
 from packing_assistant.tools import record_guard  # noqa: E402
 
 FIXTURES = ROOT / "examples" / "facade-demo"
-LINK = "Link the tender facade_itt_doc.md to the packing list facade_panels.xlsx and write the logistics response"
+GEOMETRY_PANELS = "geometry_only_panels.xlsx"
+ORIGINAL_LINK = "Link the tender facade_itt_doc.md to the packing list facade_panels.xlsx and write the logistics response"
+LINK = f"Link the tender facade_itt_doc.md to the packing list {GEOMETRY_PANELS} and write the logistics response"
 CONFIRM = "我明白，将由持证人员签认"
 MARK = "MODEL-WROTE-THIS-58"
 
@@ -80,26 +85,38 @@ class Case(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory(prefix="model-mode-link-")
+        cls.addClassCleanup(cls.tmp.cleanup)
         cls.job = Path(cls.tmp.name).resolve() / "job"
         cls.job.mkdir(parents=True)
         for name in ("facade_itt_doc.md", "facade_panels.xlsx"):
             shutil.copyfile(FIXTURES / name, cls.job / name)
+        # A bounded numerical control, separate from the unchanged transport-constrained source.
+        from openpyxl import load_workbook
+
+        book = load_workbook(cls.job / "facade_panels.xlsx")
+        sheet = book["materials"]
+        columns = {cell.value: cell.column for cell in sheet[1]}
+        label = "GEOMETRY-ONLY SYNTHETIC: numerical solver case; original transport requirements are tested separately."
+        for row in range(2, sheet.max_row + 1):
+            sheet.cell(row, columns["note"], label)
+        if "README" in book.sheetnames:
+            book["README"]["A1"] = label
+        book.save(cls.job / GEOMETRY_PANELS)
+        book.close()
         (cls.job / "CIVIL.md").write_text("# CIVIL.md\n\n- 项目：合成示例办公楼幕墙分包 (SYNTHETIC)\n- 辖区：SG\n", encoding="utf-8")
         cls.cwd = Path.cwd()
         home = patch.object(Path, "home", return_value=Path(cls.tmp.name) / "no-home")
         home.start()
         cls.addClassCleanup(home.stop)
         os.chdir(cls.job)
+        cls.addClassCleanup(os.chdir, cls.cwd)
         workspace.activate(cls.job)
+        cls.addClassCleanup(workspace.deactivate)
         cls.steps = run_turn(LINK, session_id="steps-ref", mode="steps")
         cls.steps_record = link_record(cls.steps)
         assert cls.steps_record is not None, cls.steps.get("reply")
-
-    @classmethod
-    def tearDownClass(cls):
-        workspace.deactivate()
-        os.chdir(cls.cwd)
-        cls.tmp.cleanup()
+        assert cls.steps_record["plan"]["can_fit"] is True, cls.steps_record
+        assert cls.steps_record["inputs"]["plan"]["sha256"], cls.steps_record
 
     def setUp(self):
         for name in ("CIVIL_API_KEY", "CIVIL_API_BASE", "CIVIL_MODEL"):
@@ -124,6 +141,7 @@ class ExplanationGuards(unittest.TestCase):
 
     def record(self):
         return {"container": {"type": "40HQ"}, "clauses": [], "confirmed_by_person": False,
+                "plan": {"can_fit": True, "container_type": "40HQ"},
                 "statements": [{"id": f"S{i + 1}", "clause": str(i + 1), "status": status, "text": "source"}
                                for i, status in enumerate(["covered", "partial"] + ["human_required"] * 5)]}
 
@@ -167,6 +185,37 @@ class ExplanationGuards(unittest.TestCase):
 
 
 class LinkFirst(Case):
+    def test_original_transport_requirements_refuse_a_plan_and_model_count(self):
+        before = (self.job / "facade_panels.xlsx").read_bytes()
+        invented = ("The plan uses 6 x 40HQ. The heaviest container's gross mass is 28,610 kg. "
+                    "All seven statements are covered. The bid is approved for submission. " + CONFIRM)
+        script = Script(invented, invented)
+        out, asked = self.model_turn(ORIGINAL_LINK, script, "model-original-refused")
+        record = link_record(out)
+        self.assertTrue(out["ok"], out.get("reply"))  # a refusal draft was generated, not a shipping plan
+        self.assertIsNone(record["plan"])
+        self.assertIsNone(record["inputs"]["plan"]["sha256"])
+        self.assertEqual(record["plan_refusal"]["source"], "needs_human")
+        self.assertEqual(record["plan_refusal"]["error"], "unsupported_transport_requirements")
+        requirements = json.dumps(record["plan_refusal"]["needs_human"], ensure_ascii=False)
+        for requirement in ("upright", "A-frame", "do not stack"):
+            self.assertIn(requirement, requirements)
+        self.assertFalse(any(row["status"] == "covered" for row in record["statements"]))
+        self.assertIs(record["confirmed_by_person"], False)
+        self.assertIs(out["submit_blocked"], True)
+        self.assertEqual(script.seen, [], "a known missing plan must not ask a model to invent shipping figures")
+        self.assertEqual(out["usage"]["model_calls"], 0)
+        shown = "\n".join(line for line in out["model_explanation"].splitlines() if not line.startswith("⚠"))
+        for claim in ("6 x 40HQ", "28,610 kg", "All seven statements are covered", "approved for submission", CONFIRM):
+            self.assertNotIn(claim, shown)
+        self.assertIn("No container count is available", shown)
+        self.assertIn("No loaded-container mass is available", shown)
+        self.assertIn("0 covered by the plan", out["reply"], "the deterministic clause response remains available")
+        self.assertIn("7 for a person", out["reply"])
+        self.assertEqual(asked, [])
+        self.assertEqual((self.job / "facade_panels.xlsx").read_bytes(), before)
+        self.assertEqual(before, (FIXTURES / "facade_panels.xlsx").read_bytes())
+
     def test_the_link_runs_first_and_the_model_only_explains(self):
         gross = self.steps_record["statements"][2]["figures"]["max_gross_kg"]
         explanation = (f"S1 is covered by the plan; S2 and S3 are partial; S4 to S7 wait for a person. "
@@ -234,6 +283,21 @@ class RecordQuestionRouting(unittest.TestCase):
 
 
 class Questions(Case):
+    def test_question_after_transport_refusal_reads_record_and_does_not_invent_a_plan(self):
+        initial = run_turn(ORIGINAL_LINK, session_id="model-q-original", mode="steps")
+        self.assertIsNone(link_record(initial)["plan"])
+        records = {path: path.read_bytes() for path in self.job.rglob("tender-packing-link.json")}
+        invented = "The plan uses 6 x 40HQ. The heaviest container's gross mass is 28,610 kg."
+        out, asked = self.model_turn("How many containers does facade_panels.xlsx need according to the link record?",
+                                     Script(invented, invented, invented), "model-q-original")
+        self.assertEqual(out["tools_run"], ["read_link_record"])
+        self.assertFalse(out["wrote"])
+        self.assertEqual(out["files"], [])
+        self.assertEqual(asked, [])
+        for unsupported in ("6 x 40HQ", "28,610", "28610"):
+            self.assertNotIn(unsupported, out["reply"])
+        self.assertEqual(records, {path: path.read_bytes() for path in self.job.rglob("tender-packing-link.json")})
+
     def test_a_question_cannot_write(self):
         script = Script([("run_skill", {"skill_id": "bid-parse", "files": ["facade_itt_doc.md"]})], "Only an answer.")
         out, _ = self.model_turn("What is a logistics response?", script, "model-question")
@@ -245,7 +309,7 @@ class Questions(Case):
         script = Script("It needs 1 container. Clause 4.3 limits the gross mass.",
                         "The plan uses 6 x 40HQ. Clause 4.3 limits the gross mass.",
                         "The plan uses 6 x 40HQ. Clause 4.3 limits the gross mass.")
-        out, _ = self.model_turn("How many containers does facade_panels.xlsx need, and which clause limits the gross mass?",
+        out, _ = self.model_turn(f"How many containers does {GEOMETRY_PANELS} need, and which clause limits the gross mass?",
                                  script, "model-q")
         self.assertEqual(out["tools_run"], ["read_link_record"])
         forced = [e for e in out["events"] if e["type"] == "tool_call" and e["payload"].get("forced")]
@@ -261,7 +325,7 @@ class Questions(Case):
         script = Script("It needs 1 container. Clause 4.3 limits the gross mass.",
                         "The linked plan uses 6 x 40HQ. Clause 4.9 limits the gross mass "
                         "of each loaded container to 20,000 kg.")
-        out, asked = self.model_turn("How many containers does facade_panels.xlsx need, and which clause "
+        out, asked = self.model_turn(f"How many containers does {GEOMETRY_PANELS} need, and which clause "
                                      "of facade_itt_doc.md limits the gross mass? Just answer.", script, "model-q-files")
         self.assertEqual(out["tools_run"], ["read_link_record"])
         self.assertTrue(any(event["type"] == "tool_call" and event["payload"].get("forced")
@@ -321,7 +385,7 @@ class PackPlan(Case):
     def test_the_result_carries_the_heaviest_container_mass(self):
         turn = model_loop._Turn(session_id="pack", run_id="run-pack", user_text="plan it", confirmed=False, approve=None,
                                 intent="chat")
-        result = model_loop._pack_plan(turn, {"file": "facade_panels.xlsx"})
+        result = model_loop._pack_plan(turn, {"file": GEOMETRY_PANELS})
         figures = self.steps_record["statements"][2]["figures"]
         self.assertEqual(result["heaviest_container"]["max_gross_kg"], figures["max_gross_kg"])
         self.assertEqual(result["max_gross_kg"], figures["max_gross_kg"])
@@ -333,13 +397,68 @@ class PackPlan(Case):
             self.assertAlmostEqual(item["gross_kg"], item["cargo_kg"] + tare, places=1)
         self.assertEqual(max(item["gross_kg"] for item in per), result["max_gross_kg"])
         self.assertLess(list(result).index("max_gross_kg"), list(result).index("report"))   # never cut off
-        tight = model_loop._pack_plan(turn, {"file": "facade_panels.xlsx", "container_type": "20GP"})
+        tight = model_loop._pack_plan(turn, {"file": GEOMETRY_PANELS, "container_type": "20GP"})
         self.assertIsNot(tight.get("can_fit"), True)
         self.assertIsNone(tight["heaviest_container"])
         self.assertIsNone(tight["max_gross_kg"])
 
+    def test_original_transport_requirements_supply_no_plan_or_container_mass(self):
+        turn = model_loop._Turn(session_id="pack-original", run_id="run-pack-original", user_text="plan it",
+                                confirmed=False, approve=None, intent="chat")
+        result = model_loop._pack_plan(turn, {"file": "facade_panels.xlsx"})
+        self.assertIs(result["ok"], False)
+        self.assertEqual((result["source"], result["error"]), ("needs_human", "unsupported_transport_requirements"))
+        self.assertTrue(result["needs_human"])
+        self.assertIsNot(result.get("can_fit"), True)
+        self.assertIsNone(result.get("containers_used"))
+        self.assertIsNone(result["heaviest_container"])
+        self.assertIsNone(result["max_gross_kg"])
+        self.assertNotIn("per_container_kg", result)
+
+    def test_failed_transport_plan_cannot_be_replaced_with_model_container_figures(self):
+        for lang, prompt, outcome in (
+            ("en", "How many containers does facade_panels.xlsx need? Calculate from that file.",
+             "No container count is available"),
+            ("zh", "facade_panels.xlsx 需要多少柜？请读取该文件并计算。", "当前没有可报告的柜数或已装货柜重量"),
+        ):
+            with self.subTest(lang=lang):
+                script = Script([("pack_plan", {"file": "facade_panels.xlsx"})],
+                                "The plan uses 6 x 40HQ. The heaviest container's gross mass is 28,610 kg.",
+                                "The plan uses 6 x 40HQ. The heaviest container's gross mass is 28,610 kg.")
+                out, _ = self.model_turn(prompt, script, "model-pack-original-refused-" + lang)
+                self.assertIn("pack_plan", out["tools_run"])
+                self.assertFalse(out["wrote"])
+                for unsupported in ("6 x 40HQ", "28,610", "28610"):
+                    self.assertNotIn(unsupported, out["reply"])
+                self.assertIn(outcome, out["reply"])
+
 
 class ReadLinkRecord(Case):
+    def test_refused_view_keeps_source_evidence_and_hides_unusable_plan_figures(self):
+        from packing_assistant.tender_packing_link import link_record_view
+
+        out = run_turn(ORIGINAL_LINK, session_id="read-original-refused", mode="steps")
+        record = link_record(out)
+        original = copy.deepcopy(record)
+        view = link_record_view(record)
+        self.assertFalse(view["plan_available"])
+        self.assertIsNone(view["plan"])
+        self.assertIsNone(view["heaviest_container"])
+        self.assertEqual(view["plan_refusal"], record["plan_refusal"])
+        self.assertEqual([c["clause"] for c in view["clauses"]], [c["clause"] for c in record["clauses"]])
+        self.assertTrue(all(c["text"] for c in view["clauses"]))
+        self.assertEqual(record, original)
+        # Even a contradictory old record must not turn stale figures into an accepted plan.
+        record["plan"] = {"can_fit": True, "containers_used": 999, "container_type": "40HQ"}
+        record["statements"].append({"kind": "gross_mass", "figures": {"max_gross_kg": 123456}})
+        contradictory = copy.deepcopy(record)
+        view = link_record_view(record)
+        self.assertFalse(view["plan_available"])
+        self.assertIsNone(view["plan"])
+        self.assertIsNone(view["heaviest_container"])
+        self.assertEqual(view["plan_refusal"], original["plan_refusal"])
+        self.assertEqual(record, contradictory)
+
     def test_registered_read_only_with_a_contract_and_no_path(self):
         from packing_assistant.runtime.tool_engine import get_engine
 
@@ -354,6 +473,7 @@ class ReadLinkRecord(Case):
         ok = engine.execute("read_link_record", {"session_id": "model-read"}, expert_id="bid-parse", intent="chat")
         self.assertTrue(ok["ok"], ok)
         view = ok["data"]
+        self.assertTrue(view["plan_available"])
         self.assertEqual([(s["id"], s["clause"], s["status"]) for s in view["statements"]], statuses(self.steps_record))
         self.assertEqual(view["container_type"], "40HQ")
         self.assertIs(view["submit_blocked"], True)
@@ -605,7 +725,11 @@ class EndpointCheck(unittest.TestCase):
         self.assertEqual([r["id"] for r in result["eval"]["rows"]], ["link-en", "q-count"])
         self.assertEqual(result["eval"]["summary"]["passed"], 2)
         self.assertGreaterEqual(result["eval"]["summary"]["model_calls"], 2)
-        self.assertTrue(any(entry["request"] == "link-en" for entry in fake.log))     # the set reached the endpoint
+        # The original source now refuses automatic packing. A deterministic
+        # refusal needs no model explanation; the record question still reaches
+        # the endpoint and is guarded against unsupported shipping figures.
+        self.assertFalse(any(entry["request"] == "link-en" for entry in fake.log))
+        self.assertTrue(any(entry["request"] == "q-count" for entry in fake.log))
         for out in (text, saved):
             self.assertNotIn("SECRET", out)
             self.assertNotIn("/chat/completions", out)

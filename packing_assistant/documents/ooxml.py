@@ -390,6 +390,9 @@ class Spreadsheet:
         calc = self.book.find(f"{{{S}}}calcPr")
         if calc is None:
             calc = ET.SubElement(self.book, f"{{{S}}}calcPr")
+        # Only the newly generated copy changes. These flags request a future
+        # engine calculation; they do not establish refreshed formula caches.
+        calc.set("calcMode", "auto")
         calc.set("fullCalcOnLoad", "1")
         calc.set("forceFullCalc", "1")
         self.package.put("xl/workbook.xml", self.book)

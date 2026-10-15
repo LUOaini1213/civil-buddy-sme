@@ -87,6 +87,11 @@
           <p class="cb-empty-desc">说明要完成的任务，工作台帮你选择岗位。也可自行点名；示例只预填，不会自动发送。</p>
           <p class="cb-empty-note" id="cbAvailability" role="status">正在检测可用能力…</p>
           <div class="cb-empty-cards">
+            <a href="/static/project-control.html" class="cb-empty-card tone-blue" style="text-decoration:none;color:inherit">
+              <span class="cb-empty-ico" aria-hidden="true">↻</span>
+              <span class="cb-empty-k">项目资料与问题</span>
+              <span class="cb-empty-v">登记资料版本、负责人和处理结果，形成内部复核记录</span>
+            </a>
             <a href="/static/agent.html" class="cb-empty-card tone-strong" style="text-decoration:none;color:inherit">
               <span class="cb-empty-ico" aria-hidden="true">AI</span>
               <span class="cb-empty-k">Agent 工程工作台</span>
@@ -257,7 +262,8 @@
         <strong id="cbLlmTitle">模型设置</strong>
         <button type="button" id="cbLlmClose" class="top-btn">关闭</button>
       </div>
-      <p class="cb-llm-note">可选：为开放式问答配置 OpenAI 兼容模型。岗位工具的可用能力见首页状态。这里填写的 Key 只保留在当前工作台进程内存，关闭工作台后失效。</p>
+      <p class="cb-llm-note">可选：为开放式问答配置 OpenAI 兼容模型。岗位工具的可用能力见首页状态。</p>
+      <p class="cb-llm-note">模型设置在当前工作台进程内存中生效，同一进程的工程共用；重启后恢复启动配置。此处不保存密钥文件，也不将 Key 写入浏览器存储。</p>
       <label class="cb-llm-row"><span>供应商</span>
         <select id="cbLlmVendor">
           <option value="deepseek">DeepSeek</option>
@@ -273,23 +279,28 @@
         <input type="text" id="cbLlmModel" list="cbLlmModels" spellcheck="false" autocomplete="off" />
       </label>
       <datalist id="cbLlmModels"></datalist>
-      <label class="cb-llm-row"><span>上下文上限</span>
-        <input type="number" id="cbLlmContext" min="1024" max="2000000" step="1" value="32768" />
-      </label>
-      <label class="cb-llm-row"><span>回答预留</span>
-        <input type="number" id="cbLlmReserve" min="128" max="1999999" step="1" value="4096" />
-      </label>
-      <p class="cb-llm-note">单位为 token。按供应商支持的上限填写；默认采用 32768 的保守配置，不能自动探测模型窗口。设置在本次进程有效，长期配置可使用 CIVIL_CONTEXT_LIMIT / CIVIL_CONTEXT_RESERVE。</p>
-      <label class="cb-llm-note" for="cbLlmSemantic">
-        <input type="checkbox" id="cbLlmSemantic" aria-describedby="cbLlmSemanticNote" /> 长对话自动生成语义摘要
-      </label>
-      <p class="cb-llm-note" id="cbLlmSemanticNote">默认关闭，仅对已配置模型的问答生效。启用后接近上下文预算时，每轮最多增加 1 次同模型调用；失败时沿用规则记忆与检索，完整原文保留。摘要可能遗漏信息，可随时查看来源。本次保存不会立即调用模型。</p>
+      <div id="cbLlmContextSettings" hidden>
+        <label class="cb-llm-row"><span>上下文上限</span>
+          <input type="number" id="cbLlmContext" min="1024" max="2000000" step="1" value="32768" disabled />
+        </label>
+        <label class="cb-llm-row"><span>回答预留</span>
+          <input type="number" id="cbLlmReserve" min="128" max="1999999" step="1" value="4096" disabled />
+        </label>
+        <p class="cb-llm-note">单位为 token。按供应商支持的上限填写；默认采用 32768 的保守配置，不能自动探测模型窗口。设置在本次进程有效，长期配置可使用 CIVIL_CONTEXT_LIMIT / CIVIL_CONTEXT_RESERVE。</p>
+      </div>
+      <div id="cbLlmSemanticSettings" hidden>
+        <label class="cb-llm-note" for="cbLlmSemantic">
+          <input type="checkbox" id="cbLlmSemantic" aria-describedby="cbLlmSemanticNote" disabled /> 长对话自动生成语义摘要
+        </label>
+        <p class="cb-llm-note" id="cbLlmSemanticNote">默认关闭，仅对已配置模型的问答生效。启用后接近上下文预算时，每轮最多增加 1 次同模型调用；失败时沿用规则记忆与检索，完整原文保留。摘要可能遗漏信息，可随时查看来源。本次保存不会立即调用模型。</p>
+      </div>
+      <p class="cb-llm-note" id="cbLlmOptionalNote" hidden>当前工作台未提供可编辑的上下文预算与语义摘要设置。</p>
       <label class="cb-llm-row"><span>API Key</span>
         <input type="password" id="cbLlmKey" autocomplete="off" spellcheck="false" placeholder="留空 = 不改动当前 Key" />
       </label>
-      <p class="cb-llm-status" id="cbLlmStatus" role="status" aria-live="polite">读取中…</p>
+      <p class="cb-llm-status" id="cbLlmStatus" data-i18n-skip role="status" aria-live="polite">读取中…</p>
       <div class="cb-llm-acts">
-        <button type="button" id="cbLlmSave" class="top-btn">保存并生效</button>
+        <button type="button" id="cbLlmSave" class="top-btn">应用到本次运行</button>
         <button type="button" id="cbLlmReset" class="top-btn">恢复启动配置</button>
       </div>
       <p class="cb-llm-note">模型名以供应商文档为准，下拉里的只是常见值。z.ai 若用 Coding Plan，接口地址要换成 <code>/api/coding/paas/v4</code> 的编码专用端点，与通用端点不通用。</p>

@@ -69,6 +69,7 @@ export function startPlanningApp(document, options = {}) {
   const fetcher = options.fetch || globalThis.fetch.bind(globalThis), Chart = options.Gantt || Gantt;
   const state = {plan:blankPlan(),name:'',weekly:[],project:null,baseline:null,result:null,resultPlan:'',resultStale:false,runId:null,method:'cpm',saved:'',history:[],pending:new Map(),busy:null,sequence:0,view:'gantt',optimization:null,importDraft:null,sourceId:null,importSource:null,synthetic:false,proposal:null};
   let controller = null, operationId = null;const committers=new Map();
+  let agentPlanningSupported = options.agentPlanningSupported === true;
   const el = (tag, text, cls) => {const node=document.createElement(tag);node.setAttribute('data-i18n-dynamic',''); if(text!==undefined)node.textContent=String(text); if(cls)node.className=cls; return node;};
   const option = (label, value) => {const node=el('option',label);node.value=value;return node;};
   const notify = (text, error=false) => {$('notice').textContent=text;$('notice').className=`notice${error?' error':''}`;};
@@ -99,6 +100,7 @@ export function startPlanningApp(document, options = {}) {
     }
   }
   function controls() {
+    renderHandoff();
     for(const node of document.querySelectorAll('main button,main input,main select,main textarea'))node.disabled=!!state.busy;
     $('applyPlanningProposal').disabled=!!state.busy||!state.proposal; $('exportBundle').disabled=!!state.busy||!state.project||dirty(); $('attachSource').disabled=!!state.busy||!state.project||dirty(); $('cancelRequest').disabled=false;$('cancelRequest').hidden=!['calculate','optimize','load','import','conversation','applyProposal'].includes(state.busy);
     $('undoEdit').disabled=!!state.busy||!state.history.length&&!state.pending.size;$('applyInputs').disabled=!!state.busy||!state.pending.size;
@@ -284,9 +286,19 @@ export function startPlanningApp(document, options = {}) {
   function applyImport() {if(!state.importDraft||!$('confirmImport').checked||state.busy||!discardAllowed())return;const imported=state.importDraft;newLocal(imported.plan,$('importFile').files?.[0]?.name.replace(/\.[^.]+$/,'')||trEngineering("导入计划"),false);state.sourceId=imported.source_id||null;state.importSource={source:imported.source,report:imported.report,original_dates:imported.original_dates};renderSource();controls();notify(trEngineering("导入内容已应用为新计划草稿；尚未保存。请检查工作日历、关系类型与工期，再计算。"));}
   async function exportFile() {if(state.busy)return;try{settleEdits();assertReady();if(!current()||!state.runId)throw new Error(state.method==='resource'?trEngineering("资源方案已修改或缺少有效计算记录。请先预览资源调整并应用调整，再导出；当前编辑与上次结果已保留。"):trEngineering("请先计算关键路径，取得与当前输入一致的结果后再导出。"));if(!['我明白，将由持证人员签认','I understand; a licensed person will sign this off.'].includes($('confirmation').value))throw new Error(trEngineering("请完整输入签认提示后导出。"));}catch(error){notify(error.message,true);return;}return action('export',async(token)=>{const format=$('exportFormat').value,payload={plan:state.plan,format,confirmation:$('confirmation').value,run_id:state.runId};const response=await request('/export',payload,token),blob=await response.blob();if(!owns(token))return;const url=URL.createObjectURL(blob),link=el('a');link.href=url;link.download=`${state.name.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_')||'planning'}.${format}`;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);notify(trEngineering("导出文件已生成，包含当前明确输入。请重新打开并核对交接结果。"));});}
   const chatContext = () => ({plan:state.plan,method:state.method,...(state.project?{project_id:state.project.id,expected_revision:state.project.revision}:{})});
+  function renderHandoff() {
+    const bound=state.project?.agent_selection;
+    const valid=bound?.kind==='saved_planning'&&bound.project_id===state.project?.id&&bound.revision===state.project?.revision&&/^[a-f0-9]{32}$/.test(bound.project_id)&&/^[a-f0-9]{64}$/.test(bound.inputs_sha256);
+    $('unifiedChat').hidden=!state.project||!agentPlanningSupported;
+    $('unifiedChat').href=agentPlanningSupported&&valid&&!dirty()?`/?planning_project_id=${bound.project_id}&planning_revision=${bound.revision}&planning_inputs_sha256=${bound.inputs_sha256}`:'#';
+    $('unifiedChat').setAttribute('aria-disabled',String(!valid||dirty()));
+    if($('unifiedChatStatus'))$('unifiedChatStatus').textContent=state.project?(dirty()?trEngineering("请先保存当前修改，再将该修订交给统一 Agent。"):
+      !agentPlanningSupported?trEngineering("当前 Agent 尚不支持已保存计划上下文；计划页仍可使用。"):
+      !valid?trEngineering("此计划缺少版本摘要，请重新打开后继续。"):
+      trEngineering("仅携带当前已保存修订；Agent 中需核对并选择。计划编辑仍在本页预览和应用。")):'';
+  }
   function renderConversation() {
-    const proposal=state.proposal;$('planningProposal').hidden=!proposal;
-    $('unifiedChat').hidden=!state.project;$('unifiedChat').href=state.project?`/?planning_project_id=${state.project.id}`:'/';
+    const proposal=state.proposal;$('planningProposal').hidden=!proposal;renderHandoff();
     if(!proposal)return;
     $('planningChanges').replaceChildren(resultTable([trEngineering("参数"),trEngineering("原值"),trEngineering("新值")],(proposal.changes||[]).map(row=>[row.parameter,JSON.stringify(row.before),JSON.stringify(row.after)])));
     $('applyPlanningProposal').textContent=proposal.action==='undo'?trEngineering("确认撤销上次保存"):trEngineering("确认应用并计算");
@@ -349,6 +361,8 @@ export function startPlanningApp(document, options = {}) {
   const onLanguageChange = () => { render(); renderRevisions(); relocalizeOwned(document, ['notice','recentPlans','importHint']); };
   win?.addEventListener?.('cb:languagechange', onLanguageChange);
   state.saved=JSON.stringify(snapshot());render();
+  $('unifiedChat').onclick=(event)=>{if(!agentPlanningSupported||dirty()||$('unifiedChat').getAttribute('aria-disabled')==='true'){event.preventDefault();notify(trEngineering("请先保存并重新核对计划，再到统一 Agent 继续。"),true);}};
+  if(options.initialize!==false)fetcher('/api/agent/capabilities',{credentials:'same-origin'}).then(async(response)=>response.ok?response.json():null).then((data)=>{agentPlanningSupported=data?.features?.saved_planning===true;renderConversation();}).catch(()=>{});
   $('planningChatForm').onsubmit=(event)=>{event.preventDefault();return conversation();};$('applyPlanningProposal').onclick=applyProposal;$('discardPlanningProposal').onclick=()=>{state.proposal=null;renderConversation();controls();};$('exportBundle').onclick=exportBundle;$('importBundle').onclick=importBundle;$('attachSource').onclick=attachSource;
   const ready=options.initialize===false?Promise.resolve():action('load',async(token)=>{await refreshProjects(token);if(!owns(token))return;const capabilities=await api('/capabilities',undefined,token).catch(()=>null);if(!owns(token))return;if(capabilities?.formats?.mpxj?.available===false)$('importHint').textContent=trEngineering("可导入 JSON、CSV、XLSX、MS Project XML。当前服务器未启用 MPP / P6 转换；MPP、XER、PMXML 请先在源软件导出本工作台支持的 Project XML 再导入。");else if(capabilities?.formats?.mpxj?.available===true)$('importHint').textContent=trEngineering("可导入 JSON、CSV、XLSX、MS Project XML，以及 MPP / P6（XER、PMXML）。MPXJ 与 JVM 已就绪；转换差异会逐项列入导入报告。");const id=new URLSearchParams(win?.location?.search||'').get('project_id');if(id&&/^[a-f0-9]{32}$/.test(id)){const data=await api(`/projects/${id}`,undefined,token);if(owns(token)){showProject(data.project,data.run_id);notify(trEngineering("已恢复 {p0} · 修订 {p1}。", {p0: data.project.name, p1: data.project.revision}));const proposalId=new URLSearchParams(win?.location?.search||'').get('proposal_id');if(proposalId&&/^[a-f0-9]{32}$/.test(proposalId)){const proposal=await api(`/proposals/${proposalId}`,undefined,token);if(owns(token)){state.proposal=proposal;renderConversation();}}}}});
   return{state,ready,calculate,optimize,save,open,undo,cancel,example,conversation,applyProposal,exportBundle,importBundle,attachSource,importFile,applyImport,exportFile,restoreRevision,captureBaseline,newLocal,render,current,dirty,dispose(){controller?.abort();state.sequence++;win?.removeEventListener?.('beforeunload',unload);win?.removeEventListener?.('cb:languagechange',onLanguageChange);}};

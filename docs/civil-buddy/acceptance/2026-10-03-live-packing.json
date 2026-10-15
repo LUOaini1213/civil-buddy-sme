@@ -1,0 +1,1410 @@
+{
+  "schema": "civil-buddy-live-packing-acceptance.v1",
+  "date": "2026-10-03",
+  "timezone": "Asia/Shanghai",
+  "scope": "Real DeepSeek invocation on a synthetic read-only packing source on one Windows computer. No actual Jev service call.",
+  "cases": [
+    {
+      "locale": "zh-CN",
+      "workflow_passed": true,
+      "pass_scope": "Provider/tool/persistence receipts and independent numerical checks, not complete model-prose fidelity",
+      "prose_review": {
+        "schema": "independent-live-packing-prose-review.v1",
+        "turn_id": "4e3008f47faa4463b88fa93e33fd5e9c",
+        "report_sha256": "856384496655892f7badc3abeeb49e954b7653c0cb88dcdae7ea75a9071b1f02",
+        "status": "facts_match_with_one_wording_note",
+        "reviewed_against": [
+          "copied original geometry-only.json",
+          "full packing_replan tool receipt",
+          "independent geometry/mass audit",
+          "persisted runtime turn and event data"
+        ],
+        "verified": [
+          "Source SHA256, container type 40HQ, 6-container ceiling, 30mm clearance, 1500kg box-net limit and fixed floor-only policy match the original",
+          "All three source material names, dimensions, per-piece weights and counts match the original",
+          "Baseline and final have 5 containers and 11 boxes; worst_mid50 is 0.86 and final retains baseline plan SHA256",
+          "size_desc and weight_desc were actually computed, neither improved the comparison and neither was accepted; no optimality guarantee was claimed",
+          "Structure values pass=0, fail=1, needs_reinforcement=0, pending_design=10 and quoted failure reason match the fixed worker receipt",
+          "Summary explicitly denies shipping release and engineering approval; securing, lifting and transport stability remain unverified",
+          "There are no document-write tools or registered artifacts; source bytes remain unchanged"
+        ],
+        "wording_notes": [
+          {
+            "quoted_text": "未运行代码、未请求任意 shell、未写入、未覆盖原件。",
+            "issue": "The unqualified no-code-executed clause is imprecise: the host did execute the fixed Python calculation worker. No arbitrary model-written code or shell was requested.",
+            "suggested_future_wording": "未执行任意用户代码或 shell；已运行固定计算工具。未写入或覆盖原件。",
+            "historical_reply_unchanged": true
+          }
+        ],
+        "scope_limit": "One live-model synthetic example on this computer. Structure engineering suitability and field shipping acceptance remain unproved."
+      },
+      "turn_id": "4e3008f47faa4463b88fa93e33fd5e9c",
+      "source_commit": "4fc84a599c55817a62b8fb63458fb5fa0d8959c9",
+      "source_worktree_dirty": false,
+      "source_worktree_diff_sha256": null,
+      "agent_source_sha256": null,
+      "binary_sha256": "4d4a686d3086f63f8ee6ca108c1a4bcd783046f608015f99df5d8ecbac417bdc",
+      "source_sha256": "c8ced5c16b00463c45b7f8452d3b496f5bf097a1f3655136912fcd02462b5fa1",
+      "model_verification": {
+        "configured": true,
+        "requested_mode": "live",
+        "expected_model": "deepseek-flash",
+        "configured_model": "deepseek-flash",
+        "model_status": "matched",
+        "scripted_model_detected": false,
+        "expected_provider_host": "api.deepseek.com",
+        "configured_provider_host": "api.deepseek.com",
+        "provider_host_status": "matched",
+        "provider_host_source": "capabilities.models.provider_host"
+      },
+      "model_calls": 3,
+      "provider_reported_usage": {
+        "input_tokens": 14061,
+        "output_tokens": 1129,
+        "model_calls": 3
+      },
+      "usage_is_billing_verified": false,
+      "elapsed_seconds": 8.547,
+      "events": 21,
+      "checks": {
+        "completed": true,
+        "not_partial": true,
+        "actual_packing_tool": true,
+        "real_model_before_and_after_tool": true,
+        "correct_response_model": true,
+        "original_unchanged": true,
+        "zero_artifacts": true,
+        "no_write_or_delegation": true,
+        "zero_tool_errors": true,
+        "jev_off": true,
+        "source_bound": true,
+        "two_recalculations": true
+      },
+      "independent_receipts": {
+        "passed": true,
+        "checks_passed": 34,
+        "checks_total": 34
+      },
+      "independent_numerical": {
+        "schema": "independent-packing-replan-audit.v1",
+        "passed": true,
+        "checks_passed": 46,
+        "checks_total": 46,
+        "selected_candidate": "baseline",
+        "final_geometry_feasible": true,
+        "source_sha256": "c8ced5c16b00463c45b7f8452d3b496f5bf097a1f3655136912fcd02462b5fa1",
+        "source_constraints": {
+          "container_type": "40HQ",
+          "max_containers": 6,
+          "clearance_mm": 30,
+          "max_box_net_kg": 1500,
+          "layout_policy": {
+            "orientation": "fixed",
+            "stacking": "floor_only"
+          }
+        },
+        "checks": [
+          {
+            "name": "selected_source_hash",
+            "passed": true
+          },
+          {
+            "name": "supported_source",
+            "passed": true
+          },
+          {
+            "name": "no_publication",
+            "passed": true
+          },
+          {
+            "name": "source_hard_constraints_unchanged",
+            "passed": true
+          },
+          {
+            "name": "frozen_v1_scope",
+            "passed": true
+          },
+          {
+            "name": "constraint_hash",
+            "passed": true
+          },
+          {
+            "name": "box_snapshot_hash",
+            "passed": true
+          },
+          {
+            "name": "box_policy_frozen",
+            "passed": true
+          },
+          {
+            "name": "box_net_mass_limit",
+            "passed": true
+          },
+          {
+            "name": "independent_cargo_conservation",
+            "passed": true,
+            "detail": {
+              "passed": true,
+              "errors": [],
+              "source_rows": 3,
+              "source_pieces": 45,
+              "observed_pieces": {
+                "SYN-C": "12",
+                "SYN-B": "15",
+                "SYN-A": "18"
+              },
+              "input_net_kg": 7380,
+              "boxed_net_kg": 7380.0,
+              "rounding_tolerance_kg": 1.16,
+              "boxes": 11
+            }
+          },
+          {
+            "name": "baseline.plan_hash",
+            "passed": true
+          },
+          {
+            "name": "baseline.layout_matches_raw",
+            "passed": true
+          },
+          {
+            "name": "baseline.container_type",
+            "passed": true
+          },
+          {
+            "name": "baseline.feasibility_claim",
+            "passed": true
+          },
+          {
+            "name": "baseline.count",
+            "passed": true
+          },
+          {
+            "name": "baseline.mid50",
+            "passed": true
+          },
+          {
+            "name": "bounded_experiments",
+            "passed": true
+          },
+          {
+            "name": "round_1.sequence",
+            "passed": true
+          },
+          {
+            "name": "round_1.allowed_unique_strategy",
+            "passed": true
+          },
+          {
+            "name": "round_1.fixed_priority",
+            "passed": true
+          },
+          {
+            "name": "round_1.parameters_hash",
+            "passed": true
+          },
+          {
+            "name": "round_1.not_duplicate",
+            "passed": true
+          },
+          {
+            "name": "round_1.critic_not_authority",
+            "passed": true
+          },
+          {
+            "name": "round_1.plan_hash",
+            "passed": true
+          },
+          {
+            "name": "round_1.layout_matches_raw",
+            "passed": true
+          },
+          {
+            "name": "round_1.container_type",
+            "passed": true
+          },
+          {
+            "name": "round_1.feasibility_claim",
+            "passed": true
+          },
+          {
+            "name": "round_1.count",
+            "passed": true
+          },
+          {
+            "name": "round_1.mid50",
+            "passed": true
+          },
+          {
+            "name": "round_1.selection_non_regression",
+            "passed": true
+          },
+          {
+            "name": "round_2.sequence",
+            "passed": true
+          },
+          {
+            "name": "round_2.allowed_unique_strategy",
+            "passed": true
+          },
+          {
+            "name": "round_2.fixed_priority",
+            "passed": true
+          },
+          {
+            "name": "round_2.parameters_hash",
+            "passed": true
+          },
+          {
+            "name": "round_2.not_duplicate",
+            "passed": true
+          },
+          {
+            "name": "round_2.critic_not_authority",
+            "passed": true
+          },
+          {
+            "name": "round_2.plan_hash",
+            "passed": true
+          },
+          {
+            "name": "round_2.layout_matches_raw",
+            "passed": true
+          },
+          {
+            "name": "round_2.container_type",
+            "passed": true
+          },
+          {
+            "name": "round_2.feasibility_claim",
+            "passed": true
+          },
+          {
+            "name": "round_2.count",
+            "passed": true
+          },
+          {
+            "name": "round_2.mid50",
+            "passed": true
+          },
+          {
+            "name": "round_2.selection_non_regression",
+            "passed": true
+          },
+          {
+            "name": "final_is_best_actual_candidate",
+            "passed": true
+          },
+          {
+            "name": "outcome_matches_independent_comparison",
+            "passed": true
+          },
+          {
+            "name": "decision_context_bound",
+            "passed": true
+          }
+        ],
+        "trials": [
+          {
+            "label": "baseline",
+            "feasible": true,
+            "containers_used": 5,
+            "worst_mid50": 0.86,
+            "geometry": {
+              "passed": true,
+              "errors": [],
+              "placed_boxes": 11,
+              "containers_used": 5,
+              "per_container_gross_kg": {
+                "1": 3000.0,
+                "2": 1800.0,
+                "3": 1620.0,
+                "4": 1440.0,
+                "5": 1440.0
+              },
+              "payload_limit_kg": 28610,
+              "worst_mid50": 0.86,
+              "not_checked": [
+                "box_structure",
+                "support_strength",
+                "lifting",
+                "securing",
+                "ship_release"
+              ]
+            },
+            "plan_sha256": "c06605a1f1dc06972c44eab76dffc4132cc7c675f27b3c7142b3b630923b7e5e"
+          },
+          {
+            "label": "round_1",
+            "feasible": true,
+            "containers_used": 5,
+            "worst_mid50": 0.86,
+            "geometry": {
+              "passed": true,
+              "errors": [],
+              "placed_boxes": 11,
+              "containers_used": 5,
+              "per_container_gross_kg": {
+                "1": 3000.0,
+                "2": 1800.0,
+                "3": 1620.0,
+                "4": 1440.0,
+                "5": 1440.0
+              },
+              "payload_limit_kg": 28610,
+              "worst_mid50": 0.86,
+              "not_checked": [
+                "box_structure",
+                "support_strength",
+                "lifting",
+                "securing",
+                "ship_release"
+              ]
+            },
+            "plan_sha256": "c06605a1f1dc06972c44eab76dffc4132cc7c675f27b3c7142b3b630923b7e5e"
+          },
+          {
+            "label": "round_2",
+            "feasible": true,
+            "containers_used": 5,
+            "worst_mid50": 0.86,
+            "geometry": {
+              "passed": true,
+              "errors": [],
+              "placed_boxes": 11,
+              "containers_used": 5,
+              "per_container_gross_kg": {
+                "1": 3000.0,
+                "2": 1800.0,
+                "3": 1620.0,
+                "4": 1440.0,
+                "5": 1440.0
+              },
+              "payload_limit_kg": 28610,
+              "worst_mid50": 0.86,
+              "not_checked": [
+                "box_structure",
+                "support_strength",
+                "lifting",
+                "securing",
+                "ship_release"
+              ]
+            },
+            "plan_sha256": "5429f3c46c8fc09f1f6dc5a2fe157e452c4c3e1247b9cdbce864122ec23a9ed2"
+          }
+        ],
+        "not_checked": [
+          "actual engineering suitability",
+          "box structural strength",
+          "internal box packing arrangement",
+          "measured crate tare",
+          "securing",
+          "lifting",
+          "shipping release",
+          "real-world performance"
+        ],
+        "scope": "Independent arithmetic on recorded raw solver outputs and source bytes; no paid model or network calls."
+      },
+      "calculation": {
+        "outcome": "unchanged",
+        "baseline_containers": 5,
+        "final_containers": 5,
+        "boxes": 11,
+        "structure": {
+          "fail": 1,
+          "failing": [
+            {
+              "box_type": "4米铁架",
+              "boxes": 1,
+              "reason": "加大底板纵梁截面或增加纵梁根数"
+            }
+          ],
+          "n_boxes": 11,
+          "needs_reinforcement": 0,
+          "pass": 0,
+          "pending_design": 10
+        },
+        "rounds": 2
+      },
+      "evidence": [
+        {
+          "local_file": "work/practical-live-packing-20261003/report.json",
+          "sha256": "856384496655892f7badc3abeeb49e954b7653c0cb88dcdae7ea75a9071b1f02"
+        },
+        {
+          "local_file": "work/practical-live-packing-20261003/events.jsonl",
+          "sha256": "61e845befe6ecdf49b02b8ef5dcf74659b9d66f65456424e9d13be35dad7afb8"
+        },
+        {
+          "local_file": "work/practical-live-packing-20261003/tool-result.json",
+          "sha256": "b08126660274aa3bb204a74667d948d8bcef6a8be032b4cc2a4c7cfb7baf413d"
+        },
+        {
+          "local_file": "work/practical-live-packing-20261003/independent-audit.json",
+          "sha256": "e53506107e05cb3276e95f6bb8de21b56c12f3f8316eb0ce013c7ef5f48a6c1d"
+        },
+        {
+          "local_file": "work/practical-live-packing-20261003/independent-prose-review.json",
+          "sha256": "e21d407e4541939935645d1a1babcf3f27932a9620c88bbb0067df4e07c4fd19"
+        }
+      ]
+    },
+    {
+      "locale": "en",
+      "workflow_passed": false,
+      "pass_scope": "Provider/tool/persistence receipts and independent numerical checks, not complete model-prose fidelity",
+      "prose_review": {
+        "schema": "independent-live-packing-prose-review.v1",
+        "turn_id": "a4e1ccf232cc40f699b12532ce58eb89",
+        "report_sha256": "6bc6f6fbc6bf650fcfa924406cafad99cdc157cf79803d3c950db6d7b42f363c",
+        "status": "failed_summary_suppressed",
+        "verified": [
+          "Request locale is en and requested_document_publication is false",
+          "The only actual tools were list_files, read_file and packing_replan, with no previews, apply attempts or artifacts",
+          "The complete fixed-worker result has baseline/final 5 containers, 11 boxes, two unsuccessful improvement candidates, 1 structure fail and 10 pending design",
+          "All 46 independent numerical checks pass; provider returned 3 deepseek-flash responses with 15678 reported tokens",
+          "The user-facing reply contains no calculated packing counts, source, candidate comparison or structure limitations",
+          "The final result is partial=true and requested_task_complete=false even though packing_incomplete=false"
+        ],
+        "finding": {
+          "observed": "The publication fallback replaced the model summary with a statement that no documents were saved.",
+          "code_path_evidence": "publication_summary_from_receipts=true while requested_document_publication=false, no apply attempts and no artifacts: claims_document_publication must have matched the model final text.",
+          "potential_root_cause": "English no-quantifier negations such as No files were modified are not covered by the current claim detector. This is a code-inspection hypothesis for this live response, not its recovered raw text.",
+          "missing_evidence": "The model final text before fallback is not preserved in the existing event/result record; the exact trigger sentence cannot be reconstructed.",
+          "prompt_fix_acceptance": "The revised fixed-tools phrasing cannot be evaluated because the visible summary was replaced."
+        },
+        "historical_evidence_unchanged": true,
+        "scope_limit": "Do not mark this English acceptance passed or represent it as a successful end-to-end English summary."
+      },
+      "turn_id": "a4e1ccf232cc40f699b12532ce58eb89",
+      "source_commit": "4fc84a599c55817a62b8fb63458fb5fa0d8959c9",
+      "source_worktree_dirty": true,
+      "source_worktree_diff_sha256": "a53e14365bd07475f7e9f6145321a3d2f07b5cc44adc269305861205680f5a18",
+      "agent_source_sha256": "0b3bddf9e6ae5dfec42df51831724adecbdfbbf10a770b414bec087a82ccb731",
+      "binary_sha256": "e04d7459f7bbc293836ae7e17c5d98b1b7fae7ce5262d78e33c0a7fd60885709",
+      "source_sha256": "c8ced5c16b00463c45b7f8452d3b496f5bf097a1f3655136912fcd02462b5fa1",
+      "model_verification": {
+        "configured": true,
+        "requested_mode": "live",
+        "expected_model": "deepseek-flash",
+        "configured_model": "deepseek-flash",
+        "model_status": "matched",
+        "scripted_model_detected": false,
+        "expected_provider_host": "api.deepseek.com",
+        "configured_provider_host": "api.deepseek.com",
+        "provider_host_status": "matched",
+        "provider_host_source": "capabilities.models.provider_host"
+      },
+      "model_calls": 3,
+      "provider_reported_usage": {
+        "input_tokens": 14198,
+        "output_tokens": 1480,
+        "model_calls": 3
+      },
+      "usage_is_billing_verified": false,
+      "elapsed_seconds": 9.796,
+      "events": 21,
+      "checks": {
+        "completed": true,
+        "not_partial": false,
+        "actual_packing_tool": true,
+        "real_model_before_and_after_tool": true,
+        "correct_response_model": true,
+        "original_unchanged": true,
+        "zero_artifacts": true,
+        "no_write_or_delegation": true,
+        "zero_tool_errors": true,
+        "jev_off": true,
+        "source_bound": true,
+        "two_recalculations": true
+      },
+      "independent_receipts": {
+        "passed": false,
+        "checks_passed": 34,
+        "checks_total": 37
+      },
+      "independent_numerical": {
+        "schema": "independent-packing-replan-audit.v1",
+        "passed": true,
+        "checks_passed": 46,
+        "checks_total": 46,
+        "selected_candidate": "baseline",
+        "final_geometry_feasible": true,
+        "source_sha256": "c8ced5c16b00463c45b7f8452d3b496f5bf097a1f3655136912fcd02462b5fa1",
+        "source_constraints": {
+          "container_type": "40HQ",
+          "max_containers": 6,
+          "clearance_mm": 30,
+          "max_box_net_kg": 1500,
+          "layout_policy": {
+            "orientation": "fixed",
+            "stacking": "floor_only"
+          }
+        },
+        "checks": [
+          {
+            "name": "selected_source_hash",
+            "passed": true
+          },
+          {
+            "name": "supported_source",
+            "passed": true
+          },
+          {
+            "name": "no_publication",
+            "passed": true
+          },
+          {
+            "name": "source_hard_constraints_unchanged",
+            "passed": true
+          },
+          {
+            "name": "frozen_v1_scope",
+            "passed": true
+          },
+          {
+            "name": "constraint_hash",
+            "passed": true
+          },
+          {
+            "name": "box_snapshot_hash",
+            "passed": true
+          },
+          {
+            "name": "box_policy_frozen",
+            "passed": true
+          },
+          {
+            "name": "box_net_mass_limit",
+            "passed": true
+          },
+          {
+            "name": "independent_cargo_conservation",
+            "passed": true,
+            "detail": {
+              "passed": true,
+              "errors": [],
+              "source_rows": 3,
+              "source_pieces": 45,
+              "observed_pieces": {
+                "SYN-C": "12",
+                "SYN-B": "15",
+                "SYN-A": "18"
+              },
+              "input_net_kg": 7380,
+              "boxed_net_kg": 7380.0,
+              "rounding_tolerance_kg": 1.16,
+              "boxes": 11
+            }
+          },
+          {
+            "name": "baseline.plan_hash",
+            "passed": true
+          },
+          {
+            "name": "baseline.layout_matches_raw",
+            "passed": true
+          },
+          {
+            "name": "baseline.container_type",
+            "passed": true
+          },
+          {
+            "name": "baseline.feasibility_claim",
+            "passed": true
+          },
+          {
+            "name": "baseline.count",
+            "passed": true
+          },
+          {
+            "name": "baseline.mid50",
+            "passed": true
+          },
+          {
+            "name": "bounded_experiments",
+            "passed": true
+          },
+          {
+            "name": "round_1.sequence",
+            "passed": true
+          },
+          {
+            "name": "round_1.allowed_unique_strategy",
+            "passed": true
+          },
+          {
+            "name": "round_1.fixed_priority",
+            "passed": true
+          },
+          {
+            "name": "round_1.parameters_hash",
+            "passed": true
+          },
+          {
+            "name": "round_1.not_duplicate",
+            "passed": true
+          },
+          {
+            "name": "round_1.critic_not_authority",
+            "passed": true
+          },
+          {
+            "name": "round_1.plan_hash",
+            "passed": true
+          },
+          {
+            "name": "round_1.layout_matches_raw",
+            "passed": true
+          },
+          {
+            "name": "round_1.container_type",
+            "passed": true
+          },
+          {
+            "name": "round_1.feasibility_claim",
+            "passed": true
+          },
+          {
+            "name": "round_1.count",
+            "passed": true
+          },
+          {
+            "name": "round_1.mid50",
+            "passed": true
+          },
+          {
+            "name": "round_1.selection_non_regression",
+            "passed": true
+          },
+          {
+            "name": "round_2.sequence",
+            "passed": true
+          },
+          {
+            "name": "round_2.allowed_unique_strategy",
+            "passed": true
+          },
+          {
+            "name": "round_2.fixed_priority",
+            "passed": true
+          },
+          {
+            "name": "round_2.parameters_hash",
+            "passed": true
+          },
+          {
+            "name": "round_2.not_duplicate",
+            "passed": true
+          },
+          {
+            "name": "round_2.critic_not_authority",
+            "passed": true
+          },
+          {
+            "name": "round_2.plan_hash",
+            "passed": true
+          },
+          {
+            "name": "round_2.layout_matches_raw",
+            "passed": true
+          },
+          {
+            "name": "round_2.container_type",
+            "passed": true
+          },
+          {
+            "name": "round_2.feasibility_claim",
+            "passed": true
+          },
+          {
+            "name": "round_2.count",
+            "passed": true
+          },
+          {
+            "name": "round_2.mid50",
+            "passed": true
+          },
+          {
+            "name": "round_2.selection_non_regression",
+            "passed": true
+          },
+          {
+            "name": "final_is_best_actual_candidate",
+            "passed": true
+          },
+          {
+            "name": "outcome_matches_independent_comparison",
+            "passed": true
+          },
+          {
+            "name": "decision_context_bound",
+            "passed": true
+          }
+        ],
+        "trials": [
+          {
+            "label": "baseline",
+            "feasible": true,
+            "containers_used": 5,
+            "worst_mid50": 0.86,
+            "geometry": {
+              "passed": true,
+              "errors": [],
+              "placed_boxes": 11,
+              "containers_used": 5,
+              "per_container_gross_kg": {
+                "1": 3000.0,
+                "2": 1800.0,
+                "3": 1620.0,
+                "4": 1440.0,
+                "5": 1440.0
+              },
+              "payload_limit_kg": 28610,
+              "worst_mid50": 0.86,
+              "not_checked": [
+                "box_structure",
+                "support_strength",
+                "lifting",
+                "securing",
+                "ship_release"
+              ]
+            },
+            "plan_sha256": "c06605a1f1dc06972c44eab76dffc4132cc7c675f27b3c7142b3b630923b7e5e"
+          },
+          {
+            "label": "round_1",
+            "feasible": true,
+            "containers_used": 5,
+            "worst_mid50": 0.86,
+            "geometry": {
+              "passed": true,
+              "errors": [],
+              "placed_boxes": 11,
+              "containers_used": 5,
+              "per_container_gross_kg": {
+                "1": 3000.0,
+                "2": 1800.0,
+                "3": 1620.0,
+                "4": 1440.0,
+                "5": 1440.0
+              },
+              "payload_limit_kg": 28610,
+              "worst_mid50": 0.86,
+              "not_checked": [
+                "box_structure",
+                "support_strength",
+                "lifting",
+                "securing",
+                "ship_release"
+              ]
+            },
+            "plan_sha256": "c06605a1f1dc06972c44eab76dffc4132cc7c675f27b3c7142b3b630923b7e5e"
+          },
+          {
+            "label": "round_2",
+            "feasible": true,
+            "containers_used": 5,
+            "worst_mid50": 0.86,
+            "geometry": {
+              "passed": true,
+              "errors": [],
+              "placed_boxes": 11,
+              "containers_used": 5,
+              "per_container_gross_kg": {
+                "1": 3000.0,
+                "2": 1800.0,
+                "3": 1620.0,
+                "4": 1440.0,
+                "5": 1440.0
+              },
+              "payload_limit_kg": 28610,
+              "worst_mid50": 0.86,
+              "not_checked": [
+                "box_structure",
+                "support_strength",
+                "lifting",
+                "securing",
+                "ship_release"
+              ]
+            },
+            "plan_sha256": "5429f3c46c8fc09f1f6dc5a2fe157e452c4c3e1247b9cdbce864122ec23a9ed2"
+          }
+        ],
+        "not_checked": [
+          "actual engineering suitability",
+          "box structural strength",
+          "internal box packing arrangement",
+          "measured crate tare",
+          "securing",
+          "lifting",
+          "shipping release",
+          "real-world performance"
+        ],
+        "scope": "Independent arithmetic on recorded raw solver outputs and source bytes; no paid model or network calls."
+      },
+      "calculation": {
+        "outcome": "unchanged",
+        "baseline_containers": 5,
+        "final_containers": 5,
+        "boxes": 11,
+        "structure": {
+          "fail": 1,
+          "failing": [
+            {
+              "box_type": "4米铁架",
+              "boxes": 1,
+              "reason": "加大底板纵梁截面或增加纵梁根数"
+            }
+          ],
+          "n_boxes": 11,
+          "needs_reinforcement": 0,
+          "pass": 0,
+          "pending_design": 10
+        },
+        "rounds": 2
+      },
+      "evidence": [
+        {
+          "local_file": "work/practical-live-packing-en-20261003/report.json",
+          "sha256": "6bc6f6fbc6bf650fcfa924406cafad99cdc157cf79803d3c950db6d7b42f363c"
+        },
+        {
+          "local_file": "work/practical-live-packing-en-20261003/events.jsonl",
+          "sha256": "67c954ef1578ede526e96a6b68b2b53ce176804ad3e021f72faae81217f60cb0"
+        },
+        {
+          "local_file": "work/practical-live-packing-en-20261003/tool-result.json",
+          "sha256": "d71feb3a38b56b87b494997af5c8c74f70ca339af9fa358d5d707bf9305ce5e2"
+        },
+        {
+          "local_file": "work/practical-live-packing-en-20261003/independent-audit.json",
+          "sha256": "ecb746167a86dd673870077bf83eedac91b7a485ed4d74af2dbb9ad78b2d8c0b"
+        },
+        {
+          "local_file": "work/practical-live-packing-en-20261003/independent-prose-review.json",
+          "sha256": "95d518aa00b210334ec763f6e50a3d0615092b8b1095d54259079611c00fcfd8"
+        }
+      ]
+    },
+    {
+      "locale": "en",
+      "workflow_passed": true,
+      "pass_scope": "Provider/tool/persistence receipts and independent numerical checks, not complete model-prose fidelity",
+      "prose_review": {
+        "schema": "independent-live-packing-prose-review.v1",
+        "turn_id": "cdcf5dc1404142bb889167a6de53f061",
+        "report_sha256": "d254918a227372d3a14c8a4eb52d2b84613a943588fe039082e0478a10dfa655",
+        "status": "core_facts_match_with_two_prose_findings",
+        "full_prose_fidelity_verified": false,
+        "verified": [
+          "Explicit en locale, completed turn and partial=false; the final packing summary is retained instead of the publication fallback",
+          "Source SHA256, all source constraints, material dimensions, per-piece weights and piece counts match the original",
+          "Baseline and final have 5 containers and 11 boxes, with matching baseline/final plan hash and worst_mid50=0.86",
+          "Two actual fixed candidate orders were tried; neither improved the result and the baseline was retained",
+          "Structure numerical values pass=0, fail=1, needs_reinforcement=0 and pending_design=10 match the result; the original Chinese failing box label and reason are preserved",
+          "The reply expressly denies shipping release, professional signoff and a complete structural verification",
+          "Original source unchanged, no artifact or file change, no sub-agent delegation, Jev off and not applied",
+          "The previously observed unqualified claim that no code ran is absent"
+        ],
+        "findings": [
+          {
+            "kind": "count_unit_mismatch",
+            "quoted_text": "So 10 box types remain pending design and 1 fails",
+            "issue": "pending_design=10 counts boxes, not distinct box types. The complete result contains 11 boxes with only 2 distinct box_type values: 4米铁架 (10 boxes) and 2米铁架 (1 box).",
+            "correct_description": "10 boxes remain pending design and 1 box fails.",
+            "core_counts_unchanged": true
+          },
+          {
+            "kind": "incomplete_tool_account",
+            "quoted_text": "I called packing_replan once with selection_index=0. ... No other tool was needed",
+            "issue": "The actual event sequence has list_files, read_file and packing_replan once each. The packing invocation is correct, but the broader phrase should not be used as evidence that it was the sole executed tool.",
+            "correct_description": "The host listed and read the selected source, then ran the fixed packing_replan tool once."
+          }
+        ],
+        "historical_evidence_unchanged": true,
+        "scope_limit": "One synthetic same-machine live acceptance. Numerical receipts and safe read-only execution pass; this does not prove every model-generated sentence is factual, or validate field engineering/shipping readiness."
+      },
+      "turn_id": "cdcf5dc1404142bb889167a6de53f061",
+      "source_commit": "4fc84a599c55817a62b8fb63458fb5fa0d8959c9",
+      "source_worktree_dirty": true,
+      "source_worktree_diff_sha256": "c4bc3c0c81810156f81a070580ec23a84ed2a7c44f92e35601621af5d4de9759",
+      "agent_source_sha256": "163d7a85e66427d1a6c4d5212e010da856897c26d66377a31b43f5a0c76072b7",
+      "binary_sha256": "830b99e9548eb061950038943c8d172ab68842da269e752caa5599463faad28a",
+      "source_sha256": "c8ced5c16b00463c45b7f8452d3b496f5bf097a1f3655136912fcd02462b5fa1",
+      "model_verification": {
+        "configured": true,
+        "requested_mode": "live",
+        "expected_model": "deepseek-flash",
+        "configured_model": "deepseek-flash",
+        "model_status": "matched",
+        "scripted_model_detected": false,
+        "expected_provider_host": "api.deepseek.com",
+        "configured_provider_host": "api.deepseek.com",
+        "provider_host_status": "matched",
+        "provider_host_source": "capabilities.models.provider_host"
+      },
+      "model_calls": 3,
+      "provider_reported_usage": {
+        "input_tokens": 14183,
+        "output_tokens": 1131,
+        "model_calls": 3
+      },
+      "usage_is_billing_verified": false,
+      "elapsed_seconds": 8.797,
+      "events": 21,
+      "checks": {
+        "completed": true,
+        "not_partial": true,
+        "actual_packing_tool": true,
+        "real_model_before_and_after_tool": true,
+        "correct_response_model": true,
+        "original_unchanged": true,
+        "zero_artifacts": true,
+        "no_write_or_delegation": true,
+        "zero_tool_errors": true,
+        "jev_off": true,
+        "source_bound": true,
+        "two_recalculations": true
+      },
+      "independent_receipts": {
+        "passed": true,
+        "checks_passed": 37,
+        "checks_total": 37
+      },
+      "independent_numerical": {
+        "schema": "independent-packing-replan-audit.v1",
+        "passed": true,
+        "checks_passed": 46,
+        "checks_total": 46,
+        "selected_candidate": "baseline",
+        "final_geometry_feasible": true,
+        "source_sha256": "c8ced5c16b00463c45b7f8452d3b496f5bf097a1f3655136912fcd02462b5fa1",
+        "source_constraints": {
+          "container_type": "40HQ",
+          "max_containers": 6,
+          "clearance_mm": 30,
+          "max_box_net_kg": 1500,
+          "layout_policy": {
+            "orientation": "fixed",
+            "stacking": "floor_only"
+          }
+        },
+        "checks": [
+          {
+            "name": "selected_source_hash",
+            "passed": true
+          },
+          {
+            "name": "supported_source",
+            "passed": true
+          },
+          {
+            "name": "no_publication",
+            "passed": true
+          },
+          {
+            "name": "source_hard_constraints_unchanged",
+            "passed": true
+          },
+          {
+            "name": "frozen_v1_scope",
+            "passed": true
+          },
+          {
+            "name": "constraint_hash",
+            "passed": true
+          },
+          {
+            "name": "box_snapshot_hash",
+            "passed": true
+          },
+          {
+            "name": "box_policy_frozen",
+            "passed": true
+          },
+          {
+            "name": "box_net_mass_limit",
+            "passed": true
+          },
+          {
+            "name": "independent_cargo_conservation",
+            "passed": true,
+            "detail": {
+              "passed": true,
+              "errors": [],
+              "source_rows": 3,
+              "source_pieces": 45,
+              "observed_pieces": {
+                "SYN-C": "12",
+                "SYN-B": "15",
+                "SYN-A": "18"
+              },
+              "input_net_kg": 7380,
+              "boxed_net_kg": 7380.0,
+              "rounding_tolerance_kg": 1.16,
+              "boxes": 11
+            }
+          },
+          {
+            "name": "baseline.plan_hash",
+            "passed": true
+          },
+          {
+            "name": "baseline.layout_matches_raw",
+            "passed": true
+          },
+          {
+            "name": "baseline.container_type",
+            "passed": true
+          },
+          {
+            "name": "baseline.feasibility_claim",
+            "passed": true
+          },
+          {
+            "name": "baseline.count",
+            "passed": true
+          },
+          {
+            "name": "baseline.mid50",
+            "passed": true
+          },
+          {
+            "name": "bounded_experiments",
+            "passed": true
+          },
+          {
+            "name": "round_1.sequence",
+            "passed": true
+          },
+          {
+            "name": "round_1.allowed_unique_strategy",
+            "passed": true
+          },
+          {
+            "name": "round_1.fixed_priority",
+            "passed": true
+          },
+          {
+            "name": "round_1.parameters_hash",
+            "passed": true
+          },
+          {
+            "name": "round_1.not_duplicate",
+            "passed": true
+          },
+          {
+            "name": "round_1.critic_not_authority",
+            "passed": true
+          },
+          {
+            "name": "round_1.plan_hash",
+            "passed": true
+          },
+          {
+            "name": "round_1.layout_matches_raw",
+            "passed": true
+          },
+          {
+            "name": "round_1.container_type",
+            "passed": true
+          },
+          {
+            "name": "round_1.feasibility_claim",
+            "passed": true
+          },
+          {
+            "name": "round_1.count",
+            "passed": true
+          },
+          {
+            "name": "round_1.mid50",
+            "passed": true
+          },
+          {
+            "name": "round_1.selection_non_regression",
+            "passed": true
+          },
+          {
+            "name": "round_2.sequence",
+            "passed": true
+          },
+          {
+            "name": "round_2.allowed_unique_strategy",
+            "passed": true
+          },
+          {
+            "name": "round_2.fixed_priority",
+            "passed": true
+          },
+          {
+            "name": "round_2.parameters_hash",
+            "passed": true
+          },
+          {
+            "name": "round_2.not_duplicate",
+            "passed": true
+          },
+          {
+            "name": "round_2.critic_not_authority",
+            "passed": true
+          },
+          {
+            "name": "round_2.plan_hash",
+            "passed": true
+          },
+          {
+            "name": "round_2.layout_matches_raw",
+            "passed": true
+          },
+          {
+            "name": "round_2.container_type",
+            "passed": true
+          },
+          {
+            "name": "round_2.feasibility_claim",
+            "passed": true
+          },
+          {
+            "name": "round_2.count",
+            "passed": true
+          },
+          {
+            "name": "round_2.mid50",
+            "passed": true
+          },
+          {
+            "name": "round_2.selection_non_regression",
+            "passed": true
+          },
+          {
+            "name": "final_is_best_actual_candidate",
+            "passed": true
+          },
+          {
+            "name": "outcome_matches_independent_comparison",
+            "passed": true
+          },
+          {
+            "name": "decision_context_bound",
+            "passed": true
+          }
+        ],
+        "trials": [
+          {
+            "label": "baseline",
+            "feasible": true,
+            "containers_used": 5,
+            "worst_mid50": 0.86,
+            "geometry": {
+              "passed": true,
+              "errors": [],
+              "placed_boxes": 11,
+              "containers_used": 5,
+              "per_container_gross_kg": {
+                "1": 3000.0,
+                "2": 1800.0,
+                "3": 1620.0,
+                "4": 1440.0,
+                "5": 1440.0
+              },
+              "payload_limit_kg": 28610,
+              "worst_mid50": 0.86,
+              "not_checked": [
+                "box_structure",
+                "support_strength",
+                "lifting",
+                "securing",
+                "ship_release"
+              ]
+            },
+            "plan_sha256": "c06605a1f1dc06972c44eab76dffc4132cc7c675f27b3c7142b3b630923b7e5e"
+          },
+          {
+            "label": "round_1",
+            "feasible": true,
+            "containers_used": 5,
+            "worst_mid50": 0.86,
+            "geometry": {
+              "passed": true,
+              "errors": [],
+              "placed_boxes": 11,
+              "containers_used": 5,
+              "per_container_gross_kg": {
+                "1": 3000.0,
+                "2": 1800.0,
+                "3": 1620.0,
+                "4": 1440.0,
+                "5": 1440.0
+              },
+              "payload_limit_kg": 28610,
+              "worst_mid50": 0.86,
+              "not_checked": [
+                "box_structure",
+                "support_strength",
+                "lifting",
+                "securing",
+                "ship_release"
+              ]
+            },
+            "plan_sha256": "c06605a1f1dc06972c44eab76dffc4132cc7c675f27b3c7142b3b630923b7e5e"
+          },
+          {
+            "label": "round_2",
+            "feasible": true,
+            "containers_used": 5,
+            "worst_mid50": 0.86,
+            "geometry": {
+              "passed": true,
+              "errors": [],
+              "placed_boxes": 11,
+              "containers_used": 5,
+              "per_container_gross_kg": {
+                "1": 3000.0,
+                "2": 1800.0,
+                "3": 1620.0,
+                "4": 1440.0,
+                "5": 1440.0
+              },
+              "payload_limit_kg": 28610,
+              "worst_mid50": 0.86,
+              "not_checked": [
+                "box_structure",
+                "support_strength",
+                "lifting",
+                "securing",
+                "ship_release"
+              ]
+            },
+            "plan_sha256": "5429f3c46c8fc09f1f6dc5a2fe157e452c4c3e1247b9cdbce864122ec23a9ed2"
+          }
+        ],
+        "not_checked": [
+          "actual engineering suitability",
+          "box structural strength",
+          "internal box packing arrangement",
+          "measured crate tare",
+          "securing",
+          "lifting",
+          "shipping release",
+          "real-world performance"
+        ],
+        "scope": "Independent arithmetic on recorded raw solver outputs and source bytes; no paid model or network calls."
+      },
+      "calculation": {
+        "outcome": "unchanged",
+        "baseline_containers": 5,
+        "final_containers": 5,
+        "boxes": 11,
+        "structure": {
+          "fail": 1,
+          "failing": [
+            {
+              "box_type": "4米铁架",
+              "boxes": 1,
+              "reason": "加大底板纵梁截面或增加纵梁根数"
+            }
+          ],
+          "n_boxes": 11,
+          "needs_reinforcement": 0,
+          "pass": 0,
+          "pending_design": 10
+        },
+        "rounds": 2
+      },
+      "evidence": [
+        {
+          "local_file": "work/practical-live-packing-en-fixed-20261003/report.json",
+          "sha256": "d254918a227372d3a14c8a4eb52d2b84613a943588fe039082e0478a10dfa655"
+        },
+        {
+          "local_file": "work/practical-live-packing-en-fixed-20261003/events.jsonl",
+          "sha256": "bd7757ef22c62c2f09362c997e94dc26e7e36ccf93adba00a42dda6ee5bf46e6"
+        },
+        {
+          "local_file": "work/practical-live-packing-en-fixed-20261003/tool-result.json",
+          "sha256": "b98dca92ab25d222ed4d2308cc870cb0c0860c9be876f37fd222ac40c15fdda5"
+        },
+        {
+          "local_file": "work/practical-live-packing-en-fixed-20261003/independent-audit.json",
+          "sha256": "9f4a3b406f0a8a854f2f40ff0856f55af285d547e183cb26ddecbacb8c058cf5"
+        },
+        {
+          "local_file": "work/practical-live-packing-en-fixed-20261003/independent-prose-review.json",
+          "sha256": "8c8144f279f2344a5077a9c2eb60f322aa47855cbf193c8fe57ffcb47d04f071"
+        }
+      ]
+    }
+  ],
+  "observed_failures": [
+    "The first Chinese reply correctly reported the calculation but incorrectly said no code was run. The prompt now distinguishes fixed tools from arbitrary user code; the original reply is preserved.",
+    "The first English task completed its numerical work but its final reply was replaced by the no-document-publication summary and marked partial. The discarded draft was not retained, so its exact triggering sentence is unknown.",
+    "Offline tests reproduced publication-claim false positives for local English negative noun phrases such as No files were modified. Scoped negation handling was corrected while positive claims remain blocked without receipts.",
+    "The repaired English workflow retained a correct core calculation summary, but called ten individual boxes ten box types and incompletely described the tools used. Full prose fidelity is not verified; the original reply is preserved and the UI identifies model interpretation separately from tool results."
+  ],
+  "audit_boundary": [
+    "Model events identify provider response model and provider-reported usage, not independent billing.",
+    "Raw model tool arguments are not stored. Strict index-only tool schema, sole selected source and complete source/hash result bind this calculation.",
+    "A rejected publication claim now retains its reviewed model draft as explicitly untrusted audit material; this never confirms a saved file or grants authorization.",
+    "Synthetic packing still uses five containers after two candidates; no improvement or global optimality is claimed.",
+    "One failed box structure check and ten detailed-design items remain unresolved; geometric fit is not shipping release.",
+    "Real project, second computer, field microphone, complex real Office and actual Jev calibration remain unaccepted."
+  ],
+  "targeted_validation": {
+    "rust": {
+      "passed": 33,
+      "total": 33,
+      "groups": {
+        "publication_unit": 5,
+        "document_gates": 18,
+        "packing_gates": 10
+      },
+      "evidence": [
+        {
+          "local_file": "work/practical-live-packing-en-20261003/publication-tests-final.log",
+          "sha256": "beef62aad5bc96ed10c31e425280f2d01421352ef67713d1a404e397d229bcc9"
+        },
+        {
+          "local_file": "work/practical-live-packing-en-20261003/publication-integration-tests-final.log",
+          "sha256": "0b07503ac1f25e76bf4eeccdddd926a28c3441bb50ae08f1744a0346e09db477"
+        },
+        {
+          "local_file": "work/practical-live-packing-en-20261003/rust-guard-build-final.log",
+          "sha256": "8568deb3ba4ae6bdcf04869d3d2619db39c69a248aa46c30ef138e3d2e9a7b83"
+        }
+      ]
+    },
+    "ui": {
+      "passed": 72,
+      "total": 72,
+      "groups": {
+        "agent_ui": 68,
+        "i18n": 4
+      },
+      "evidence": {
+        "local_file": "work/reply-provenance-ui-tests.log",
+        "sha256": "9d96a028f5a58e7428fee72a78c62fbdee0aacb5f430d8311f4e07cd571a9d56"
+      }
+    },
+    "browser": {
+      "saved_model_turn": "cdcf5dc1404142bb889167a6de53f061",
+      "verified": [
+        "Chinese and English AI interpretation label",
+        "Original saved reply preserved",
+        "Completed model history restored",
+        "Tool result cards remain separate"
+      ],
+      "screenshots": [
+        {
+          "local_file": "deliverables/practical-workbench-20261003/live-english-model-result.png",
+          "sha256": "262ec9298eea5c8fdce17be3e0edcf47c30a4149a170f1ee9b8ea18eaee7c2bc"
+        },
+        {
+          "local_file": "deliverables/practical-workbench-20261003/partial-task-status.png",
+          "sha256": "78a2d0d62305ffc47169e69c9840f7845bd0447a2f94573cbdfce2f01d5fd70c"
+        }
+      ]
+    }
+  }
+}

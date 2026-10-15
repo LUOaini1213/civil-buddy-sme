@@ -1,11 +1,32 @@
-# Lightsail: run the full workbench and the packing engine behind one HTTPS site
+# Archived: legacy Lightsail split-service deployment
 
-Runbook for a Lightsail instance that already serves the Rust workbench behind Caddy (HTTPS, access token).
+This runbook describes an older Python-primary deployment and is retained for maintenance of that specific setup.
+It is **not the current SME workbench deployment path**. The health flags, unauthenticated legacy packing bridge,
+Python main entry point and service definitions below do not describe the unified Rust Agent host.
+
+For the current product, follow [Rust unified workbench](civil-buddy/unified-workbench.md) and
+[启动、交接与验收](civil-buddy/release-handoff.md). The existing `scripts/start_unified_workbench.py` launcher runs
+the Rust host as the product entry and a fixed Python domain service on loopback. That internal service has a
+separate random token and receives no model-provider keys.
+
+Use the launcher's named instance options `--user-id`, `--workspace` and `--token-file` together for a private job.
+Each person needs a separate process, non-overlapping workspace and state directory, login token and port. Keep the
+token file outside the workspace. This is one user per instance; it is not a shared-process multi-user platform.
+The linked handoff guide covers login, exact-path state ownership, backup and remaining acceptance work.
+
+For an independently configured HTTPS reverse proxy, the current launcher accepts `--public-origin` to bind the
+expected HTTPS origin. Expose only the Rust entry; keep the internal Python service private. Do not reuse the
+Python-primary Caddy routes below for a unified named instance. This documentation update does not establish that
+any cloud deployment or second-machine acceptance has been completed.
+
+## Historical setup retained below
+
+The following original runbook targeted a Lightsail instance serving the legacy Rust workbench behind Caddy (HTTPS, access token).
 It adds the two Python services that carry the rest of the product, both on loopback only, and puts them behind
 the same Caddy site. About 20 minutes. Commands assume Ubuntu 24.04, the checkout at `/opt/civil-buddy/app` with
 its virtualenv at `/opt/civil-buddy/app/.venv`, and the service user `ubuntu`; adjust the paths to your instance.
 
-> 中文摘要：服务器上现在跑的是 Rust 版工作台，它的 `/api/health` 里 `packing` 为 false（装箱引擎没接上），
+> 历史方案摘要（不适用于当前统一版）：当时服务器跑的是旧 Rust 版工作台，它的 `/api/health` 里 `packing` 为 false（装箱引擎没接上），
 > `task_routing`、`word_export`、`task_memory`、`expert_contracts`、`local_rag`、`semantic_summary` 在 Rust 版里是写死为关的
 > （`workbench/src/api.rs` 的 `health()`），这些功能只在 Python 版工作台里有。
 > 下面三步：① 启动 Python 装箱网关（127.0.0.1:8000）并让 Rust 工作台连上它；② 启动 Python 工作台（127.0.0.1:8765）；
@@ -14,7 +35,7 @@ its virtualenv at `/opt/civil-buddy/app/.venv`, and the service user `ubuntu`; a
 
 ## Why
 
-`GET /api/health` on the current instance reports:
+`GET /api/health` on that historical instance reported:
 
 - `capabilities.packing = false` and `packing_agent.http.up = false`: the Python packing gateway (`gateway.app`) is not running,
   so the tender <-> packing link and `/demo` are unavailable (404).

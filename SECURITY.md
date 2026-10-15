@@ -40,14 +40,19 @@ v0.7.0 is the submitted competition version; `main` holds post-submission previe
    waiting for approval), or in the desktop dialog. The Python surfaces never read the task for approval: a message
    approves only when the whole of it, trimmed, is the sentence (`civil_config.confirms_in_message`), so the sentence
    quoted from a tender, a panel list or a file, deferred, conditional, retracted or simply added to a request
-   approves nothing on the gateway, the terminal and the desktop app; neither does a copy in a model reply. The Rust
-   workbench still takes it as a whole line of the message (see Known open items). A boolean such as `confirm_ok` or
-   `p0_confirmed` is refused (HTTP 422 on the gateway and the Rust workbench). Every approval covers that turn only:
+   approves nothing on the gateway, the terminal and the desktop app; neither does a copy in a model reply. The unified
+   Rust Agent likewise accepts only its dedicated current-turn field or the entire trimmed current message, never a
+   line or sentence inside pasted material. A boolean such as `confirm_ok` or
+   `p0_confirmed` cannot grant approval. Every approval covers that turn only:
    it is not remembered for the next turn, a new thread, a resumed thread or a restored session.
-   `civil exec --confirm` is the local operator's own switch and takes no sentence. The sentence is asked for only
-   when a high-risk post is selected or loaded. In the Rust workbench's default automatic post selection the model
-   decides whether to load a post; if it loads none, a copy can be written without the sentence. Writes are always
-   new copies, and a copy is written only after the source was read and the identical change was previewed.
+   `civil exec --confirm` is the local operator's own switch and takes no sentence. Legacy surfaces ask for the sentence
+   when a high-risk post is selected or loaded. In the unified Rust Agent, a person must explicitly select the post
+   before any document copy can be saved. Automatic selection still permits reading and previewing; loading a low-risk
+   SOP or asserting that the task is safe cannot supply the missing human classification. A high-risk post loaded by the main or a read-only child agent, or
+   a requested structural/section calculation raises the turn's write risk; a later low-risk SOP cannot clear it.
+   Known risk is checked for the whole tool batch, so putting an apply before the risky operation cannot bypass it. Explicitly
+   selected low-risk posts keep ordinary drafts available without a confirmation sentence. Writes are always new copies,
+   and a copy is written only after the source was read and the identical change was previewed.
 4. **Token-gated server.** `packing_assistant/access_guard.py` sits in front of the gateway and the workbench,
    WebSockets included. With `CIVIL_TOKEN` set, every request needs the token (loopback too; compared with
    `hmac.compare_digest`). With no token, only a genuinely local request passes, and `demo/serve.py`, a `uvicorn --host`
@@ -114,12 +119,10 @@ snapshot. Remaining boundaries and their current scope are listed here:
   a scripted model; a live model reading a planted instruction could still steer which menu tool runs on which listed
   file, and what a chat reply says before the guards. The URL fetch resolves DNS twice.
 - **Chat.** In the workbench, question-only turns call the model whenever a key is set, whatever `agent_mode` says.
-- **Sign-off inside pasted text (Rust workbench).** The Rust workbench still takes a sign-off sentence that forms a
-  whole line or sentence of the message as approval. The Python surfaces no longer do (only the whole message, or the
-  confirmation field). Until the Rust side matches, a person should not paste unreviewed text into a high-risk turn.
-- **Automatic post selection.** The typed confirmation applies only when a high-risk post is selected or loaded. In
-  the Rust workbench's default automatic mode the model decides whether to load a post, so a model that loads none
-  can write a copy of a high-risk document without the sentence. The copy is new and the original is unchanged.
+- **Human post classification.** The unified Agent requires a person to select the relevant post before saving copies.
+  This is a workflow classification, not proof that every source or proposed edit is correctly classified. The host
+  escalates known high-risk SOPs and structural/section calculations; it does not comprehensively classify the
+  engineering meaning of arbitrary prose or certify professional competence.
 
 ## Unified named instances (2026-09-27)
 
@@ -134,8 +137,9 @@ files under the same Windows/Linux account. Use separate OS accounts or hosts wh
 The internal Python service has a separate random Bearer token, a route allowlist, no provider keys and no model
 loop. Named mode disables legacy local-path import, URL import and studio editing. Rust Agent events, actor IDs,
 usage and interrupted/cancelled states are persisted. Confirmation is specific to the current turn and is
-not inherited from old turns, restored sessions or a boolean field; it is asked for only when a high-risk post is
-selected or loaded, and pasted text can still carry it (both listed under Known open items). The legacy limitations
+not inherited from old turns, restored sessions, a boolean field or a line inside pasted text. Document-copy writes
+require an explicit human post selection, and high-risk posts or engineering calculations additionally require the
+current-turn acknowledgement. Ordinary questions and previews remain available without it. The legacy limitations
 above still apply to separately launched Python/gateway entry points unless their own implementation says otherwise;
 they must not be used as an unprotected alternate entry into a named instance.
 

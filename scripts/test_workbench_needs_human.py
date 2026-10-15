@@ -298,10 +298,12 @@ def _fixture_lists():
         yield f"sim/{path.parent.name}", json.loads(path.read_text(encoding="utf-8")).get("materials") or []
 
 
-def test_only_the_two_missing_dimension_fixtures_are_stopped(show: bool = False) -> None:
-    """2026-09-21 实测 60 张表 / 4129 行：缺重量 0 行、数量不可用 0 行；缺尺寸 5 行，都在本来就被
-    materials_incomplete 拦下的两张表里。归一化前后件数逐行相同（没有一行因为改读法而变）。"""
-    stopped, rows, changed = {}, 0, 0
+def test_numeric_history_and_current_transport_policy(show: bool = False) -> None:
+    """2026-09-21 历史记录：60 张表 / 4129 行，只有两张缺尺寸而停止，数量归一化不变。
+
+    2026-09-30 增加运输约束后，两张原有模拟表另因明确禁翻/禁叠停止；不改原表，
+    不把这个新政策结果回写成旧运行的成绩，也不将其归因于 fragile 一词。"""
+    stopped, rows, changed, transport_evidence = {}, 0, 0, {}
     for name, mats in _fixture_lists():
         rows += len(mats)
         normalised = _normalize_llm_materials([dict(m) for m in mats])
@@ -311,8 +313,17 @@ def test_only_the_two_missing_dimension_fixtures_are_stopped(show: bool = False)
         blocking = rows_blocking_plan(normalised)
         if blocking:
             stopped[name] = sorted({r["reason"] for r in blocking})
-    assert stopped == {"generic/G7_missing_dims": ["missing_dimensions"],
-                       "sim/ns_missing_dims_mix": ["missing_dimensions"]}, stopped
+            for requirement in blocking:
+                if requirement["reason"] == "unsupported_transport_requirements":
+                    transport_evidence[requirement["id"]] = requirement["requirements"]
+    historical_numeric_stops = {"generic/G7_missing_dims": ["missing_dimensions"],
+                                "sim/ns_missing_dims_mix": ["missing_dimensions"]}
+    current_transport_stops = {"sim/ns_fragile_process": ["unsupported_transport_requirements"],
+                              "sim/ns_mixed_industry_bundle": ["unsupported_transport_requirements"]}
+    assert stopped == historical_numeric_stops | current_transport_stops, stopped
+    assert transport_evidence["G1"]["this_side_up"] is True, transport_evidence
+    assert transport_evidence["G2"]["stackable"] is False, transport_evidence
+    assert transport_evidence["M4"]["no_stack"] is True, transport_evidence
     assert changed == 0, changed
     if show:
         print(f"  lists={sum(1 for _ in _fixture_lists())} rows={rows} stopped={stopped} quantities_changed={changed}")
@@ -336,8 +347,8 @@ def main() -> int:
     for test in tests:
         test()
         print(f"[OK] {test.__name__}")
-    test_only_the_two_missing_dimension_fixtures_are_stopped(show)
-    print("[OK] test_only_the_two_missing_dimension_fixtures_are_stopped")
+    test_numeric_history_and_current_transport_policy(show)
+    print("[OK] test_numeric_history_and_current_transport_policy")
     print("WORKBENCH NEEDS HUMAN PASS")
     return 0
 

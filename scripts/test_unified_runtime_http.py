@@ -13,6 +13,7 @@ import argparse
 from collections import Counter
 import errno
 from hashlib import sha256
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
 import os
@@ -238,6 +239,80 @@ def legacy_session_handoff(first, first_cookie, second, second_cookie, directory
     return result
 
 
+def agent_history_recovery(instance, cookie, documents):
+    """Discover an existing document turn using only GETs; never submit or replay it."""
+    workspace, session, turn_id = (documents[key] for key in ("workspace_id", "session_id", "turn_id"))
+    scope = {"workspace": workspace, "session_id": session}
+    endpoint = "/api/agent/turns/" + turn_id + "?" + urllib.parse.urlencode(scope)
+    before = json_request(instance.base, endpoint, cookie=cookie)["turn"]
+    require(before == documents["turn"] and before["status"] == "completed",
+            "Saved document task changed or is no longer completed")
+
+    def pages(path, field, query):
+        rows, cursors, cursor = [], set(), None
+        # This owned fixture has one document session and, after its existing
+        # crash test, one interrupted session. A one-row page exercises the
+        # cursor without generating additional tasks or model requests.
+        for page_number in range(1, 9):
+            params = {**query, "limit": 1}
+            if cursor:
+                params["cursor"] = cursor
+            page = json_request(instance.base, path + "?" + urllib.parse.urlencode(params), cookie=cookie)
+            require(page.get("workspace") == workspace, "History page crossed a workspace boundary")
+            if field == "turns":
+                require(page.get("session_id") == session, "History page crossed a session boundary")
+            require(isinstance(page.get(field), list) and len(page[field]) <= 1,
+                    "History page ignored its requested limit or returned an invalid list")
+            require("next_cursor" in page, "History response omitted its pagination contract")
+            rows.extend(page[field])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                return rows, page_number
+            require(isinstance(cursor, str) and 0 < len(cursor) <= 2048 and cursor not in cursors,
+                    "History cursor is invalid or made no progress")
+            cursors.add(cursor)
+        raise AssertionError("Synthetic history discovery exceeded its bounded page count")
+
+    sessions, session_pages = pages("/api/agent/sessions", "sessions", {"workspace": workspace})
+    summary_fields = {"session_id", "latest_turn_id", "updated_at", "status", "turn_count"}
+    require(all(isinstance(row, dict) and set(row) == summary_fields for row in sessions),
+            "Session summary leaked fields beyond discovery metadata")
+    require(len({row["session_id"] for row in sessions}) == len(sessions), "Session pages repeated a session")
+    matches = [row for row in sessions if row["session_id"] == session]
+    require(len(matches) == 1 and matches[0]["latest_turn_id"] == turn_id
+            and matches[0]["status"] == "completed" and matches[0]["turn_count"] == 1,
+            "Completed API-created document session was not discoverable")
+    turns, turn_pages = pages("/api/agent/turns", "turns", scope)
+    require(len(turns) == 1 and turns[0] == before,
+            "Discovered session did not recover its unchanged document task and result")
+
+    expected = {row["id"]: row for row in documents["artifacts"]}
+    artifacts = before["result"].get("artifacts", [])
+    require(expected and len(artifacts) == len(expected) and {row["id"] for row in artifacts} == set(expected),
+            "Recovered task lost registered document artifacts")
+    hashes = {}
+    for artifact in artifacts:
+        parsed = urllib.parse.urlsplit(artifact["url"])
+        require(not parsed.scheme and not parsed.netloc and not parsed.fragment
+                and parsed.path == "/api/agent/artifacts/" + artifact["id"]
+                and urllib.parse.parse_qs(parsed.query) == {"workspace": [workspace]},
+                "Recovered artifact URL escaped its instance or workspace")
+        status, _, content = request(instance.base, artifact["url"], cookie=cookie)
+        require(status == 200, f"Recovered artifact download returned HTTP {status}")
+        digest = sha256(content).hexdigest()
+        require(digest == artifact["output_sha256"] == expected[artifact["id"]]["output_sha256"]
+                and content == Path(expected[artifact["id"]]["download_path"]).read_bytes(),
+                "Recovered artifact differs from the original validated download")
+        hashes[artifact["id"]] = digest
+    after = json_request(instance.base, endpoint, cookie=cookie)["turn"]
+    require(after == before, "History discovery or download changed the task, events, result or usage")
+    return {"passed": True, "scope": "existing Rust Agent document task; GET discovery and downloads only",
+            "workspace_id": workspace, "session_id": session, "turn_id": turn_id,
+            "session_pages": session_pages, "turn_pages": turn_pages, "page_limit": 1,
+            "summary_metadata_only": True, "task_and_usage_unchanged": True,
+            "last_seq": after["last_seq"], "artifact_hashes": hashes, "artifacts_byte_identical": True}
+
+
 class Instance:
     def __init__(self, binary, directory, state_root, workspace, user, model_port):
         self.binary, self.directory, self.state_root, self.workspace = binary, directory, state_root, workspace
@@ -318,6 +393,86 @@ class Instance:
         return cookie
 
 
+def running_crash_recovery(instance):
+    """Kill only this test's owned Windows process tree while a model request is active."""
+    if os.name != "nt":
+        return {"status": "not_exercised", "reason": "Windows process-tree crash acceptance"}
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    class PendingModel(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 4_000_000:
+                self.send_error(413)
+                return
+            self.rfile.read(length)
+            calls.append(self.path)
+            entered.set()
+            release.wait(60)
+            # The owned client has been killed; this request must never produce a tool call.
+            self.close_connection = True
+
+    pending = ThreadingHTTPServer(("127.0.0.1", 0), PendingModel)
+    worker = threading.Thread(target=pending.serve_forever, daemon=True)
+    worker.start()
+    old_model_port = instance.model_port
+    originals = {name: sha256((instance.workspace / name).read_bytes()).hexdigest()
+                 for name in document_acceptance.FILES}
+    outputs = {str(path.relative_to(instance.workspace)): sha256(path.read_bytes()).hexdigest()
+               for path in (instance.workspace / ".civil-buddy/out").rglob("*") if path.is_file()}
+    try:
+        instance.stop()
+        instance.model_port = pending.server_port
+        instance.start()
+        cookie = instance.login()
+        workspace = json_request(instance.base, "/api/agent/workspaces", {"path": str(instance.workspace)}, cookie=cookie)["workspace"]["id"]
+        session = "crash-" + uuid4().hex
+        started = json_request(instance.base, "/api/agent/turns", {
+            "workspace": workspace, "session_id": session, "message": "Synthetic crash acceptance. Read the selected source; do not write files.",
+            "mode": "model", "sandbox": "read-only", "files": ["requirements.pdf"], "locale": "en"
+        }, cookie=cookie, expected=202)
+        query = "?" + urllib.parse.urlencode({"workspace": workspace, "session_id": session})
+        endpoint = "/api/agent/turns/" + started["turn_id"]
+        require(entered.wait(20), "Synthetic model request was not in flight before crash")
+        before = json_request(instance.base, endpoint + query, cookie=cookie)["turn"]
+        require(before["status"] == "running", "Crash acceptance did not interrupt an active task")
+        killed = subprocess.run(["taskkill", "/PID", str(instance.process.pid), "/T", "/F"],
+                                capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=20)
+        require(killed.returncode == 0, "Could not terminate the owned test process tree")
+        instance.process.wait(timeout=10)
+        instance.log.close()
+        instance.process = None
+        release.set()
+        require(wait_listener_closed(instance.port), "Rust listener survived forced termination")
+        require(wait_listener_closed(instance.domain_port), "Domain listener survived forced termination")
+        instance.start()
+        require(request(instance.base, "/api/agent/capabilities", cookie=cookie)[0] == 401, "Crash restart retained a login cookie")
+        cookie = instance.login()
+        recovered = json_request(instance.base, endpoint + query, cookie=cookie)["turn"]
+        events = json_request(instance.base, endpoint + "/events" + query, cookie=cookie)["events"]
+        require(recovered["status"] == "interrupted" and recovered["result"]["reason"] == "runtime_restart",
+                "Active turn did not recover as interrupted")
+        require(sum(event.get("kind") == "turn.interrupted" for event in events) == 1, "Recovery event was missing or duplicated")
+        require(len(calls) == 1, "Restart silently replayed a model request")
+        after = {name: sha256((instance.workspace / name).read_bytes()).hexdigest() for name in originals}
+        after_outputs = {str(path.relative_to(instance.workspace)): sha256(path.read_bytes()).hexdigest()
+                         for path in (instance.workspace / ".civil-buddy/out").rglob("*") if path.is_file()}
+        require(after == originals and after_outputs == outputs, "Crash/restart changed originals or published copies")
+        return {"status": "passed", "synthetic": True, "turn_id": started["turn_id"], "before": "running", "after": "interrupted",
+                "model_calls": len(calls), "automatic_replay": False, "original_hashes_unchanged": True,
+                "published_copies_unchanged": True, "scope": "Windows forced termination during a pending read-only model request; not a power-loss or mid-write test"}
+    finally:
+        release.set()
+        instance.model_port = old_model_port
+        pending.shutdown()
+        pending.server_close()
+        worker.join(timeout=3)
+
+
 def run(binary, output):
     output.mkdir(parents=True, exist_ok=False)
     report = {"passed": False, "synthetic": True, "cross_computer": False, "real_provider_calls": False,
@@ -370,16 +525,8 @@ def run(binary, output):
         report["legacy_session_bundle"] = legacy_session_handoff(first, cookie, second, second_cookie, output / "legacy-bundle")
         report["checks"]["legacy_session_bundle_handoff"] = True
         second.stop()
-        original_http = document_acceptance.http
-        def authenticated_http(base, path, body=None, *, binary=False, timeout=30):
-            status, _, data = request(base, path, body, token=first.token, timeout=timeout)
-            require(200 <= status < 300, f"Document acceptance {path}: HTTP {status}: {data[:300]!r}")
-            return data if binary else json.loads(data)
-        document_acceptance.http = authenticated_http
-        try:
-            documents = document_acceptance.acceptance(first.base, first.workspace, output / "documents", timeout=240)
-        finally:
-            document_acceptance.http = original_http
+        documents = document_acceptance.acceptance(first.base, first.workspace, output / "documents",
+                                                  timeout=240, token_file=first.token_file)
         require(documents["passed"], f"Scripted document acceptance failed: {documents.get('error') or documents.get('validation')}")
         events = [json.loads(line) for line in (output / "documents/events.jsonl").read_text(encoding="utf-8").splitlines()]
         authorizations = [e["data"] for e in events if e.get("kind", e.get("event")) == "authorization"]
@@ -390,6 +537,18 @@ def run(binary, output):
         report["checks"]["document_agent_originals_copies_actor_usage"] = True
         report["document_report"] = str(output / "documents/report.json")
         report["usage"] = usage
+        report["agent_history_discovery"] = agent_history_recovery(first, cookie, documents)
+        report["checks"]["agent_history_discovery_and_artifact_downloads"] = True
+        report["running_crash_recovery"] = running_crash_recovery(first)
+        if report["running_crash_recovery"].get("status") == "passed":
+            cookie = first.login()
+            report["agent_history_after_restart"] = agent_history_recovery(first, cookie, documents)
+            require(report["agent_history_after_restart"]["session_pages"] >= 2,
+                    "Post-restart discovery did not exercise the next session page")
+            report["checks"]["agent_history_after_restart_and_artifact_downloads"] = True
+        else:
+            report["agent_history_after_restart"] = {"status": "not_exercised",
+                                                     "reason": "Existing Windows crash/restart phase was not exercised"}
         first.stop()
         report["checks"]["both_processes_stopped"] = True
         report["passed"] = True

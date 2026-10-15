@@ -6,11 +6,30 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { JSDOM } = require("jsdom");
-const { createAgentWorkbench, artifactUrl } = require("../demo/static/agent.js");
+const { createAgentWorkbench, artifactUrl, planningHandoff } = require("../demo/static/agent.js");
+const { renderAgentMarkdown } = require("../demo/static/modules/agent-markdown.js");
+const markedSource = fs.readFileSync(path.join(__dirname, "../demo/static/vendor/marked.min.js"), "utf8");
 const html = fs.readFileSync(path.join(__dirname, "../demo/static/agent.html"), "utf8");
+
+test("Saved plan link parser binds one exact revision/hash and rejects ambiguous or fabricated paths", () => {
+  const id = "d".repeat(32), hash = "a".repeat(64);
+  assert.deepEqual(planningHandoff(`?planning_project_id=${id}&planning_revision=3&planning_inputs_sha256=${hash}`), {kind:"saved_planning",project_id:id,revision:3,inputs_sha256:hash});
+  assert.equal(planningHandoff("?workspace=opaque"), null);
+  for (const query of [`?planning_project_id=${id}`, `?planning_project_id=${id}&planning_project_id=${id}&planning_revision=3&planning_inputs_sha256=${hash}`,
+    `?planning_project_id=../private&planning_revision=3&planning_inputs_sha256=${hash}`, `?planning_project_id=${id}&planning_revision=9007199254740992&planning_inputs_sha256=${hash}`]) assert.throws(() => planningHandoff(query));
+});
 const caps = { available: true, models: { configured: false }, modes: ["steps", "model"], sandbox: ["read-only", "workspace-write"],
   features: { cancel: true, context: true, subagents: true, documents: true }, sandbox_controls: { policy: true, os_enforced: false } };
 const response = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+const fileReport = (files, workspace = "workspace-1", extra = {}) => ({ schema_version: 1, workspace, purpose: "agent",
+  files: files.map(file => ({ name: file.path.split("/").at(-1), size: 0, ...file })), returned_count: files.length,
+  complete: true, limits: { max_files: 500, max_directory_depth: 5, max_scanned_entries: 10000 },
+  file_limit_reached: false, depth_limit_reached: false, scan_limit_reached: false, incomplete_reasons: [], ...extra });
+const receivedSource = (revision = 1, hash = "a".repeat(64)) => ({
+  path: `.civil-buddy/out/handoffs/${"b".repeat(32)}/${"d".repeat(32)}.md`, name: "工程原文<img src=x onerror=bad()>.md", size: 23,
+  origin: { kind: "project_handoff", import_id: "b".repeat(32), document_id: "d".repeat(32), revision, registered_sha256: hash }
+});
+const partialInventory = (files) => fileReport(files, "workspace-1", { complete: false, depth_limit_reached: true, incomplete_reasons: ["depth_limit"] });
 const storage = () => { const values = new Map(); return { getItem: (key) => values.get(key) || null, setItem: (key, value) => values.set(key, String(value)), values }; };
 function installLanguage(h, locale = "zh-CN") {
   h.win.localStorage.setItem("cb_locale_v1", locale);
@@ -18,9 +37,225 @@ function installLanguage(h, locale = "zh-CN") {
   h.doc.dispatchEvent(new h.win.Event("DOMContentLoaded"));
 }
 const event = (seq, kind, data = {}) => ({ seq, kind, data });
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+async function waitFor(predicate) {
+  const deadline = Date.now() + 2000;
+  while (!predicate() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(predicate(), "asynchronous browser operation reached its observable boundary");
+}
+const deliveryArtifact = (format = "xlsx") => ({ id: "deliverable-1", name: `原始工程副本.${format}`,
+  url: "/api/agent/artifacts/deliverable-1?workspace=workspace-1", source: `原始工程资料.${format}`,
+  source_sha256: "a".repeat(64), output_sha256: "b".repeat(64), provenance: "model_proposed" });
+function readinessResult(artifact, format = "xlsx", sourceStatus = "current") {
+  return { artifact_id: artifact.id, source: `C:/engineering/.civil-buddy/out/${artifact.name}`,
+    source_sha256: artifact.output_sha256, format, original_source_status: sourceStatus,
+    inspected_by: "reviewer-account", inspected_at: 1790720000,
+    validation: { structure: "pass", source_hash: "pass", render: "not_checked", engineering_facts: "not_checked" },
+    readiness: { schema_version: 1, status: "review_required", automatic_acceptance: false,
+      checks: [{ id: "source_hash", status: "pass" }, { id: "structure", status: "pass" },
+        { id: "active_content", status: "pass" }, { id: "layout", status: "review_required" },
+        { id: "engineering_review", status: "review_required" }],
+      format_details: { formula_count: 2, formula_cached_count: 1, formula_missing_cache_count: 1,
+        formula_invalid_cache_count: 0, error_cell_count: 0, cached_values_status: "stored_unverified", recalculation: "not_performed" },
+      preview: { kind: format === "pdf" ? "native_pdf" : "unavailable", eligible: format === "pdf", rendered: false } } };
+}
+function deliveryRoute(artifact, route) {
+  let turns = 0;
+  return (url, init) => {
+    const custom = route?.(url, init); if (custom !== undefined) return custom;
+    if (url === "/api/agent/turns" && init) return response({ turn_id: `delivery-turn-${++turns}`, session_id: JSON.parse(init.body).session_id });
+    if (/\/delivery-turn-\d+\/events\?/.test(url)) return response({ events: [event(1, "artifact", artifact)],
+      turn: { status: "completed", result: { reply: "已保留来源文字", artifacts: [artifact] } } });
+  };
+}
+async function showDelivery(h) { await h.ready(); h.$("agentMessage").value = "查看副本"; await h.app.send(); }
+const checkButton = (h) => h.doc.querySelector('[data-action="inspect-readiness"]');
+const previewLink = (h) => h.doc.querySelector('[data-action="preview-pdf"]');
+const excelButton = (h) => h.doc.querySelector('[data-action="excel-recalculate"]');
+const excelAck = (h) => h.doc.querySelector('[data-action="excel-acknowledgement"]');
+const excelEngine = { enabled: true, available: true, reason: null, mode: "windows-desktop" };
+const riskPhrase = "我明白，将由持证人员签认";
+function excelJob(artifact = deliveryArtifact(), overrides = {}) {
+  return { id: "excel-job-1", parent_artifact_id: artifact.id, input_sha256: artifact.output_sha256,
+    status: "running", stage: "calculation", created_at: "2026-10-10T08:00:00Z", updated_at: "2026-10-10T08:00:01Z",
+    error: null, artifact: null, receipt: null, ...overrides };
+}
+function completedExcelJob(artifact = deliveryArtifact()) {
+  const child = { ...artifact, id: "recalculated-copy", name: "重算新副本.xlsx", output_sha256: "c".repeat(64),
+    parent_artifact_id: artifact.id, parent_output_sha256: artifact.output_sha256,
+    provenance: "excel_recalculated", excel_job_id: "excel-job-1",
+    url: "/api/agent/artifacts/recalculated-copy?workspace=workspace-1" };
+  return excelJob(artifact, { status: "completed", stage: "completed", artifact: child,
+    receipt: { schema_version: 1, engine: "Microsoft Excel", engine_version: "16.0", engine_build: "19127",
+      job_id: "excel-job-1",
+      calculation_version: 191029,
+      calculation_method: "CalculateFullRebuild", calculation_state: "done", source_sha256: artifact.output_sha256,
+      output_sha256: child.output_sha256, owned_instance: true, workbook_count: 1, cleanup_verified: true,
+      formula_results: [{ sheet: "Sheet1", cell: "B1", type: "number", value: 42 }, { sheet: "Sheet1", cell: "B2", type: "boolean", value: false }],
+      verification: { status: "pass", semantic_preserved: true, persisted_formula_caches_verified: true, formula_count: 2 } } });
+}
+function excelRoute(artifact, route, engine = excelEngine) {
+  const capabilities = { ...caps, excel_engine: engine };
+  return deliveryRoute(artifact, (url, init) => {
+    const custom = route?.(url, init); if (custom !== undefined) return custom;
+    if (url === "/api/agent/capabilities") return response(capabilities);
+    if (url === "/api/agent/workspaces") return response({ workspace: { id: "workspace-1", root: "C:/engineering" }, capabilities });
+    if (url.startsWith("/api/agent/excel-jobs?")) return response({ jobs: [], limit: 100, truncated: false });
+  });
+}
+function typeExcelAck(h, value = riskPhrase) { const input = excelAck(h); input.value = value; input.dispatchEvent(new h.win.Event("input")); }
+
+test("Excel UI: opt-in and per-operation acknowledgement gate preserve parent download and readiness errors", async (t) => {
+  const artifact = deliveryArtifact(); let writes = 0;
+  const h = harness(excelRoute(artifact, (url) => {
+    if (url.includes("/readiness?")) return response({ detail: "parent check unavailable" }, 503);
+    if (url.includes("/excel-recalculate?")) { writes++; return response({ job: excelJob(artifact) }, 202); }
+  }, { ...excelEngine, enabled: false, available: false })); t.after(h.close);
+  await showDelivery(h);
+  assert.equal(excelButton(h).disabled, true); assert.equal(excelAck(h).disabled, true);
+  assert.match(h.$("agentArtifacts").textContent, /尚未启用/);
+  assert.equal(writes, 0); assert.equal(h.calls.filter(call => call.init?.method === "POST" && call.url.includes("excel")).length, 0);
+  h.app.state.capabilities.excel_engine = { ...excelEngine };
+  selectValue(h, "agentSandbox", "workspace-write");
+  h.$("agentRiskConfirmation").value = riskPhrase; h.$("agentMessage").value = riskPhrase;
+  assert.equal(excelButton(h).disabled, true, "chat and task acknowledgement cannot authorize Excel");
+  typeExcelAck(h, " " + riskPhrase); assert.equal(excelButton(h).disabled, true);
+  typeExcelAck(h); assert.equal(excelButton(h).disabled, false);
+  checkButton(h).click(); await settle();
+  assert.match(h.$("agentArtifacts").textContent, /parent check unavailable/);
+  assert.equal(excelAck(h).value, riskPhrase, "readiness repaint preserves this form's typed acknowledgement");
+  await h.app.recalculateArtifact(artifact.id);
+  assert.equal(writes, 1); assert.equal(excelAck(h).value, ""); assert.equal(excelButton(h).disabled, true);
+  assert.match(h.$("agentArtifacts").textContent, /parent check unavailable/);
+  assert.ok(h.$("agentArtifacts").querySelector('a[href*="/artifacts/deliverable-1?"]'));
+  const call = h.calls.find(call => call.url.includes("/excel-recalculate?"));
+  assert.equal(call.url, "/api/agent/artifacts/deliverable-1/excel-recalculate?workspace=workspace-1");
+  assert.deepEqual(Object.keys(call.body).sort(), ["expected_sha256", "idempotency_key", "risk_confirmation", "sandbox"]);
+  assert.equal(call.body.expected_sha256, artifact.output_sha256); assert.equal(call.body.risk_confirmation, riskPhrase); assert.equal(call.body.sandbox, "workspace-write");
+  assert.match(call.body.idempotency_key, /^[a-f0-9-]{36}$/i);
+  assert.doesNotMatch([...h.saved.values.values()].join(""), /我明白|excel-job/);
+});
+
+test("Excel UI: ambiguous POST retries keep their idempotency key but require fresh acknowledgement", async (t) => {
+  const artifact = deliveryArtifact(); let posts = 0;
+  const h = harness(excelRoute(artifact, (url) => {
+    if (url.includes("/excel-recalculate?")) { if (++posts === 1) throw new Error("connection lost after send"); return response({ job: excelJob(artifact) }, 202); }
+  })); t.after(h.close); await showDelivery(h); selectValue(h, "agentSandbox", "workspace-write");
+  typeExcelAck(h); await h.app.recalculateArtifact(artifact.id);
+  assert.match(h.$("agentArtifacts").textContent, /connection lost after send/);
+  assert.equal(excelAck(h).value, ""); await h.app.recalculateArtifact(artifact.id); assert.equal(posts, 1);
+  typeExcelAck(h); await h.app.recalculateArtifact(artifact.id);
+  const calls = h.calls.filter(call => call.url.includes("/excel-recalculate?"));
+  assert.equal(calls[0].body.idempotency_key, calls[1].body.idempotency_key);
+  selectValue(h, "agentSandbox", "read-only"); selectValue(h, "agentSandbox", "workspace-write");
+  assert.equal(excelAck(h).value, "");
+});
+
+test("Excel UI: persistent jobs recover on reload and remain scoped across sessions, with bound engine evidence", async (t) => {
+  const artifact = deliveryArtifact(); let job = excelJob(artifact);
+  const route = excelRoute(artifact, (url) => url.startsWith("/api/agent/excel-jobs?") ? response({ jobs: [job], limit: 100, truncated: false }) : undefined);
+  const h = harness(route); t.after(h.close); await h.ready();
+  assert.match(h.$("agentExcelJobs").textContent, /正在重算/); assert.equal(h.timers.size, 1);
+  assert.equal(h.calls.filter(call => call.url.includes("excel-recalculate")).length, 0);
+  await h.app.changeSession("", true); assert.match(h.$("agentExcelJobs").textContent, /正在重算/);
+  job = completedExcelJob(artifact); await h.tick();
+  assert.equal(h.timers.size, 0); assert.match(h.$("agentExcelJobs").textContent, /16.0.*19127/);
+  assert.match(h.$("agentExcelJobs").textContent, /已实际重算并核对/); assert.match(h.$("agentExcelJobs").textContent, /不代表专业签认/);
+  assert.ok(h.doc.querySelector('[data-action="download-excel-copy"]'));
+  assert.equal(h.doc.querySelector('[data-action="download-excel-copy"]').href, "http://localhost/api/agent/artifacts/recalculated-copy?workspace=workspace-1");
+  const reload = harness(route); t.after(reload.close); await reload.ready();
+  assert.match(reload.$("agentExcelJobs").textContent, /重算副本已保存/);
+  assert.equal(reload.calls.filter(call => call.init?.method === "POST" && call.url.includes("excel")).length, 0);
+  job.receipt.source_sha256 = "d".repeat(64); await reload.app.loadExcelJobs();
+  assert.match(reload.$("agentExcelJobs").textContent, /缺少可核对/);
+  assert.doesNotMatch(reload.$("agentExcelJobs").textContent.split("完整重算记录")[0], /已实际重算并核对/);
+});
+
+test("Excel UI: late records and POST results never cross workspace, and malformed downloads keep verified records", async (t) => {
+  const artifact = deliveryArtifact(); let delayed, mode = "normal";
+  const h = harness(excelRoute(artifact, (url, init) => {
+    if (url === "/api/agent/workspaces" && JSON.parse(init.body).path === "C:/second") return response({ workspace: { id: "workspace-2", root: "C:/second" }, capabilities: { ...caps, excel_engine: excelEngine } });
+    if (url.startsWith("/api/agent/excel-jobs?")) {
+      const workspace = new URL(url, "http://localhost").searchParams.get("workspace");
+      if (workspace === "workspace-2") return response({ jobs: [], limit: 100, truncated: false });
+      if (mode === "delay") return new Promise(resolve => { delayed = resolve; });
+      const job = completedExcelJob(artifact); if (mode === "invalid") job.artifact.url = "https://evil.invalid/download.xlsx";
+      return response({ jobs: [job], limit: 100, truncated: false });
+    }
+  })); t.after(h.close); await h.ready();
+  mode = "invalid"; await h.app.loadExcelJobs();
+  assert.match(h.$("agentExcelJobsStatus").textContent, /响应无法核对/);
+  assert.ok(h.doc.querySelector('[data-action="download-excel-copy"]'), "previous verified download survives failed refresh");
+  mode = "delay"; const old = h.app.loadExcelJobs(); await settle();
+  await h.app.openWorkspace("C:/second"); delayed(response({ jobs: [completedExcelJob(artifact)], limit: 100, truncated: false })); await old;
+  assert.equal(h.app.state.workspace.id, "workspace-2"); assert.equal(h.app.state.excelJobs.size, 0); assert.equal(h.doc.querySelector('[data-action="download-excel-copy"]'), null);
+});
+
+test("Excel UI: cancellation reports server state and bilingual repaint preserves filenames and fresh input", async (t) => {
+  const artifact = deliveryArtifact(); let job = null;
+  const h = harness(excelRoute(artifact, (url) => {
+    if (url.startsWith("/api/agent/excel-jobs?")) return response({ jobs: job ? [job] : [], limit: 100, truncated: false });
+    if (url.includes("/excel-recalculate?")) { job = excelJob(artifact); return response({ job }, 202); }
+    if (url.includes("/excel-job-1/cancel?")) { job = excelJob(artifact, { status: "cancelled", error: { code: "cancelled", message: "Stopped by user" } }); return response({ job }); }
+  })); t.after(h.close); installLanguage(h); await showDelivery(h); selectValue(h, "agentSandbox", "workspace-write"); typeExcelAck(h);
+  h.win.CBI18n.setLocale("en");
+  assert.equal(excelButton(h).textContent, "Recalculate formulas in a new copy"); assert.equal(excelAck(h).value, riskPhrase);
+  assert.match(h.$("agentArtifacts").textContent, /原始工程副本.xlsx/);
+  await h.app.recalculateArtifact(artifact.id); assert.match(h.$("agentExcelJobs").textContent, /Recalculating/);
+  await h.app.cancelExcelJob(job.id); assert.match(h.$("agentExcelJobs").textContent, /Recalculation stopped/);
+  assert.equal(h.doc.querySelector('[data-action="cancel-excel-job"]'), null); assert.equal(h.timers.size, 0);
+  assert.equal(excelAck(h).value, "");
+});
+
+test("Excel UI: late POST acceptance cannot add another project's job or consume its confirmation", async (t) => {
+  const artifact = deliveryArtifact(); let finish;
+  const h = harness(excelRoute(artifact, (url, init) => {
+    if (url.includes("/excel-recalculate?")) return new Promise(resolve => { finish = resolve; });
+    if (url === "/api/agent/workspaces" && JSON.parse(init.body).path === "C:/second") return response({ workspace: { id: "workspace-2", root: "C:/second" }, capabilities: { ...caps, excel_engine: excelEngine } });
+  })); t.after(h.close); await showDelivery(h); selectValue(h, "agentSandbox", "workspace-write"); typeExcelAck(h);
+  const posting = h.app.recalculateArtifact(artifact.id); await settle();
+  assert.equal(excelAck(h).value, ""); await h.app.openWorkspace("C:/second");
+  finish(response({ job: excelJob(artifact) }, 202)); await posting;
+  assert.equal(h.app.state.workspace.id, "workspace-2"); assert.equal(h.app.state.excelJobs.size, 0); assert.equal(h.app.state.excelActions.size, 0);
+  assert.doesNotMatch(h.$("agentExcelJobs").textContent, /excel-job-1/);
+});
+
+test("Excel UI: an older job-list snapshot cannot erase POST acceptance or undo terminal cancellation", async (t) => {
+  const artifact = deliveryArtifact(); let finish, delay = false, job = null;
+  const h = harness(excelRoute(artifact, (url) => {
+    if (url.startsWith("/api/agent/excel-jobs?")) return delay ? new Promise(resolve => { finish = resolve; }) : response({ jobs: job ? [job] : [], limit: 100, truncated: false });
+    if (url.includes("/excel-recalculate?")) { job = excelJob(artifact); return response({ job }, 202); }
+    if (url.includes("/excel-job-1/cancel?")) { job = excelJob(artifact, { status: "cancelled" }); return response({ job }); }
+  })); t.after(h.close); await showDelivery(h); selectValue(h, "agentSandbox", "workspace-write"); typeExcelAck(h);
+  delay = true; const listing = h.app.loadExcelJobs(); await settle();
+  await h.app.recalculateArtifact(artifact.id); finish(response({ jobs: [], limit: 100, truncated: false })); await listing;
+  assert.equal(h.app.state.excelJobs.get("excel-job-1").status, "running");
+  const earlier = h.app.loadExcelJobs(); await settle(); await h.app.cancelExcelJob("excel-job-1");
+  assert.equal(h.app.state.excelJobs.get("excel-job-1").status, "cancelled");
+  finish(response({ jobs: [excelJob(artifact)], limit: 100, truncated: false })); await earlier;
+  assert.equal(h.app.state.excelJobs.get("excel-job-1").status, "cancelled"); assert.equal(h.timers.size, 0);
+});
+
+function sourceReceipt(references = []) {
+  return { schema_version: 1, origin: "host", scope: "this_turn_source_quotes", attempted: true,
+    checked_at: "2026-09-30T08:00:00Z", model_claims_verified: false, engineering_truth: "not_verified",
+    status: "verified", references, truncated: false, collection_failed: false, limit: 12 };
+}
+function sourceReference(overrides = {}) {
+  return { source: "原始资料<em>.txt", quote: '工期为 60 天。<img src=x onerror="bad()">', locator: { line: 3 },
+    source_sha256: "a".repeat(64), current_source_sha256: "a".repeat(64),
+    status: "valid", reason: "exact_quote_verified", origin: "retrieved", ...overrides };
+}
+function receiptRoute(receipt, reply = "模型解释：请核对原文。", events = []) {
+  return (url, init) => {
+    if (url === "/api/agent/turns" && init) return response({ turn_id: "source-turn", session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/source-turn/events?")) return response({ events, turn: { status: "completed", result: { reply, ...(receipt === undefined ? {} : { source_evidence: receipt }) } } });
+  };
+}
 
 function harness(route = () => undefined, saved = storage()) {
   const dom = new JSDOM(html, { url: "http://localhost/static/agent.html", runScripts: "outside-only" });
+  dom.window.eval(markedSource);
   const doc = dom.window.document, calls = [], timers = new Map();
   let timerId = 0, sid = 0;
   const fetch = async (url, init) => {
@@ -32,7 +267,7 @@ function harness(route = () => undefined, saved = storage()) {
     if (url.startsWith("/api/agent/engineering/projects?")) return response({ projects: [] });
     if (url === "/api/llm-config" && !init) return response({ configured: false, model: "", base_url: "https://example.invalid/v1" });
     if (url === "/api/agent/workspaces") return response({ workspace: { id: "workspace-1", root: "C:/engineering" }, capabilities: caps });
-    if (url.startsWith("/api/agent/files?")) return response({ files: [{ path: "方案.docx", name: "方案.docx", size: 120 }, { path: "计划.xlsx", name: "计划.xlsx", size: 240 }] });
+    if (url.startsWith("/api/agent/files?")) return response(fileReport([{ path: "方案.docx", name: "方案.docx", size: 120 }, { path: "计划.xlsx", name: "计划.xlsx", size: 240 }], new URL(url, "http://localhost").searchParams.get("workspace")));
     if (url.startsWith("/api/agent/turns?")) return response({ turns: [] });
     throw new Error("unexpected request: " + url);
   };
@@ -46,6 +281,284 @@ function harness(route = () => undefined, saved = storage()) {
   return h;
 }
 
+// Offline HTTP-contract fixture: counters represent registered work, not live
+// provider acceptance. The separate package acceptance uses the real host.
+function submissionServer(options = {}) {
+  const identity = { mode: "named_single_user_instance", user_id: "alice" };
+  const capabilities = { ...caps, identity, models: { configured: true }, ...options.capabilities };
+  const records = [], keys = new Map(), stats = { posts: 0, tasks: 0, model: 0, artifacts: 0 };
+  let lost = false;
+  const route = async (url, init) => {
+    if (url === "/api/agent/capabilities") return response(capabilities);
+    if (url === "/api/agent/workspaces" && init) {
+      const second = JSON.parse(init.body).path === "C:/second";
+      return response({ workspace: { id: second ? "workspace-2" : "workspace-1", root: second ? "C:/second" : "C:/engineering" }, capabilities });
+    }
+    if (url.startsWith("/api/agent/turns?")) {
+      const query = new URL(url, "http://localhost").searchParams;
+      return response({ workspace: query.get("workspace"), session_id: query.get("session_id"),
+        turns: records.filter(row => row.request.workspace === query.get("workspace") && row.session_id === query.get("session_id")), next_cursor: null });
+    }
+    if (url === "/api/agent/turns" && init) {
+      stats.posts++;
+      const { idempotency_key: key, ...payload } = JSON.parse(init.body), serialized = JSON.stringify(payload);
+      let saved = keys.get(key); const replayed = !!saved;
+      if (saved && saved.serialized !== serialized) return response({ detail: "idempotency conflict" }, 422);
+      if (!saved) {
+        const id = `registered-${++stats.tasks}`;
+        if (payload.mode === "model") stats.model++;
+        stats.artifacts++;
+        const artifact = { ...deliveryArtifact("docx"), id: `copy-${stats.tasks}`,
+          url: `/api/agent/artifacts/copy-${stats.tasks}?workspace=${payload.workspace}` };
+        const turn = { turn_id: id, session_id: payload.session_id, actor_id: capabilities.identity.user_id, status: "completed", last_seq: 0,
+          request: { planning_action: "inspect", packing_sources: [], ...payload, actor_id: capabilities.identity.user_id,
+            ...(payload.packing_sources ? { packing_sources: payload.packing_sources.map(row => ({ ...row, source_sha256: "a".repeat(64) })) } : {}) },
+          result: { reply: "已登记的工具结果", artifacts: [artifact] } };
+        records.unshift(turn); saved = { serialized, turn }; keys.set(key, saved);
+      }
+      if (options.delay) return options.delay(saved.turn);
+      if (!lost && options.loseFirst !== false) { lost = true; throw new Error("response lost after registration"); }
+      return response({ turn_id: saved.turn.turn_id, session_id: payload.session_id, replayed }, replayed ? 200 : 202);
+    }
+    const match = /\/api\/agent\/turns\/([^/?]+)(\/events)?\?/.exec(url);
+    if (match) {
+      const turn = records.find(row => row.turn_id === match[1]);
+      if (turn) return response({ turn, ...(match[2] ? { events: [] } : {}) });
+    }
+  };
+  return { route, records, keys, stats, capabilities };
+}
+
+test("Submission recovery: response lost after registration reuses the exact request key and does not register work twice", async (t) => {
+  const server = submissionServer(), h = harness(server.route); t.after(h.close); await h.ready();
+  selectValue(h, "agentMode", "model"); h.selectFirst(); h.$("agentMessage").value = "请读取原文并制作新副本，保留原件";
+  await h.app.send();
+  assert.deepEqual(server.stats, { posts: 1, tasks: 1, model: 1, artifacts: 1 });
+  assert.match(h.$("agentNotice").textContent, /结果尚不确定/); assert.equal(h.$("agentSubmissionRecovery").hidden, false);
+  const first = h.calls.find(call => call.url === "/api/agent/turns" && call.init).body;
+  assert.match(first.idempotency_key, /^turn-[a-f0-9]{32}$/);
+  const metadata = JSON.parse(h.saved.getItem("cb_agent_pending_submissions_v1"));
+  assert.deepEqual(Object.keys(metadata[0]).sort(), ["after_turn", "created_at", "fingerprint", "key", "scope"]);
+  assert.doesNotMatch(JSON.stringify(metadata), /请读取|sandbox|risk_confirmation|workspace-write/);
+  await h.app.send();
+  const posts = h.calls.filter(call => call.url === "/api/agent/turns" && call.init);
+  assert.deepEqual(posts[1].body, posts[0].body);
+  assert.deepEqual(server.stats, { posts: 2, tasks: 1, model: 1, artifacts: 1 });
+  assert.equal(h.app.state.turn.turn_id, "registered-1"); assert.equal(h.app.state.artifacts.size, 1);
+  assert.match(h.$("agentNotice").textContent, /已找回此前提交的任务，未重复执行/);
+  assert.match(h.$("agentNotice").textContent, /更新后的文件.*新会话/);
+  installLanguage(h); h.win.CBI18n.setLocale("en");
+  assert.match(h.$("agentNotice").textContent, /previously submitted task was recovered without running it again/);
+  assert.match(h.$("agentNotice").textContent, /updated files.*New session/);
+  assert.equal(h.$("agentSubmissionRecovery").hidden, true); assert.deepEqual(JSON.parse(h.saved.getItem("cb_agent_pending_submissions_v1")), []);
+  h.$("agentMessage").value = first.message; await h.app.send();
+  assert.notEqual(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).at(-1).body.idempotency_key, first.idempotency_key, "a completed task does not lock a later intentional request");
+  assert.equal(server.stats.tasks, 2);
+  assert.doesNotMatch(h.$("agentNotice").textContent, /previously submitted task|未重复执行/);
+});
+
+test("Submission recovery: ambiguous high-risk write consumes acknowledgement and an explicit identical retry requires retyping it", async (t) => {
+  const server = submissionServer(), h = harness(server.route); t.after(h.close); await h.ready();
+  selectValue(h, "agentExpert", "plans"); selectValue(h, "agentSandbox", "workspace-write");
+  h.$("agentMessage").value = "修改方案并保存副本"; h.$("agentRiskConfirmation").value = riskPhrase; h.$("agentRiskConfirmation").dispatchEvent(new h.win.Event("input"));
+  await h.app.send(); assert.equal(h.$("agentRiskConfirmation").value, ""); assert.equal(h.$("agentSend").disabled, true);
+  await h.app.send(); assert.equal(server.stats.posts, 1);
+  assert.doesNotMatch([...h.saved.values.values()].join(""), /我明白|修改方案|workspace-write/);
+  h.$("agentRiskConfirmation").value = riskPhrase; h.$("agentRiskConfirmation").dispatchEvent(new h.win.Event("input"));
+  await h.app.send(); const posts = h.calls.filter(call => call.url === "/api/agent/turns" && call.init);
+  assert.deepEqual(posts[1].body, posts[0].body); assert.equal(server.stats.tasks, 1); assert.equal(h.$("agentRiskConfirmation").value, "");
+});
+
+test("Submission recovery: reload uses only GET records, excludes earlier identical work, and never restores write permissions", async (t) => {
+  const saved = storage(), server = submissionServer(), first = harness(server.route, saved); t.after(first.close); await first.ready();
+  selectValue(first, "agentMode", "model"); selectValue(first, "agentExpert", "plans"); selectValue(first, "agentSandbox", "workspace-write"); first.selectFirst();
+  first.$("agentMessage").value = "核对并保存方案副本"; first.$("agentRiskConfirmation").value = riskPhrase; first.$("agentRiskConfirmation").dispatchEvent(new first.win.Event("input"));
+  const oldRequest = { workspace: "workspace-1", session_id: first.app.state.session, message: first.$("agentMessage").value, locale: "zh-CN", mode: "model", sandbox: "workspace-write",
+    files: ["方案.docx"], engineering: [], packing_sources: [], planning_action: "inspect", expert_id: "plans", risk_confirmation: riskPhrase, actor_id: "alice" };
+  server.records.push({ turn_id: "earlier-identical", session_id: oldRequest.session_id, actor_id: "alice", request: oldRequest, status: "completed", last_seq: 0, result: {} });
+  await first.app.send(); const key = first.app.state.pendingSubmission.key;
+  assert.equal(first.app.state.pendingSubmission.after_turn, "earlier-identical");
+  first.close(); const second = harness(server.route, saved); t.after(second.close); await second.ready();
+  assert.equal(second.app.state.turn.turn_id, "registered-1"); assert.equal(second.app.state.artifacts.size, 1);
+  assert.equal(second.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+  assert.equal(second.$("agentSandbox").value, "read-only"); assert.equal(second.$("agentRiskConfirmation").value, ""); assert.equal(second.$("agentExpert").value, ""); assert.equal(second.$("agentMessage").value, "");
+  assert.equal(JSON.parse(saved.getItem("cb_agent_pending_submissions_v1")).some(item => item.key === key), false);
+  assert.deepEqual(server.stats, { posts: 1, tasks: 1, model: 1, artifacts: 1 });
+  assert.match(second.$("agentNotice").textContent, /恢复，未重新执行/);
+});
+
+test("Submission recovery: changes to request, session, workspace or actor always get fresh keys", async (t) => {
+  for (const change of ["text", "files", "permission", "locale", "session", "workspace", "actor"]) await t.test(change, async (t) => {
+    const server = submissionServer(), h = harness(server.route); t.after(h.close); await h.ready(); h.selectFirst();
+    h.$("agentMessage").value = "查看相同资料"; await h.app.send();
+    const original = h.calls.find(call => call.url === "/api/agent/turns" && call.init).body;
+    if (change === "text") h.$("agentMessage").value = "查看其他事项";
+    if (change === "files") { const checkbox = h.doc.querySelector("#agentFiles input"); checkbox.checked = false; checkbox.dispatchEvent(new h.win.Event("change")); }
+    if (change === "permission") selectValue(h, "agentSandbox", "workspace-write");
+    if (change === "locale") { installLanguage(h); h.win.CBI18n.setLocale("en"); }
+    if (change === "session") await h.app.changeSession("", true);
+    if (change === "workspace") await h.app.openWorkspace("C:/second");
+    if (change === "actor") { server.capabilities.identity = { ...server.capabilities.identity, user_id: "bob" }; await h.app.openWorkspace("C:/engineering", { restoreTurn: false }); }
+    if (change !== "text") h.$("agentMessage").value = original.message;
+    await h.app.send();
+    const latest = h.calls.filter(call => call.url === "/api/agent/turns" && call.init).at(-1).body;
+    assert.notEqual(latest.idempotency_key, original.idempotency_key); assert.equal(server.stats.tasks, 2);
+  });
+});
+
+test("Submission recovery: missing, ambiguous or unreadable history never replays a request and preserves bilingual recovery guidance", async (t) => {
+  for (const failure of ["missing", "multiple", "unreadable", "missing-boundary"]) await t.test(failure, async (t) => {
+    const saved = storage(), server = submissionServer(), first = harness(server.route, saved); t.after(first.close); await first.ready();
+    first.$("agentMessage").value = "需要核对的原始请求";
+    if (failure === "missing-boundary") server.records.push({ turn_id: "before-boundary", session_id: first.app.state.session, actor_id: "alice",
+      request: { workspace: "workspace-1", session_id: first.app.state.session }, status: "completed" });
+    await first.app.send(); const pending = first.app.state.pendingSubmission; first.close();
+    if (failure === "missing") server.records.length = 0;
+    if (failure === "multiple") server.records.push({ ...server.records[0], turn_id: "another-identical" });
+    if (failure === "missing-boundary") server.records.splice(1);
+    const route = async (url, init) => { if (failure === "unreadable" && url.startsWith("/api/agent/turns?")) throw new Error("offline history"); return server.route(url, init); };
+    const second = harness(route, saved); t.after(second.close); installLanguage(second); await second.ready();
+    assert.equal(second.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+    assert.equal(second.app.state.turn, null); assert.equal(second.app.state.pendingSubmission.key, pending.key);
+    assert.equal(second.$("agentRiskConfirmation").value, ""); assert.equal(second.$("agentSandbox").value, "read-only");
+    assert.match(second.$("agentSubmissionRecovery").textContent, failure === "multiple" ? /多个相同请求/ : failure === "unreadable" ? /不会自动执行/ : /尚未找到/);
+    second.win.CBI18n.setLocale("en");
+    assert.match(second.$("agentSubmissionRecovery").textContent, failure === "multiple" ? /Several matching requests/ : failure === "unreadable" ? /never automatically submitted/ : /No unique task/);
+    assert.equal(second.$("agentRecoverSubmission").textContent, "Check submitted task");
+  });
+});
+
+test("Submission recovery: a late accepted POST cannot paint or consume input in another session or workspace", async (t) => {
+  for (const change of ["session", "workspace"]) await t.test(change, async (t) => {
+    let release; const server = submissionServer({ delay: turn => new Promise(resolve => { release = () => resolve(response({ turn_id: turn.turn_id, session_id: turn.session_id })); }) });
+    const h = harness(server.route); t.after(h.close); await h.ready(); h.$("agentMessage").value = "旧范围请求";
+    const posting = h.app.send(); await waitFor(() => typeof release === "function");
+    if (change === "session") await h.app.changeSession("", true); else await h.app.openWorkspace("C:/second");
+    h.$("agentMessage").value = "保留新范围未发送的草稿"; h.$("agentRiskConfirmation").value = "保留新范围输入";
+    release(); await posting;
+    assert.equal(h.app.state.turn, null); assert.equal(h.app.state.artifacts.size, 0); assert.equal(h.$("agentSubmissionRecovery").hidden, true);
+    assert.equal(h.$("agentMessage").value, "保留新范围未发送的草稿"); assert.equal(h.$("agentRiskConfirmation").value, "保留新范围输入");
+    assert.equal(h.calls.filter(call => call.url.includes("/registered-1/events?")).length, 0);
+  });
+});
+
+test("Submission recovery: server-captured packing hashes and absent UI defaults still recover the exact saved task", async (t) => {
+  const saved = storage(), server = submissionServer({ capabilities: { features: { ...caps.features, packing_replan: true } } });
+  const route = (url, init) => url.startsWith("/api/agent/files?") ? response(fileReport([{ path: "箱单.json", name: "箱单.json" }])) : server.route(url, init);
+  const first = harness(route, saved); t.after(first.close); await first.ready(); first.selectFirst();
+  first.$("agentPackingSource").value = "箱单.json"; first.$("agentMessage").value = "只读重排已选箱单"; await first.app.send();
+  const sent = first.calls.find(call => call.url === "/api/agent/turns" && call.init).body;
+  assert.equal(Object.hasOwn(sent, "planning_action"), false); assert.deepEqual(sent.packing_sources, [{ source: "箱单.json" }]);
+  assert.deepEqual(server.records[0].request.packing_sources, [{ source: "箱单.json", source_sha256: "a".repeat(64) }]);
+  first.close(); const second = harness(route, saved); t.after(second.close); await second.ready();
+  assert.equal(second.app.state.turn.turn_id, "registered-1"); assert.equal(second.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+  assert.equal(second.$("agentPackingSource").value, "", "recovery does not auto-select a new replan request");
+  assert.deepEqual(server.stats, { posts: 1, tasks: 1, model: 0, artifacts: 1 });
+});
+
+test("Submission recovery: imported metadata cannot persist or restore request text, keys or permissions", async (t) => {
+  const saved = storage(), server = submissionServer(), first = harness(server.route, saved); t.after(first.close); await first.ready();
+  first.$("agentMessage").value = "尚未确认的请求"; await first.app.send(); first.close(); server.records.length = 0;
+  const metadata = JSON.parse(saved.getItem("cb_agent_pending_submissions_v1"));
+  Object.assign(metadata[0], { message: "private imported request", api_key: "private imported value", risk_confirmation: riskPhrase, sandbox: "workspace-write" });
+  saved.setItem("cb_agent_pending_submissions_v1", JSON.stringify(metadata));
+  const second = harness(server.route, saved); t.after(second.close); await second.ready();
+  assert.equal(second.app.state.pendingSubmission.key, metadata[0].key);
+  assert.deepEqual(Object.keys(second.app.state.pendingSubmission).sort(), ["after_turn", "created_at", "fingerprint", "key", "scope"]);
+  assert.doesNotMatch(saved.getItem("cb_agent_pending_submissions_v1"), /private imported|api_key|risk_confirmation|sandbox|我明白/);
+  assert.equal(second.$("agentMessage").value, ""); assert.equal(second.$("agentRiskConfirmation").value, ""); assert.equal(second.$("agentSandbox").value, "read-only");
+  assert.equal(second.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+});
+
+test("Submission recovery: a delayed read-only match cannot open an old task across a scope change", async (t) => {
+  for (const change of ["session", "workspace"]) await t.test(change, async (t) => {
+    const server = submissionServer(); let delay = false, release;
+    const route = async (url, init) => {
+      if (delay && url.startsWith("/api/agent/turns?") && new URL(url, "http://localhost").searchParams.get("workspace") === "workspace-1") {
+        delay = false; const value = await server.route(url, init); return new Promise(resolve => { release = () => resolve(value); });
+      }
+      return server.route(url, init);
+    };
+    const h = harness(route); t.after(h.close); await h.ready(); h.$("agentMessage").value = "原范围任务"; await h.app.send();
+    delay = true; const recovering = h.app.recoverSubmission(); await waitFor(() => typeof release === "function");
+    if (change === "session") await h.app.changeSession("", true); else await h.app.openWorkspace("C:/second");
+    h.$("agentMessage").value = "新范围草稿"; release(); await recovering;
+    assert.equal(h.app.state.turn, null); assert.equal(h.app.state.artifacts.size, 0); assert.equal(h.$("agentMessage").value, "新范围草稿");
+    assert.equal(h.$("agentSubmissionRecovery").hidden, true); assert.equal(server.stats.posts, 1);
+    assert.equal(h.calls.filter(call => call.url.includes("/registered-1?") || call.url.includes("/registered-1/events?")).length, 0);
+  });
+});
+
+test("Agent packing: only explicitly selected JSON is authorized for one turn", async (t) => {
+  const h = harness((url, init) => {
+    if (url === "/api/agent/capabilities" || url === "/api/agent/workspaces") return response(url.endsWith("workspaces")
+      ? { workspace: { id: "workspace-1", root: "C:/engineering" }, capabilities: { ...caps, features: { ...caps.features, packing_replan: true } } }
+      : { ...caps, features: { ...caps.features, packing_replan: true } });
+    if (url.startsWith("/api/agent/files?")) return response(fileReport([{ path: "箱单.json" }, { path: "约束.JSON" }, { path: "资料.xlsx" }]));
+    if (url === "/api/agent/turns" && init) return response({ turn_id: "packing-turn", session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/packing-turn/events?")) return response({ events: [], turn: { status: "completed", result: { reply: "仅做核对" } } });
+  });
+  t.after(h.close); installLanguage(h); await h.ready();
+  const select = h.$("agentPackingSource");
+  assert.equal(select.options.length, 1);
+  h.selectFirst(); assert.equal(select.options.length, 2); assert.equal(select.value, "");
+  select.value = "箱单.json";
+  h.win.CBI18n.setLocale("en"); assert.equal(select.value, "箱单.json");
+  assert.equal(select.options[0].textContent, "No packing replan this turn");
+  h.$("agentMessage").value = "核对原件的装载搜索结果"; await h.app.send();
+  assert.deepEqual(h.calls.find(call => call.url === "/api/agent/turns" && call.init).body.packing_sources, [{ source: "箱单.json" }]);
+  assert.equal(select.value, "");
+  h.$("agentMessage").value = "只读原文"; await h.app.send();
+  assert.deepEqual(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).at(-1).body.packing_sources, []);
+  select.value = "箱单.json";
+  const check = h.doc.querySelector("#agentFiles input"); check.checked = false; check.dispatchEvent(new h.win.Event("change"));
+  assert.equal(select.value, ""); assert.equal(select.options.length, 1);
+  check.checked = true; check.dispatchEvent(new h.win.Event("change")); select.value = "箱单.json";
+  await h.app.changeSession("", true); assert.equal(select.value, "");
+});
+
+test("Agent packing: host results replay in both languages without converting fit into release", async (t) => {
+  const summary = { can_fit: true, layout_verified: true, containers_used: 2, n_boxes: 8, plan_sha256: "b".repeat(64), structure: { fail: 1, needs_reinforcement: 0, pending_design: 7, pass: 0 } };
+  const calculation = { ok: true, result: { schema: "packing_replan.result.v1", kind: "packing_replan", status: "completed", outcome: "unchanged",
+    source: { path: "原箱单<img>.json", sha256: "a".repeat(64) }, baseline: summary, final: summary, rounds: [{ round: 1, candidate_id: "fixed_order", accepted: false, summary }], hard_constraints: { max_rounds: 2 } },
+    provenance: { source: "原箱单<img>.json", source_sha256: "a".repeat(64), originals_unchanged: true, shipping_release: false, professional_signoff: false },
+    decision_proposal: { phase: "packing_replan_shadow_v1", mode: "off", applied: false } };
+  const h = harness(receiptRoute(undefined, "原文回复保留", [event(1, "tool_finished", { name: "packing_replan", result: calculation })]));
+  t.after(h.close); installLanguage(h); await showDelivery(h);
+  const host = h.$("agentPackingResults");
+  assert.equal(host.querySelectorAll("article").length, 1);
+  assert.equal(host.querySelector("img"), null);
+  assert.match(host.textContent, /未找到更优候选，保留基线/); assert.match(host.textContent, /不代表装运放行/);
+  assert.match(host.textContent, /实际复算 1 轮/);
+  assert.match(host.textContent, /包装结构仍有未解决项/);
+  h.win.CBI18n.setLocale("en");
+  assert.match(host.textContent, /No better candidate found/); assert.match(host.textContent, /do not authorize shipment/);
+  assert.equal(h.$("agentContextText").textContent, h.win.CBI18n.t("收到后端请求预算后显示；这不是任务完成进度。"));
+  assert.doesNotMatch(h.$("agentContextText").textContent, /收到后端/);
+  assert.match(host.textContent, /原箱单<img>.json/); assert.equal(host.querySelectorAll("article").length, 1);
+  assert.equal(h.$("agentReply").textContent, "原文回复保留");
+  await h.app.changeSession("", true); assert.equal(host.hidden, true);
+});
+
+test("Agent packing: mismatched source receipts cannot create a calculation card", async (t) => {
+  const calculation = { ok: true, result: { schema: "packing_replan.result.v1", kind: "packing_replan", source: { path: "other.json", sha256: "a".repeat(64) } },
+    provenance: { source: "selected.json", source_sha256: "a".repeat(64), originals_unchanged: true, shipping_release: false, professional_signoff: false } };
+  const h = harness(receiptRoute(undefined, JSON.stringify(calculation), [event(1, "tool_finished", { name: "packing_replan", result: calculation })]));
+  t.after(h.close); await showDelivery(h); assert.equal(h.$("agentPackingResults"), null);
+});
+
+test("Agent packing: missing inputs are bilingual while cargo names and raw requirements stay original", async (t) => {
+  const calculation = { ok: true, result: { schema: "packing_replan.result.v1", kind: "packing_replan", status: "needs_human", outcome: "needs_human",
+    source: { path: "箱单.json", sha256: "a".repeat(64) }, needs_human: [{ id: "A1", name: "铝板原名", reason: "unsupported_transport_requirements", requirements: { note: "保持原文：竖放" }, ask: "A fixed worker detail" }] },
+    provenance: { source: "箱单.json", source_sha256: "a".repeat(64), originals_unchanged: true, shipping_release: false, professional_signoff: false } };
+  const h = harness(receiptRoute(undefined, "待补资料", [event(1, "tool_finished", { name: "packing_replan", result: calculation })]));
+  t.after(h.close); installLanguage(h); await showDelivery(h);
+  const host = h.$("agentPackingResults"); assert.match(host.querySelector("li").textContent, /自动成箱无法执行/);
+  assert.match(host.textContent, /未执行重排/); assert.match(host.querySelector("pre").textContent, /保持原文：竖放/);
+  h.win.CBI18n.setLocale("en"); assert.match(host.querySelector("li").textContent, /Automatic boxing cannot enforce/);
+  assert.match(host.querySelector("li").textContent, /铝板原名/); assert.match(host.querySelector("pre").textContent, /保持原文：竖放/);
+});
+
 test("Agent bilingual UI: persisted English initializes empty states before opening a folder", async () => {
   const h = harness(); installLanguage(h, "en");
   try {
@@ -57,6 +570,155 @@ test("Agent bilingual UI: persisted English initializes empty states before open
     assert.equal(h.$("agentExpert").options[0].textContent, "Automatic selection");
     assert.equal(h.$("agentRiskConfirmation").placeholder, "我明白，将由持证人员签认");
   } finally { h.close(); }
+});
+
+test("Agent sources: host receipts preserve literal source identity across language changes and reset", async (t) => {
+  const reference = sourceReference(), receipt = sourceReceipt([reference]);
+  const h = harness(receiptRoute(receipt)); t.after(h.close); installLanguage(h);
+  await showDelivery(h);
+  const host = h.$("agentSourceEvidence");
+  assert.equal(host.hidden, false);
+  assert.equal(host.querySelector('[data-source-status="verified"]').classList.contains("warning"), false);
+  assert.match(host.textContent, /引文与核对时的文件一致/);
+  assert.match(host.textContent, /不代表模型所有结论已验证/);
+  assert.equal(host.querySelector("blockquote").textContent, reference.quote);
+  assert.equal(host.querySelector("strong").textContent, reference.source);
+  assert.equal(host.querySelector("img, em"), null);
+  assert.match(host.textContent, /"line":3/);
+  h.$("agentMessage").value = "保留未发出的中文问题";
+  h.win.CBI18n.setLocale("en");
+  assert.match(host.textContent, /does not verify every model conclusion/);
+  assert.equal(host.querySelector("blockquote").textContent, reference.quote);
+  assert.equal(h.$("agentMessage").value, "保留未发出的中文问题");
+  assert.equal(h.$("agentReply").textContent, "模型解释：请核对原文。");
+  await h.app.changeSession("", true);
+  assert.equal(host.hidden, true); assert.equal(h.app.state.sourceEvidence, null);
+});
+
+test("Agent sources: changed, invalid and unavailable references stay visible with honest limits", async (t) => {
+  const receipt = sourceReceipt([
+    sourceReference({ status: "changed", reason: "version_mismatch", current_source_sha256: "b".repeat(64) }),
+    sourceReference({ status: "invalid", reason: "quote_mismatch" }),
+    sourceReference({ source: "未选资料.txt", status: "invalid", reason: "source_not_allowed" }),
+    sourceReference({ status: "unavailable", reason: "verification_timeout" })
+  ]); receipt.truncated = true; receipt.collection_failed = true;
+  const h = harness(receiptRoute(receipt)); t.after(h.close); await showDelivery(h);
+  const host = h.$("agentSourceEvidence");
+  assert.equal(host.querySelectorAll("blockquote").length, 4);
+  for (const text of ["来源已变化", "引文与原文不一致", "该来源未被本轮选择", "来源核对超时", "只列出部分引文", "部分检索或引用请求失败", "a".repeat(64), "b".repeat(64)]) assert.ok(host.textContent.includes(text), text);
+  assert.equal(host.textContent.includes("引文与核对时的文件一致"), false);
+});
+
+test("Agent sources: model prose cannot manufacture a receipt and malformed host records fail closed", async (t) => {
+  for (const receipt of [undefined, { ...sourceReceipt([sourceReference()]), model_claims_verified: true }]) {
+    const h = harness(receiptRoute(receipt, JSON.stringify(sourceReceipt([sourceReference()])))); t.after(h.close);
+    await showDelivery(h); const host = h.$("agentSourceEvidence");
+    assert.equal(host.querySelectorAll("blockquote").length, 0);
+    if (receipt === undefined) assert.equal(host.hidden, true);
+    else assert.match(host.textContent, /不能作为已验证证据/);
+  }
+});
+
+test("Agent sources: saved copies never clear invalid B2 references or this-turn failed attempts", async (t) => {
+  const bad = sourceReference({ source: "current.xlsx", locator: { sheet: "Sheet1", cell: "B2" }, quote: "6", status: "invalid", reason: "locator_mismatch" });
+  const good = sourceReference({ source: "requirements.pdf", quote: "允许数值为 6", locator: { page: 1 } });
+  const artifact = deliveryArtifact(), receipt = { ...sourceReceipt([bad, good]), status: "attention_required" };
+  const h = harness((url, init) => {
+    if (url === "/api/agent/turns" && init) return response({ turn_id: "mixed-source", session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/mixed-source/events?")) return response({ events: [], turn: { status: "completed", result: { reply: "新副本已保存。", artifacts: [artifact], source_evidence: receipt } } });
+  }); t.after(h.close); installLanguage(h); await showDelivery(h);
+  const host = h.$("agentSourceEvidence");
+  assert.ok(host.querySelector('[data-source-status="attention_required"].warning'));
+  assert.equal(host.querySelectorAll("blockquote").length, 2); assert.match(host.textContent, /B2.*待核对引文/);
+  assert.match(host.textContent, /包含失败尝试.*后续成功不会自动消除先前失败/);
+  assert.match(host.textContent, /已保存不代表引文全部有效/); assert.ok(h.$("agentArtifacts").querySelector("a"));
+  h.win.CBI18n.setLocale("en");
+  assert.ok(host.querySelector('[data-source-status="attention_required"].warning'));
+  assert.match(host.textContent, /including failed attempts.*Later success does not clear earlier failures/);
+  assert.match(host.textContent, /saved copy does not mean every quotation is valid/);
+  assert.equal(host.querySelector("blockquote").textContent, "6");
+  assert.doesNotMatch(host.textContent, /resolved|not used|已解决|未采用/i);
+});
+
+test("Agent sources: unknown and contradictory overall statuses cannot claim every quotation passed", async (t) => {
+  for (const status of ["unavailable", "future_status", "verified"]) {
+    const references = [sourceReference({ status: "invalid", reason: "quote_mismatch" })];
+    const h = harness(receiptRoute({ ...sourceReceipt(references), status })); t.after(h.close); await showDelivery(h);
+    const host = h.$("agentSourceEvidence");
+    assert.ok(host.querySelector(`[data-source-status="${status === "verified" ? "attention_required" : "unavailable"}"].warning`));
+    assert.equal(host.querySelectorAll("blockquote").length, 1);
+    assert.equal(host.querySelector('[data-source-status="verified"]'), null);
+  }
+  const h = harness(receiptRoute({ ...sourceReceipt([]), attempted: false, status: "unavailable" })); t.after(h.close); await showDelivery(h);
+  assert.equal(h.$("agentSourceEvidence").hidden, false);
+  assert.ok(h.$("agentSourceEvidence").querySelector('[data-source-status="unavailable"].warning'));
+});
+
+test("Agent sources: malformed receipt flags and missing or contradictory current hashes fail closed", async (t) => {
+  for (const field of ["attempted", "truncated", "collection_failed"]) for (const value of [undefined, "false", 0]) {
+    const receipt = { ...sourceReceipt([sourceReference()]), [field]: value };
+    const h = harness(receiptRoute(receipt)); t.after(h.close); await showDelivery(h);
+    const host = h.$("agentSourceEvidence");
+    assert.match(host.textContent, /回执格式无法核对/);
+    assert.equal(host.querySelector('[data-source-status="verified"]'), null, `${field}=${value} cannot establish verification`);
+    assert.equal(host.querySelectorAll("blockquote").length, 0);
+  }
+  for (const hash of [undefined, "b".repeat(64), "invalid-hash"]) {
+    const h = harness(receiptRoute(sourceReceipt([sourceReference({ current_source_sha256: hash })]))); t.after(h.close); await showDelivery(h);
+    const host = h.$("agentSourceEvidence");
+    assert.ok(host.querySelector('[data-source-status="attention_required"].warning'));
+    assert.match(host.textContent, /回执格式无法核对/);
+    assert.doesNotMatch(host.textContent, /本轮记录的引文均已核对|引文与核对时的文件一致/);
+  }
+});
+
+test("Agent sources: persisted evidence events render without a duplicate final payload", async (t) => {
+  const receipt = sourceReceipt([sourceReference()]);
+  const h = harness(receiptRoute(undefined, "普通解释", [event(1, "source_evidence", receipt)])); t.after(h.close);
+  await showDelivery(h);
+  assert.equal(h.$("agentSourceEvidence").querySelectorAll("blockquote").length, 1);
+  assert.equal(h.app.state.sourceEvidence.origin, "host");
+});
+
+test("Agent bilingual UI: engineering empty state, daily role, completion notice and source event repaint", async (t) => {
+  const route = receiptRoute(sourceReceipt([]), "历史中文回复保留", [event(1, "source_evidence", sourceReceipt([])), event(2, "status", { message: "历史中文事件保留" })]);
+  const h = harness((url, init) => url === "/api/catalog" ? response({ experts: [{ id: "pm-daily", name: "施工日记", title: "形象进度、人机料、安全质量记事", enabled: true, risk: "low" }] }) : route(url, init));
+  t.after(h.close); installLanguage(h); await h.ready();
+  h.$("agentExpert").value = "pm-daily"; h.$("agentExpert").dispatchEvent(new h.win.Event("change"));
+  h.$("agentMessage").value = "查看来源"; await h.app.send();
+  assert.equal(h.$("agentNotice").textContent, "已完成。");
+  assert.equal(h.$("agentEngineeringStatus").textContent, "暂无可用的已保存截面或框架。");
+  assert.match(h.$("agentExpertNote").textContent, /形象进度/);
+  h.win.CBI18n.setLocale("en");
+  assert.equal(h.$("agentNotice").textContent, "Completed.");
+  assert.equal(h.$("agentEngineeringStatus").textContent, "No saved sections or frames are available.");
+  assert.match(h.$("agentExpertNote").textContent, /Physical progress, workforce, equipment/);
+  assert.match(h.$("agentEvents").textContent, /Source quotation verification/);
+  assert.match(h.$("agentEvents").textContent, /历史中文事件保留/);
+  assert.equal(h.$("agentReply").textContent, "历史中文回复保留");
+  h.win.CBI18n.setLocale("zh-CN");
+  assert.equal(h.$("agentNotice").textContent, "已完成。");
+  assert.match(h.$("agentEvents").textContent, /来源引文核验/);
+});
+
+test("Agent sources: readable locations preserve exact IDs, sheet names and unknown locator fields", async (t) => {
+  const locators = [
+    { kind: "pdf_page", page: 1, start: 0, end: 35 },
+    { kind: "docx_paragraph", paragraph_id: "p:0", start: 0, end: 20 },
+    { kind: "xlsx_cell", sheet: "数量表", cell: "A2" },
+    { kind: "xlsx_row", sheet: "Counts", row: 2 },
+    { kind: "text", line_start: 3, line_end: 7 },
+    { kind: "text", line_start: 4, line_end: 4 },
+    { kind: "future_source", custom: "原始位置" },
+    { kind: "pdf_page", page: 0 }
+  ];
+  const receipt = sourceReceipt(locators.map(locator => sourceReference({ locator })));
+  const h = harness(receiptRoute(receipt)); t.after(h.close); installLanguage(h); await showDelivery(h);
+  const host = h.$("agentSourceEvidence");
+  for (const text of ["PDF 第 1 页", "Word 段落 p:0", "Excel 数量表!A2", "Excel Counts 第 2 行", "文本第 3–7 行", "文本第 4 行", JSON.stringify(locators[6]), JSON.stringify(locators[7])]) assert.ok(host.textContent.includes(text), text);
+  h.win.CBI18n.setLocale("en");
+  for (const text of ["PDF page 1", "Word paragraph p:0", "Excel 数量表!A2", "Excel Counts, row 2", "Text lines 3–7", "Text line 4", JSON.stringify(locators[6]), JSON.stringify(locators[7])]) assert.ok(host.textContent.includes(text), text);
+  assert.deepEqual(h.app.state.sourceEvidence.references.map(reference => reference.locator), locators);
 });
 
 test("Agent bilingual UI: switches preserve drafts and source identities and send reply locale", async () => {
@@ -153,7 +815,7 @@ test("Agent UI: selected inputs, real context, tools, subtasks and saved artifac
   await h.ready(); h.selectFirst(); h.$("agentMessage").value = "读取方案"; await h.app.send();
   const sent = h.calls.find((call) => call.url === "/api/agent/turns").body;
   assert.deepEqual(sent.files, ["方案.docx"]); assert.equal(sent.mode, "steps"); assert.equal(sent.sandbox, "read-only");
-  assert.equal(h.$("agentTurnStatus").textContent, "已完成"); assert.equal(h.timers.size, 0);
+  assert.equal(h.$("agentTurnStatus").textContent, "部分完成"); assert.equal(h.timers.size, 0);
   assert.equal(h.$("agentEvents").children.length, 8); assert.doesNotMatch(h.$("agentEvents").textContent, /must-not-repeat/);
   assert.match(h.$("agentContextText").textContent, /输入估算 1,000 \/ 6,000/); assert.match(h.$("agentContextText").textContent, /省略 2 条/);
   assert.equal(h.$("agentContextMeter").value, 1000); assert.equal(h.$("agentContextMeter").max, 6000);
@@ -217,6 +879,121 @@ test("Agent UI: refresh restores the workspace, selected files and completed tur
   assert.equal(second.$("agentReply").textContent, "已保留原文"); assert.equal(starts, 1); assert.equal(second.timers.size, 0);
 });
 
+function savedWorkspacePair() {
+  const saved=storage();saved.setItem("cb_agent_workspaces_v1",JSON.stringify({lastRoot:"C:/first project",workspaces:{
+    "workspace-1":{current:"old-one",sessions:[{id:"old-one",turn:"previous-one"}],files:["原工程资料.docx"]},
+    "workspace-2":{current:"old-two",sessions:[{id:"old-two",turn:"previous-two"}],files:["方案.docx"]}
+  }}));return saved;
+}
+
+test("Project link resolves an authorized ID, preserves other workspace state, and starts with no selected files or task",async(t)=>{
+  const saved=savedWorkspacePair();
+  const h=harness((url,init)=>{
+    if(url==="/api/agent/workspaces")return !init?response({workspaces:[{id:"workspace-1",root:"C:/first project"},{id:"workspace-2",root:"C:/工程 乙"}]}):response({workspace:{id:"workspace-2",root:"C:/工程 乙"},capabilities:caps});
+    if(url==="/api/agent/turns"&&init)return response({turn_id:"explicit-linked-turn",session_id:JSON.parse(init.body).session_id});
+    if(url.includes("/explicit-linked-turn/events?"))return response({events:[],turn:{status:"completed",result:{reply:"Recorded"}}});
+  },saved);t.after(h.close);
+  h.win.history.replaceState(null,"","/static/agent.html?workspace=workspace-2&sandbox=workspace-write&files=方案.docx");
+  await h.app.start();
+  assert.equal(h.app.state.workspace.id,"workspace-2");assert.equal(h.$("agentWorkspacePath").value,"C:/工程 乙");
+  assert.deepEqual([...h.app.state.selected],[]);assert.equal(h.$("agentSandbox").value,"read-only");assert.equal(h.$("agentRiskConfirmation").value,"");
+  assert.equal(h.calls.filter(c=>c.url==="/api/agent/turns"&&c.init).length,0);assert.equal(h.calls.some(c=>c.url.includes("/previous-two")),false);
+  const opens=h.calls.filter(c=>c.url==="/api/agent/workspaces"&&c.init);assert.equal(opens.length,1);assert.equal(opens[0].body.path,"C:/工程 乙");
+  const persisted=JSON.parse(saved.getItem("cb_agent_workspaces_v1"));assert.equal(persisted.lastRoot,"C:/工程 乙");assert.deepEqual(persisted.workspaces["workspace-1"].files,["原工程资料.docx"]);
+  h.selectFirst();h.$("agentMessage").value="明确点击后核对乙工程资料";await h.app.send();
+  const sent=h.calls.find(c=>c.url==="/api/agent/turns"&&c.init).body;assert.equal(sent.workspace,"workspace-2");assert.deepEqual(sent.files,["方案.docx"]);assert.equal(sent.sandbox,"read-only");
+});
+
+test("Invalid or inaccessible project links never fall back to a cached project",async()=>{
+  for(const query of ["workspace=","workspace=unknown-id","workspace=workspace-2&workspace=workspace-1","workspace=C%3A%2Fother"]){
+    const h=harness((url,init)=>url==="/api/agent/workspaces"&&!init?response({workspaces:[{id:"workspace-1",root:"C:/first project"}]}):undefined,savedWorkspacePair());
+    try{h.win.history.replaceState(null,"","/static/agent.html?"+query);installLanguage(h,"en");await h.app.start();
+      assert.equal(h.app.state.workspace,null,query);assert.equal(h.calls.some(c=>c.url==="/api/agent/workspaces"&&c.init),false,query);
+      assert.equal(h.calls.some(c=>c.url==="/api/agent/turns"&&c.init),false);assert.match(h.$("agentNotice").textContent,/link|linked project/i);
+      assert.equal(JSON.parse(h.saved.getItem("cb_agent_workspaces_v1")).lastRoot,"C:/first project");
+    }finally{h.close();}
+  }
+});
+
+test("Project-link list failures and mismatched open responses do not open another workspace",async()=>{
+  for(const fail of ["list","mismatch"]){
+    const h=harness((url,init)=>{
+      if(url==="/api/agent/workspaces"&&!init)return fail==="list"?response({detail:"Access denied"},403):response({workspaces:[{id:"workspace-2",root:"C:/second"}]});
+      if(url==="/api/agent/workspaces"&&init)return response({workspace:{id:"wrong-workspace",root:"C:/wrong"},capabilities:caps});
+    },savedWorkspacePair());
+    try{h.win.history.replaceState(null,"","/static/agent.html?workspace=workspace-2");await h.app.start();
+      assert.equal(h.app.state.workspace,null);assert.equal(h.app.state.opening,false);assert.match(h.$("agentNotice").className,/error/);
+      assert.equal(h.calls.some(c=>c.url.startsWith("/api/agent/files?")),false);assert.equal(h.calls.some(c=>c.url==="/api/agent/turns"&&c.init),false);
+    }finally{h.close();}
+  }
+});
+
+test("A delayed project-link lookup cannot replace a manually opened workspace",async(t)=>{
+  let resolve;const waiting=new Promise(r=>{resolve=r;});
+  const h=harness((url,init)=>{
+    if(url==="/api/agent/workspaces"&&!init)return waiting;
+    if(url==="/api/agent/workspaces"&&init)return response({workspace:{id:"manual-project",root:JSON.parse(init.body).path},capabilities:caps});
+  },savedWorkspacePair());t.after(h.close);h.win.history.replaceState(null,"","/static/agent.html?workspace=workspace-2");
+  const starting=h.app.start();await settle();await h.app.openWorkspace("C:/manual project");resolve(response({workspaces:[{id:"workspace-2",root:"C:/second"}]}));await starting;
+  assert.equal(h.app.state.workspace.id,"manual-project");assert.equal(h.calls.filter(c=>c.url==="/api/agent/workspaces"&&c.init).length,1);
+});
+
+test("Manual workspace selection removes an old deep link only after success and reload restores the new workspace", async (t) => {
+  const saved = storage();
+  const route = (url, init) => {
+    if (url !== "/api/agent/workspaces") return;
+    if (!init) return response({ workspaces: [{ id: "old-project", root: "C:/old" }] });
+    const root = JSON.parse(init.body).path;
+    return response({ workspace: { id: root === "C:/old" ? "old-project" : "new-project", root }, capabilities: caps });
+  };
+  const first = harness(route, saved); t.after(first.close);
+  first.win.history.replaceState({ page: "preserved" }, "", "/static/agent.html?workspace=old-project&lang=en#answer");
+  await first.app.start();
+  assert.match(first.win.location.search, /workspace=old-project/);
+  assert.equal(first.app.state.selected.size, 0); assert.equal(first.app.state.turn, null);
+  first.$("agentWorkspacePath").value = "C:/new";
+  first.$("agentWorkspaceForm").dispatchEvent(new first.win.Event("submit", { cancelable: true }));
+  await settle(); await settle();
+  assert.equal(first.app.state.workspace.id, "new-project");
+  assert.equal(first.win.location.search, "?lang=en"); assert.equal(first.win.location.hash, "#answer");
+  assert.equal(first.win.history.state.page, "preserved");
+  first.selectFirst();
+  const second = harness(route, saved); t.after(second.close);
+  second.win.history.replaceState(null, "", first.win.location.href);
+  await second.app.start();
+  assert.equal(second.app.state.workspace.id, "new-project");
+  assert.deepEqual([...second.app.state.selected], ["方案.docx"]);
+  assert.equal(second.calls.some(call => call.url === "/api/agent/workspaces" && !call.init), false);
+  assert.equal(second.calls.some(call => call.url === "/api/agent/turns" && call.init), false);
+});
+
+test("A failed or stale manual workspace open preserves the previous deep link", async (t) => {
+  for (const outcome of ["failure", "stale"]) {
+    await t.test(outcome, async () => {
+      let finish;
+      const h = harness((url, init) => {
+        if (url === "/api/agent/workspaces" && init && JSON.parse(init.body).path === "C:/new") {
+          return outcome === "failure" ? response({ detail: "Unavailable folder" }, 403) : new Promise(resolve => { finish = resolve; });
+        }
+      });
+      try {
+        await h.ready();
+        h.win.history.replaceState(null, "", "/static/agent.html?workspace=workspace-1&lang=en#answer");
+        const opening = h.app.openWorkspace("C:/new", { manual: true });
+        await settle();
+        if (outcome === "stale") {
+          await h.app.changeSession("", true);
+          finish(response({ workspace: { id: "new-project", root: "C:/new" }, capabilities: caps }));
+        }
+        await opening;
+        assert.equal(h.win.location.search, "?workspace=workspace-1&lang=en");
+        assert.equal(h.win.location.hash, "#answer");
+        assert.equal(h.app.state.workspace.id, "workspace-1");
+      } finally { h.close(); }
+    });
+  }
+});
+
 test("Agent UI: cancelling is a request until the server confirms, and partial artifacts remain downloadable", async (t) => {
   let stopped = false;
   const h = harness((url, init) => {
@@ -241,6 +1018,91 @@ test("Agent UI: model mode needs a configured model; saving does not retain or e
   h.$("agentModelName").value = "configured-flash"; h.$("agentModelKey").value = "private-fixture-key"; await h.app.saveModel();
   assert.equal(posted.api_key, "private-fixture-key"); assert.equal(h.$("agentModelKey").value, ""); assert.equal(h.$("agentSend").disabled, false);
   assert.doesNotMatch([...h.saved.values.values()].join(""), /private-fixture-key/); assert.doesNotMatch(h.doc.body.textContent, /private-fixture-key/);
+  assert.match(h.$("agentModelStatus").textContent, /不代表鉴权通过或模型可用/);
+  assert.equal(h.calls.filter(call => call.init?.method === "POST").length, 2, "only workspace open and configuration apply; no automatic model task");
+});
+
+test("Agent settings: real form apply and restore are temporary, bilingual and never replay a task", async (t) => {
+  let cfg = { configured: false, source: "env", model: "startup-model", base_url: "https://startup.invalid/v1" };
+  const h = harness((url, init) => {
+    if (url === "/api/agent/capabilities") return response({ ...caps, models: { configured: cfg.configured } });
+    if (url !== "/api/llm-config") return;
+    if (init) cfg = JSON.parse(init.body).clear
+      ? { configured: false, source: "env", model: "startup-model", base_url: "https://startup.invalid/v1" }
+      : { configured: true, source: "runtime", model: "temporary-model", base_url: "https://temporary.invalid/v1", key_masked: "****" };
+    return response(cfg);
+  }); t.after(h.close); installLanguage(h); await h.ready();
+  assert.equal(h.$("agentModelSave").textContent, "应用到本次运行");
+  h.$("agentModelBase").value = "https://temporary.invalid/v1"; h.$("agentModelName").value = "temporary-model";
+  h.$("agentModelKey").value = "synthetic-private-credential";
+  h.$("agentModelForm").dispatchEvent(new h.win.Event("submit", { bubbles: true, cancelable: true }));
+  await waitFor(() => !h.app.state.modelBusy && h.app.state.modelConfigured);
+  assert.match(h.$("agentModelStatus").textContent, /已应用到本次运行并回读配置/);
+  h.win.CBI18n.setLocale("en");
+  assert.match(h.$("agentModelStatus").textContent, /Applied for this run.*Restarting restores startup settings/);
+  assert.match(h.$("agentModelStatus").textContent, /not that authentication or model availability has been verified/);
+  h.$("agentModelReset").click(); await waitFor(() => !h.app.state.modelBusy && !h.app.state.modelConfigured);
+  assert.match(h.$("agentModelStatus").textContent, /Startup settings restored.*startup file is unchanged/);
+  assert.equal(h.$("agentModelName").value, "startup-model"); assert.equal(h.$("agentModelKey").value, "");
+  h.win.CBI18n.setLocale("zh-CN"); assert.match(h.$("agentModelStatus").textContent, /本次覆盖已撤销，启动文件未修改/);
+  const posts = h.calls.filter(call => call.url === "/api/llm-config" && call.init);
+  assert.equal(posts.length, 2); assert.deepEqual(posts[1].body, { clear: true });
+  assert.equal(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+  assert.doesNotMatch(JSON.stringify(h.app.state.modelNotice) + h.doc.body.textContent + [...h.saved.values.values()].join(""), /synthetic-private-credential/);
+});
+
+test("Agent settings: new-provider key rejection and redacted errors survive language changes", async (t) => {
+  for (const code of ["provider_key_required", "invalid_provider_url", null]) {
+    const h = harness((url, init) => {
+      if (url === "/api/llm-config" && init) return response(code
+        ? { ok: false, code, error: code }
+        : { detail: "cannot use synthetic-private-credential sk-example-hidden" }, 400);
+    }); t.after(h.close); installLanguage(h); await h.ready();
+    h.$("agentModelBase").value = "https://different.invalid/v1"; h.$("agentModelKey").value = code ? "" : "synthetic-private-credential";
+    await h.app.saveModel();
+    assert.match(h.$("agentModelStatus").textContent, code ? /应用失败/ : /未能确认设置是否生效.*刷新页面核对/);
+    if (code === "provider_key_required") assert.match(h.$("agentModelStatus").textContent, /重新填写该供应商的 Key；当前配置未修改/);
+    if (code === "invalid_provider_url") assert.match(h.$("agentModelStatus").textContent, /HTTPS.*仅供本机测试的回环 HTTP/);
+    h.win.CBI18n.setLocale("en"); assert.match(h.$("agentModelStatus").textContent, code ? /Could not apply settings/ : /Could not confirm whether settings took effect.*Refresh the page/);
+    if (code === "provider_key_required") assert.match(h.$("agentModelStatus").textContent, /requires a key for that provider.*configuration is unchanged/);
+    if (code === "invalid_provider_url") assert.match(h.$("agentModelStatus").textContent, /Use HTTPS, or loopback HTTP for local testing only/);
+    assert.doesNotMatch(h.doc.body.textContent + JSON.stringify(h.app.state.modelNotice), /synthetic-private-credential|sk-example-hidden/);
+    h.win.CBI18n.setLocale("zh-CN"); assert.match(h.$("agentModelStatus").textContent, code ? /应用失败/ : /未能确认设置是否生效/);
+    assert.equal(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+  }
+});
+
+test("Agent settings: public readback never retains unexpected credentials or URL secrets", async (t) => {
+  const h = harness((url) => url === "/api/llm-config" ? response({ configured: true, source: "env", model: "public-model",
+    base_url: "https://secret-user:secret-password@provider.invalid/v1?api_key=secret-query#secret-fragment",
+    api_key: "unexpected-plaintext-credential", key_masked: "unexpected-plaintext-credential" }) : undefined);
+  t.after(h.close); await h.app.start();
+  assert.equal(h.$("agentModelBase").value, "https://provider.invalid/v1");
+  assert.equal(h.$("agentModelKey").value, "");
+  assert.doesNotMatch(JSON.stringify(h.app.state.modelConfig) + h.doc.body.textContent + h.$("agentModelBase").value, /secret-user|secret-password|secret-query|secret-fragment|unexpected-plaintext-credential/);
+  assert.equal(h.calls.filter(call => call.init?.method === "POST").length, 0);
+});
+
+test("Agent settings: an ambiguous POST never claims rejection or retries and fresh startup only reads back", async (t) => {
+  for (const failure of ["transport", "parse"]) {
+    let cfg = { configured: true, model: "before", base_url: "https://provider.invalid/v1", source: "runtime", key_masked: "****" };
+    const route = (url, init) => {
+      if (url !== "/api/llm-config") return;
+      if (init) {
+        cfg = { ...cfg, model: "applied-but-unconfirmed" };
+        if (failure === "transport") throw new Error("synthetic connection lost after apply");
+        return new Response("unreadable JSON", { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return response(cfg);
+    };
+    const h = harness(route); t.after(h.close); installLanguage(h); await h.app.start(); await h.app.saveModel();
+    assert.match(h.$("agentModelStatus").textContent, /未能确认设置是否生效.*刷新页面核对/);
+    h.win.CBI18n.setLocale("en"); assert.match(h.$("agentModelStatus").textContent, /Could not confirm whether settings took effect.*Refresh the page/);
+    assert.equal(h.calls.filter(call => call.init?.method === "POST").length, 1);
+    const reload = harness(route); t.after(reload.close); await reload.app.start();
+    assert.equal(reload.$("agentModelName").value, "applied-but-unconfirmed");
+    assert.equal(reload.calls.filter(call => call.init?.method === "POST").length, 0);
+  }
 });
 
 test("Agent UI: artifact downloads must stay on this host and in this workspace", () => {
@@ -332,6 +1194,67 @@ function terminalRoute(url, init) {
   if (url === "/api/agent/turns" && init) return response({ turn_id: "engineering-turn", session_id: JSON.parse(init.body).session_id });
   if (url.includes("/engineering-turn/events?")) return response({ events: [event(1, "turn.completed")], turn: { status: "completed", result: { reply: "已核对" } } });
 }
+
+function savedPlanRoute(revision = () => 1) {
+  const id = "d".repeat(32), row = project("saved_planning", id);
+  const planningCaps = {...caps,features:{...caps.features,saved_planning:true}};
+  return (url,init) => {
+    if (url === "/api/agent/capabilities") return response(planningCaps);
+    if (url === "/api/agent/workspaces") return response({workspace:{id:"workspace-1",root:"C:/engineering"},capabilities:planningCaps});
+    if (url.startsWith("/api/agent/engineering/projects?")) return response({projects:[row]});
+    if (url.includes(`/saved_planning/${id}?`)) return response(inspection(row,revision()));
+    return terminalRoute(url,init);
+  };
+}
+
+test("Saved planning handoff waits for workspace choice, reads exact saved context and never auto-selects", async (t) => {
+  const id="d".repeat(32), h=harness(savedPlanRoute()); t.after(h.close);
+  h.win.history.replaceState(null,"",`/?planning_project_id=${id}&planning_revision=1&planning_inputs_sha256=${"1".repeat(64)}`);
+  await h.app.start(); assert.equal(h.app.state.workspace,null); assert.equal(h.app.state.pendingPlanning.project_id,id);
+  assert.equal(h.calls.some(call=>call.url==="/api/agent/workspaces"),false);
+  await h.app.openWorkspace("C:/engineering");
+  const row=h.app.state.engineeringRows[0]; assert.equal(row.snapshot.revision,1); assert.equal(row.selected,false);
+  assert.equal(engineeringInput(h,`saved_planning:${id}`,"加入本次任务").checked,false);
+  assert.match(h.$("agentEngineeringStatus").textContent,/日历、资源和计算方式/);
+});
+
+test("Stale planning handoff refuses selection until explicit new-revision inspection", async(t)=>{
+  const id="d".repeat(32),h=harness(savedPlanRoute(()=>2)); t.after(h.close);
+  h.win.history.replaceState(null,"",`/?planning_project_id=${id}&planning_revision=1&planning_inputs_sha256=${"1".repeat(64)}`);
+  await h.app.start();await h.app.openWorkspace("C:/engineering");
+  assert.equal(h.app.state.engineeringRows[0].handoffStale,true); assert.equal(engineeringInput(h,`saved_planning:${id}`,"加入本次任务").disabled,true);
+  installLanguage(h);h.win.CBI18n.setLocale("en");assert.match(h.$("agentEngineering").textContent,/older revision or inputs/);h.win.CBI18n.setLocale("zh-CN");
+  const button=h.doc.querySelector("#agentEngineering button"); assert.equal(button.textContent,"读取并核对新修订");button.click();await settle();
+  assert.equal(h.app.state.engineeringRows[0].handoffStale,false);assert.equal(h.app.state.engineeringRows[0].selected,false);
+  assert.equal(engineeringInput(h,`saved_planning:${id}`,"加入本次任务").disabled,false);
+});
+
+test("Saved plan steps choice sends exact selection and loses stale authorization before submission",async(t)=>{
+  let revision=1;const id="d".repeat(32),h=harness(savedPlanRoute(()=>revision));t.after(h.close);await h.ready();
+  await h.app.inspectEngineering(h.app.state.engineeringRows[0]);change(h,engineeringInput(h,`saved_planning:${id}`,"加入本次任务"),true);
+  selectValue(h,"agentMode","steps");h.$("agentPlanningRecalculate").checked=true;h.$("agentMessage").value="按已保存方式重新计算";
+  await h.app.send();const payload=h.calls.find(call=>call.url==="/api/agent/turns"&&call.body).body;
+  assert.equal(payload.planning_action,"calculate");assert.equal(payload.engineering[0].project_id,id);assert.equal(payload.engineering[0].inputs_sha256,"1".repeat(64));
+  revision=2;h.$("agentMessage").value="再次重算";await h.app.send();assert.equal(h.calls.filter(call=>call.url==="/api/agent/turns"&&call.body).length,1);
+  assert.equal(h.app.state.engineeringRows[0].selected,false);assert.match(h.$("agentNotice").textContent,/工程快照已变化/);
+});
+
+test("Older host keeps the plan link context unavailable and does not silently open another workspace",async(t)=>{
+  const h=harness();t.after(h.close);h.win.history.replaceState(null,"",`/?planning_project_id=${"d".repeat(32)}&planning_revision=1&planning_inputs_sha256=${"1".repeat(64)}`);
+  await h.app.start();assert.equal(h.app.state.workspace,null);assert.match(h.$("agentNotice").textContent,/尚不支持已保存计划上下文/);
+});
+
+test("Saved plan receipts distinguish historical records from recomputation in both languages",async(t)=>{
+  const id="d".repeat(32),hash="1".repeat(64),plan={calendar:{weekdays:[0,1,2,3,4],holidays:[]},tasks:[{id:"A",name:"原任务名"}],resources:[]};
+  const computed={kind:"cpm",engine:{name:"civil-buddy-cpm",version:"1"},duration_workdays:8,finish_date:"2026-09-30",critical_task_ids:["A"],warnings:[]};
+  const provenance={kind:"saved_planning",project_id:id,revision:1,saved_inputs_sha256:hash,source_project_modified:false,engineering_verdict:"not_provided"};
+  const inspected={ok:true,result:{kind:"planning_inspection",saved_plan:{method:"cpm",plan,recorded_result:computed,synthetic:true}},provenance:{...provenance,result_origin:"saved_record_not_recomputed"}};
+  const recalculated={ok:true,result:{kind:"planning",method:"cpm",plan,result:computed,inputs_sha256:hash,synthetic:true},provenance:{...provenance,result_origin:"fixed_solver_recomputed",calculation_method:"cpm"}};
+  const h=harness((url,init)=>url.includes("/engineering-turn/events?")?response({events:[event(1,"tool_finished",{name:"planning_inspect",result:inspected}),event(2,"tool_finished",{name:"planning_calculate",result:recalculated})],turn:{status:"completed",result:{reply:"已核对"}}}):savedPlanRoute()(url,init));t.after(h.close);installLanguage(h);await h.ready();
+  selectValue(h,"agentMode","steps");h.$("agentMessage").value="检查保存计划";await h.app.send();
+  const cards=h.doc.querySelectorAll("#agentEngineeringResults article");assert.equal(cards.length,2);assert.match(cards[0].textContent,/本次读取未重算/);assert.match(cards[1].textContent,/固定求解器重算/);assert.match(cards[1].textContent,/原计划未修改/);assert.match(cards[0].textContent,/原任务名/);
+  h.win.CBI18n.setLocale("en");assert.match(h.$("agentEngineeringResults").textContent,/this read did not recompute/);assert.match(h.$("agentEngineeringResults").textContent,/fixed solver/);assert.match(h.$("agentEngineeringResults").textContent,/原任务名/);
+});
 
 test("Engineering selection: inspect before selection, explicit CAD snapshot confirmation, missing-input block and maximum four", async (t) => {
   const rows = [project("cad_section", "cad-1"), project("saved_frame", "missing", "missing_inputs"), ...[1, 2, 3, 4].map((n) => project("saved_frame", "frame-" + n))];
@@ -437,6 +1360,204 @@ test("Expert selection: high-risk writes require explicit phrase for each turn; 
   selectValue(h, "agentExpert", "checks"); assert.equal(h.$("agentRiskWrap").hidden, true); assert.equal(h.$("agentSend").disabled, false);
 });
 
+test("Expert selection: a quoted or embedded confirmation line never authorizes a high-risk write", async (t) => {
+  const h = harness(terminalRoute); t.after(h.close); await h.ready();
+  selectValue(h, "agentExpert", "plans"); selectValue(h, "agentSandbox", "workspace-write");
+  for (const message of ["原文如下：\n我明白，将由持证人员签认\n请解释", "我明白，将由持证人员签认。请保存", "“我明白，将由持证人员签认”", "不要执行；我明白，将由持证人员签认"]) {
+    h.$("agentMessage").value = message; h.$("agentMessage").dispatchEvent(new h.win.Event("input"));
+    assert.equal(h.$("agentSend").disabled, true, message);
+  }
+  h.$("agentMessage").value = "  我明白，将由持证人员签认  "; h.$("agentMessage").dispatchEvent(new h.win.Event("input"));
+  assert.equal(h.$("agentSend").disabled, false);
+});
+
+test("Expert selection: automatic workspace-write tasks remain available for reading and preview", async (t) => {
+  const h = harness(terminalRoute); t.after(h.close); installLanguage(h); await h.ready();
+  selectValue(h, "agentSandbox", "workspace-write");
+  assert.equal(h.$("agentSend").disabled, false);
+  assert.match(h.$("agentExpertNote").textContent, /保存副本前请手动选择岗位；仍可读取和预览/);
+  h.win.CBI18n.setLocale("en");
+  assert.match(h.$("agentExpertNote").textContent, /Select a role before saving.*Reading and previewing remain available/);
+  h.$("agentMessage").value = "Read the selected document"; await h.app.send();
+  const payload = h.calls.find((call) => call.url === "/api/agent/turns").body;
+  assert.equal(payload.expert_id, ""); assert.equal(payload.sandbox, "workspace-write");
+  assert.equal(payload.risk_confirmation, "");
+  assert.equal(h.doc.querySelector('nav a[href="/static/project-control.html"]').textContent, "Project records & issues");
+});
+
+test("Expert selection: a server risk escalation requires a fresh role and current-turn confirmation", async (t) => {
+  const h = harness((url, init) => {
+    if (url === "/api/agent/turns" && init) return response({ turn_id: "escalated", session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/escalated/events?")) return response({ events: [event(1, "authorization", { document_write_allowed: false,
+      reason: "current_turn_confirmation_required", risk_escalated: true, professional_signoff: false })], turn: { status: "completed" } });
+  }); t.after(h.close); installLanguage(h); await h.ready();
+  selectValue(h, "agentExpert", "checks"); selectValue(h, "agentSandbox", "workspace-write");
+  h.$("agentRiskConfirmation").value = "我明白，将由持证人员签认";
+  h.$("agentMessage").value = "核对并保存副本"; await h.app.send();
+  assert.equal(h.$("agentRiskConfirmation").value, "");
+  assert.equal(h.$("agentWriteGateNote").hidden, false);
+  assert.match(h.$("agentWriteGateNote").textContent, /高风险岗位.*重新输入签认句.*旧轮确认不会沿用/);
+  h.win.CBI18n.setLocale("en"); assert.match(h.$("agentWriteGateNote").textContent, /high-risk role.*confirmation phrase again/);
+  selectValue(h, "agentExpert", "plans"); assert.equal(h.$("agentSend").disabled, true);
+  await h.app.changeSession("", true); assert.equal(h.$("agentWriteGateNote").hidden, true);
+});
+
+test("Deliverable checks: failure is actionable, duplicate clicks do not duplicate requests, and retry succeeds", async (t) => {
+  const artifact = deliveryArtifact(); let reads = 0, finish;
+  const h = harness(deliveryRoute(artifact, (url) => {
+    if (url.includes("/readiness?")) { reads++; return reads === 1 ? new Promise((resolve) => { finish = resolve; }) : response(readinessResult(artifact)); }
+  })); t.after(h.close); await showDelivery(h);
+  checkButton(h).click(); checkButton(h).click(); await settle();
+  assert.equal(reads, 1); assert.equal(checkButton(h).disabled, true);
+  finish(response({ detail: "Artifact changed after registration" }, 409)); await settle();
+  assert.match(h.$("agentArtifacts").textContent, /交付检查失败：Artifact changed after registration/);
+  assert.equal(checkButton(h).textContent, "重试交付检查"); assert.equal(previewLink(h), null);
+  checkButton(h).click(); await settle();
+  assert.equal(reads, 2); assert.equal(checkButton(h).textContent, "重新检查交付");
+  const request = h.calls.find((call) => call.url.includes("/readiness?"));
+  assert.equal(request.url, "/api/agent/artifacts/deliverable-1/readiness?workspace=workspace-1");
+  assert.equal(request.init.method, "POST"); assert.deepEqual(request.body, {});
+});
+
+test("Deliverable checks: source names remain literal while bilingual layout and formula findings repaint", async (t) => {
+  const artifact = deliveryArtifact(), report = readinessResult(artifact);
+  report.readiness.status = "blocked";
+  report.readiness.checks.push({ id: "formula_cache", status: "blocked" }, { id: "recalculation", status: "review_required" });
+  const h = harness(deliveryRoute(artifact, (url) => url.includes("/readiness?") ? response(report) : undefined));
+  t.after(h.close); installLanguage(h); await showDelivery(h); checkButton(h).click(); await settle();
+  assert.match(h.$("agentArtifacts").textContent, /公式 2；有缓存 1；缺失缓存 1/);
+  assert.match(h.$("agentArtifacts").textContent, /公式未实际重算/);
+  assert.match(h.$("agentArtifacts").textContent, /版式尚未逐页核对/);
+  assert.match(h.$("agentArtifacts").textContent, /不代表人工验收/);
+  assert.match(h.$("agentArtifacts").textContent, new RegExp(artifact.output_sha256));
+  h.win.CBI18n.setLocale("en");
+  assert.equal(checkButton(h).textContent, "Recheck deliverable");
+  assert.match(h.$("agentArtifacts").textContent, /Formulas: 2; cached: 1; missing caches: 1/);
+  assert.match(h.$("agentArtifacts").textContent, /Formulas have not been recalculated/);
+  assert.match(h.$("agentArtifacts").textContent, /Layout has not been reviewed page by page/);
+  assert.match(h.$("agentArtifacts").textContent, /does not constitute human acceptance/);
+  assert.equal(h.$("agentArtifacts").querySelector("a").textContent, artifact.name);
+  assert.match(h.$("agentArtifacts").textContent, /原始工程资料.xlsx/);
+  h.win.CBI18n.setLocale("zh-CN"); assert.equal(checkButton(h).textContent, "重新检查交付");
+  assert.equal(h.calls.filter((call) => call.url.includes("/readiness?")).length, 1);
+});
+
+function recalculatedReadiness(job) {
+  const result = readinessResult(job.artifact);
+  result.engine_receipt = structuredClone(job.receipt);
+  Object.assign(result.readiness.format_details, { formula_cached_count: 2, formula_missing_cache_count: 0,
+    recalculation: "performed_by_excel", cached_values_status: "engine_refreshed_and_saved_verified" });
+  result.readiness.checks.push({ id: "formula_cache", status: "pass" }, { id: "recalculation", status: "pass" });
+  return result;
+}
+
+test("Deliverable checks: a host-bound Excel child shows verified fresh caches in both languages and retains professional review", async (t) => {
+  const job = completedExcelJob(), child = job.artifact, report = recalculatedReadiness(job);
+  const h = harness(deliveryRoute(child, (url) => url.includes("/readiness?") ? response(report) : undefined));
+  t.after(h.close); installLanguage(h); await showDelivery(h); checkButton(h).click(); await settle();
+  const panel = () => h.doc.querySelector(".artifact-readiness").textContent;
+  assert.match(panel(), /公式已由本机 Excel 实际重算，保存后的缓存已核对/);
+  assert.match(panel(), /保存后的公式缓存与本次 Excel 重算结果一致/);
+  assert.match(panel(), /实际引擎：Microsoft Excel · 版本 16.0 · 构建 19127/);
+  assert.match(panel(), /待人工核对/); assert.match(panel(), /仍需专业人员核对/); assert.match(panel(), /不代表人工验收/);
+  assert.doesNotMatch(panel(), /公式未实际重算|已有缓存仍未验证|已保存的公式缓存可能过期/);
+  h.win.CBI18n.setLocale("en");
+  assert.match(panel(), /Formulas were recalculated in local Excel and their saved caches checked/);
+  assert.match(panel(), /The saved formula caches match this Excel recalculation/);
+  assert.match(panel(), /Actual engine: Microsoft Excel.*Version 16.0.*Build 19127/);
+  assert.match(panel(), /Professional review is still required/); assert.match(panel(), /does not constitute human acceptance/);
+  assert.doesNotMatch(panel(), /Formulas have not been recalculated|Stored formula caches may be stale/);
+  assert.equal(h.$("agentArtifacts").querySelector("a").textContent, child.name);
+  assert.equal(report.readiness.status, "review_required"); assert.equal(report.readiness.automatic_acceptance, false);
+  assert.equal(h.calls.filter((call) => call.url.includes("/readiness?")).length, 1);
+  assert.equal(h.calls.filter((call) => call.url.includes("excel-recalculate")).length, 0);
+});
+
+test("Deliverable checks: malformed or stale Excel receipts cannot establish recalculation or cache verification", async (t) => {
+  const cases = {
+    "missing full receipt": (_, result) => { result.engine_receipt = null; },
+    "stale output hash": (_, result) => { result.engine_receipt.output_sha256 = "d".repeat(64); },
+    "stale parent hash": (_, result) => { result.engine_receipt.source_sha256 = "d".repeat(64); },
+    "another operation": (_, result) => { result.engine_receipt.job_id = "another-job"; },
+    "missing formula results": (_, result) => { delete result.engine_receipt.formula_results; },
+    "wrong typed formula result": (_, result) => { result.engine_receipt.formula_results[0].value = "42"; },
+    "incomplete cache count": (_, result) => { result.readiness.format_details.formula_cached_count = 1; },
+    "cleanup not verified": (_, result) => { result.engine_receipt.cleanup_verified = false; },
+    "host verification failed": (_, result) => { result.engine_receipt.verification.status = "fail"; },
+    "formula count mismatch": (_, result) => { result.engine_receipt.verification.formula_count = 1; },
+    "unregistered provenance": (child) => { child.provenance = "model_proposed"; },
+    "missing parent binding": (child) => { delete child.parent_output_sha256; },
+  };
+  for (const [name, mutate] of Object.entries(cases)) await t.test(name, async (t) => {
+    const job = completedExcelJob(), child = job.artifact, result = recalculatedReadiness(job); mutate(child, result);
+    const h = harness(deliveryRoute(child, (url) => url.includes("/readiness?") ? response(result) : undefined));
+    t.after(h.close); installLanguage(h); await showDelivery(h); checkButton(h).click(); await settle();
+    const panel = () => h.doc.querySelector(".artifact-readiness").textContent;
+    assert.match(panel(), /暂不能确认实际重算和缓存验证/);
+    assert.doesNotMatch(panel(), /公式已由本机 Excel 实际重算|保存后的公式缓存与本次 Excel 重算结果一致|实际引擎：/);
+    assert.equal(h.doc.querySelector('[data-check="recalculation"] strong').textContent, "公式重算 · 待核对");
+    assert.equal(h.doc.querySelector('[data-check="formula_cache"] strong').textContent, "公式缓存 · 待核对");
+    assert.match(panel(), /不代表人工验收/);
+    h.win.CBI18n.setLocale("en");
+    assert.match(panel(), /Recalculation and cache verification cannot be confirmed/);
+    assert.doesNotMatch(panel(), /Formulas were recalculated in local Excel|The saved formula caches match|Actual engine:/);
+    assert.equal(h.doc.querySelector('[data-check="recalculation"] strong').textContent, "Formula recalculation · Review required");
+    assert.ok(h.$("agentArtifacts").querySelector("a"), "malformed proof does not remove the registered download");
+  });
+});
+
+test("Deliverable checks: changed, unavailable and unrecorded original sources never appear current", async (t) => {
+  const artifact = deliveryArtifact("docx"); let sourceStatus = "changed";
+  const h = harness(deliveryRoute(artifact, (url) => url.includes("/readiness?") ? response(readinessResult(artifact, "docx", sourceStatus)) : undefined));
+  t.after(h.close); installLanguage(h); await showDelivery(h); checkButton(h).click(); await settle();
+  assert.match(h.$("agentArtifacts").textContent, /原始来源已变化，请从新版资料重新生成副本/);
+  assert.doesNotMatch(h.$("agentArtifacts").textContent, /当前文件与生成时一致/);
+  h.win.CBI18n.setLocale("en"); assert.match(h.$("agentArtifacts").textContent, /Generate a new copy from the updated source/);
+  sourceStatus = "unavailable"; checkButton(h).click(); await settle();
+  assert.match(h.$("agentArtifacts").textContent, /current version could not be verified/);
+  sourceStatus = "not_recorded"; checkButton(h).click(); await settle();
+  assert.match(h.$("agentArtifacts").textContent, /version used at generation was not recorded/);
+  sourceStatus = "current"; checkButton(h).click(); await settle();
+  assert.match(h.$("agentArtifacts").textContent, /current file matches the version used/);
+});
+
+test("Deliverable checks: native PDF link requires a completed eligible hash-bound PDF inspection", async (t) => {
+  const artifact = deliveryArtifact("pdf"); let result = readinessResult(artifact, "pdf"), finish;
+  const h = harness(deliveryRoute(artifact, (url) => url.includes("/readiness?") ? new Promise((resolve) => { finish = () => resolve(response(result)); }) : undefined));
+  t.after(h.close); await showDelivery(h); assert.equal(previewLink(h), null);
+  checkButton(h).click(); await settle(); assert.equal(previewLink(h), null);
+  finish(); await settle();
+  assert.equal(previewLink(h).href, "http://localhost/api/agent/artifacts/deliverable-1/preview?workspace=workspace-1");
+  assert.equal(previewLink(h).target, "_blank"); assert.equal(previewLink(h).rel, "noopener noreferrer");
+  result = readinessResult(artifact, "pdf"); result.readiness.preview.eligible = false;
+  checkButton(h).click(); await settle(); assert.equal(previewLink(h), null, "a recheck removes stale eligibility immediately");
+  finish(); await settle(); assert.equal(previewLink(h), null);
+  result = readinessResult(artifact, "docx"); result.readiness.preview = { kind: "native_pdf", eligible: true, rendered: false };
+  checkButton(h).click(); await settle(); finish(); await settle(); assert.equal(previewLink(h), null, "a DOCX cannot become a PDF preview");
+  result = readinessResult(artifact, "pdf"); result.readiness.checks.find((check) => check.id === "active_content").status = "blocked";
+  checkButton(h).click(); await settle(); finish(); await settle(); assert.equal(previewLink(h), null, "active-content findings override an inconsistent eligibility flag");
+  result = readinessResult(artifact, "pdf"); result.source_sha256 = "c".repeat(64);
+  checkButton(h).click(); await settle(); finish(); await settle();
+  assert.equal(previewLink(h), null); assert.match(h.$("agentArtifacts").textContent, /检查响应与当前副本不匹配/);
+});
+
+test("Deliverable checks: late results are discarded after changing session, workspace or turn", async (t) => {
+  for (const change of ["session", "workspace", "turn"]) await t.test(change, async (t) => {
+    const artifact = deliveryArtifact("pdf"); let finish;
+    const h = harness(deliveryRoute(artifact, (url, init) => {
+      if (url.includes("/readiness?")) return new Promise((resolve) => { finish = () => resolve(response(readinessResult(artifact, "pdf"))); });
+      if (url === "/api/agent/workspaces" && JSON.parse(init.body).path === "C:/second") return response({ workspace: { id: "workspace-2", root: "C:/second" }, capabilities: caps });
+    })); t.after(h.close); await showDelivery(h);
+    checkButton(h).click(); await settle();
+    if (change === "session") await h.app.changeSession("", true);
+    else if (change === "workspace") await h.app.openWorkspace("C:/second");
+    else { h.$("agentMessage").value = "下一轮任务"; await h.app.send(); }
+    finish(); await settle();
+    assert.equal(previewLink(h), null); assert.equal(h.app.state.artifactChecks.size, 0);
+    assert.doesNotMatch(h.$("agentArtifacts").textContent, /已检查副本 SHA-256/);
+  });
+});
+
 // Captured numeric fields from the real synthetic 400 x 600 mm rectangle and
 // saved 4 m beam acceptance fixtures; rendering tests never run a solver.
 const engineeringRenderFixtures = () => [
@@ -489,4 +1610,665 @@ test("Engineering results: missing values are not calculated from curves and ret
   assert.match(host.textContent, /形心（原图 x, y；mm）未返回/);
   assert.match(host.textContent, /工具未返回采样极值/);
   assert.doesNotMatch(host.textContent, /999999|123456/);
+});
+
+const historyCaps = { ...caps, features: { ...caps.features, session_discovery: true } };
+const savedSession = (id, turn = `turn-${id}`) => ({ session_id: id, latest_turn_id: turn, status: "completed", turn_count: 1, updated_at: "2026-09-30T10:00:00Z" });
+function historyRoute(route = () => undefined) {
+  return (url, init) => {
+    const custom = route(url, init); if (custom !== undefined) return custom;
+    if (url === "/api/agent/capabilities") return response(historyCaps);
+    if (url === "/api/agent/workspaces") return response({ workspace: { id: "workspace-1", root: "C:/engineering" }, capabilities: historyCaps });
+    if (url.startsWith("/api/agent/sessions?")) return response({ workspace: "workspace-1", sessions: [], next_cursor: null });
+  };
+}
+
+test("History recovery: fresh browser discovers persisted sessions and reopens outputs without starting a task", async (t) => {
+  const artifact = deliveryArtifact(), turn = { turn_id: "persisted-turn", session_id: "server-session", status: "completed", last_seq: 1, result: { reply: "已保存的原文", artifacts: [artifact] } };
+  const h = harness(historyRoute((url) => {
+    if (url.startsWith("/api/agent/sessions?")) return response({ workspace: "workspace-1", sessions: [savedSession("server-session", turn.turn_id)], next_cursor: null });
+    if (url.startsWith("/api/agent/turns?")) { assert.equal(new URL(url, "http://local").searchParams.get("session_id"), "server-session"); return response({ turns: [turn], next_cursor: null }); }
+    if (url.includes("/persisted-turn/events?")) return response({ turn, events: [event(1, "artifact", artifact)] });
+    if (url.startsWith("/api/agent/turns/persisted-turn?")) return response({ turn });
+  })); t.after(h.close); installLanguage(h); await h.ready();
+  assert.equal(h.app.state.session, "server-session");
+  assert.equal(h.$("agentReply").textContent, "已保存的原文");
+  assert.equal(h.doc.querySelectorAll("#agentArtifacts .artifact").length, 1);
+  assert.equal(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+  h.win.CBI18n.setLocale("en");
+  assert.match(h.$("agentSession").textContent, /Tasks: 1/);
+  assert.equal(h.$("agentReply").textContent, "已保存的原文");
+});
+
+test("Agent result: partial completion without artifacts has honest bilingual result and history labels", async (t) => {
+  for (const [status, partial, zh, en] of [
+    ["completed", true, "部分完成", "Partially completed"],
+    ["succeeded", true, "部分完成", "Partially completed"],
+    ["completed", false, "已完成", "Completed"],
+    ["completed", "true", "已完成", "Completed"],
+    ["failed", true, "未完成", "Incomplete"],
+    ["cancelled", true, "已停止", "Stopped"],
+    ["interrupted", true, "服务重启时中断", "Interrupted by service restart"]
+  ]) {
+    const turn = { turn_id: "status-turn", session_id: "status-session", status, last_seq: 0,
+      result: { reply: "原文件未变，工具未生成副本。", partial, artifacts: [] } };
+    const h = harness(historyRoute((url) => {
+      if (url.startsWith("/api/agent/sessions?")) return response({ workspace: "workspace-1", sessions: [{ ...savedSession(turn.session_id, turn.turn_id), status }], next_cursor: null });
+      if (url.startsWith("/api/agent/turns?")) return response({ turns: [turn], next_cursor: null });
+      if (url.includes("/status-turn/events?")) return response({ turn, events: [] });
+      if (url.startsWith("/api/agent/turns/status-turn?")) return response({ turn });
+    })); t.after(h.close); installLanguage(h); await h.ready();
+    for (const [locale, label] of [["zh-CN", zh], ["en", en], ["zh-CN", zh]]) {
+      h.win.CBI18n.setLocale(locale);
+      assert.equal(h.$("agentTurnStatus").textContent, label);
+      assert.ok(h.$("agentNotice").textContent.startsWith(label));
+      assert.ok(h.$("agentTurns").textContent.includes(" · " + label));
+      assert.ok(h.$("agentSession").selectedOptions[0].textContent.endsWith(" · " + label));
+      assert.equal(h.$("agentPartial").hidden, partial !== true);
+      assert.doesNotMatch(h.$("agentPartial").textContent, /下载|download|已保存|Saved outputs/);
+      assert.equal(h.$("agentArtifacts").children.length, 0);
+      assert.equal(h.$("agentReply").textContent, turn.result.reply);
+    }
+    assert.equal(h.app.state.turn.status, status, "presentation must not rewrite the runtime lifecycle");
+    assert.equal(h.timers.size, 0);
+    assert.equal(h.calls.some(call => call.url === "/api/agent/turns" && call.init), false);
+  }
+});
+
+test("Agent result: detailed partial result overrides a summary-only history row", async (t) => {
+  const turn = { turn_id: "partial-summary", status: "completed", result: { partial: true, reply: "仍有未完成项", artifacts: [] } };
+  const other = { turn_id: "older-partial", status: "completed", result: { partial: true } };
+  const h = harness((url, init) => {
+    if (url === "/api/agent/turns" && init) return response({ turn_id: turn.turn_id, session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/partial-summary/events?")) return response({ turn, events: [] });
+    if (url.startsWith("/api/agent/turns?")) return response({ turns: [{ turn_id: turn.turn_id, status: "completed" }, other] });
+  }); t.after(h.close); installLanguage(h); await showDelivery(h);
+  assert.equal(h.$("agentTurnStatus").textContent, "部分完成");
+  assert.equal([...h.$("agentTurns").children].filter(button => button.textContent.includes(" · 部分完成")).length, 2);
+  h.win.CBI18n.setLocale("en");
+  assert.equal([...h.$("agentTurns").children].filter(button => button.textContent.includes(" · Partially completed")).length, 2);
+});
+
+test("Agent reply provenance: only recorded model replies show the bilingual interpretation label", async (t) => {
+  const reply = "原文：10 箱型、已完成，不据此改写工具结果。";
+  for (const [mode, resultReply, origin] of [["model", reply], ["steps", reply], [undefined, reply], ["model", ""], ["model", reply, "host"]]) {
+    const turn = { turn_id: "provenance-turn", session_id: "provenance-session", status: "completed", last_seq: 0,
+      ...(mode ? { request: { mode } } : {}), result: { reply: resultReply, ...(origin ? { reply_origin: origin } : {}) } };
+    const h = harness(historyRoute((url) => {
+      if (url.startsWith("/api/agent/sessions?")) return response({ workspace: "workspace-1", sessions: [savedSession(turn.session_id, turn.turn_id)], next_cursor: null });
+      if (url.startsWith("/api/agent/turns?")) return response({ turns: new URL(url, "http://local").searchParams.get("session_id") === turn.session_id ? [turn] : [], next_cursor: null });
+      if (url.includes("/provenance-turn/events?")) return response({ turn, events: [] });
+      if (url.startsWith("/api/agent/turns/provenance-turn?")) return response({ turn });
+    })); t.after(h.close); installLanguage(h); await h.ready();
+    const label = h.$("agentReplyProvenance"), visible = mode === "model" && resultReply.length > 0 && origin !== "host";
+    assert.equal(label.nextElementSibling, h.$("agentReply"));
+    for (const [locale, text] of [["zh-CN", "AI 解读：请结合工具结果核对数值和执行情况。"],
+      ["en", "AI interpretation: check figures and execution details against the tool results."],
+      ["zh-CN", "AI 解读：请结合工具结果核对数值和执行情况。"]]) {
+      h.win.CBI18n.setLocale(locale);
+      assert.equal(label.hidden, !visible);
+      assert.equal(label.textContent, visible ? text : "");
+      assert.equal(h.$("agentReply").textContent, resultReply);
+      assert.equal(h.$("agentModelInterpretation").hidden, true);
+    }
+    await h.app.changeSession("", true);
+    assert.equal(label.hidden, true); assert.equal(label.textContent, "");
+    h.win.CBI18n.setLocale("en");
+    assert.equal(label.hidden, true); assert.equal(label.textContent, "");
+  }
+});
+
+test("Agent reply provenance: new task clears the prior model label before a steps result arrives", async (t) => {
+  let starts = 0, release;
+  const configuredCaps = { ...caps, models: { configured: true } };
+  const h = harness((url, init) => {
+    if (url === "/api/agent/capabilities") return response(configuredCaps);
+    if (url === "/api/agent/workspaces") return response({ workspace: { id: "workspace-1", root: "C:/engineering" }, capabilities: configuredCaps });
+    if (url === "/api/llm-config") return response({ configured: true, model: "test-model" });
+    if (url === "/api/agent/turns" && init) {
+      starts++;
+      const accepted = { turn_id: `provenance-${starts}`, session_id: JSON.parse(init.body).session_id };
+      return starts === 2 ? new Promise(resolve => { release = () => resolve(response(accepted)); }) : response(accepted);
+    }
+    if (/\/provenance-[12]\/events\?/.test(url)) return response({ events: [], turn: { status: "completed",
+      request: { mode: url.includes("provenance-1") ? "model" : "steps" }, result: { reply: "保持原有回复" } } });
+  }); t.after(h.close); installLanguage(h); await h.ready();
+  h.$("agentMode").value = "model"; h.$("agentMode").dispatchEvent(new h.win.Event("change"));
+  h.$("agentMessage").value = "核对资料"; await h.app.send();
+  const label = h.$("agentReplyProvenance");
+  assert.equal(label.hidden, false);
+  h.$("agentMode").value = "steps"; h.$("agentMode").dispatchEvent(new h.win.Event("change"));
+  h.$("agentMessage").value = "检查资料"; const pending = h.app.send(); await waitFor(() => typeof release === "function");
+  assert.equal(typeof release, "function");
+  assert.equal(label.hidden, true); assert.equal(label.textContent, "");
+  release(); await pending;
+  assert.equal(label.hidden, true); assert.equal(label.textContent, "");
+  assert.equal(h.$("agentReply").textContent, "保持原有回复");
+});
+
+test("Agent packing receipt: host facts stay primary and untrusted model interpretation is safely collapsed", async (t) => {
+  const facts = "10 个独立包装箱，使用 5 个柜；仍有待核对项。";
+  const interpretation = "### 模型原始解读\n\n10 箱型。\n\n<script>bad()</script>\n\n<img src=x onerror=bad()>\n\n[链接](javascript:bad())\n\n| 原文 | 数值 |\n| --- | --- |\n| 已完成 | 10 |";
+  const artifact = deliveryArtifact();
+  const packing = { ok: true, result: { schema: "packing_replan.result.v1", kind: "packing_replan", status: "completed", outcome: "unchanged",
+    source: { path: "箱单.json", sha256: "a".repeat(64) }, baseline: { can_fit: true, containers_used: 5, n_boxes: 10 },
+    final: { can_fit: true, containers_used: 5, n_boxes: 10, structure: { fail: 1, pending_design: 9 } }, rounds: [] },
+    provenance: { source: "箱单.json", source_sha256: "a".repeat(64), shipping_release: false, professional_signoff: false, originals_unchanged: true } };
+  const turn = { turn_id: "fact-turn", status: "completed", request: { mode: "model" }, result: { reply_origin: "host", reply: facts, partial: true,
+    model_interpretation: { trust: "model_claim", text: interpretation }, artifacts: [artifact], findings: [packing] } };
+  const h = harness((url, init) => {
+    if (url === "/api/agent/turns" && init) return response({ turn_id: turn.turn_id, session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/fact-turn/events?")) return response({ turn, events: [] });
+  }); t.after(h.close); installLanguage(h); await showDelivery(h);
+  const details = h.$("agentModelInterpretation"), body = h.$("agentModelInterpretationText");
+  assert.equal(details.hidden, false); assert.equal(details.open, false);
+  assert.equal(h.$("agentReply").nextElementSibling, details);
+  assert.equal(h.$("agentReply").textContent, facts);
+  assert.equal(h.$("agentReplyProvenance").hidden, true); assert.equal(h.$("agentReplyProvenance").textContent, "");
+  assert.equal(h.$("agentPartial").hidden, false); assert.equal(h.$("agentTurnStatus").textContent, "部分完成");
+  assert.equal(h.$("agentArtifacts").querySelectorAll("a").length, 1);
+  assert.equal(h.$("agentPackingResults").querySelectorAll("article").length, 1);
+  assert.equal(body.querySelector("script, img, iframe, svg, a[href^='javascript:']"), null);
+  assert.equal(body.querySelectorAll("table").length, 1);
+  assert.match(body.textContent, /10 箱型/); assert.match(body.textContent, /<script>bad\(\)<\/script>/);
+  const originalRendered = body.textContent;
+  for (const [locale, title] of [["en", "AI interpretation (review required)"], ["zh-CN", "AI 解读（需核对）"]]) {
+    h.win.CBI18n.setLocale(locale);
+    assert.equal(h.$("agentModelInterpretationTitle").textContent, title);
+    assert.equal(body.textContent, originalRendered); assert.equal(h.$("agentReply").textContent, facts);
+    assert.equal(h.app.state.turn.result.model_interpretation.text, interpretation);
+    assert.equal(h.$("agentReplyProvenance").hidden, true);
+  }
+});
+
+test("Agent packing receipt: only nonempty explicitly marked model claims appear", async (t) => {
+  for (const invalid of [null, "raw text", [], {}, { trust: "verified", text: "不能冒充已验证" }, { text: "缺少信任标签" },
+    { trust: "model_claim", text: "  " }, { trust: "model_claim", text: 10 }]) {
+    const h = harness((url, init) => {
+      if (url === "/api/agent/turns" && init) return response({ turn_id: "invalid-interpretation", session_id: JSON.parse(init.body).session_id });
+      if (url.includes("/invalid-interpretation/events?")) return response({ events: [], turn: { status: "completed", request: { mode: "model" },
+        result: { reply_origin: "host", reply: "确定性报告", model_interpretation: invalid } } });
+    }); t.after(h.close); await showDelivery(h);
+    assert.equal(h.$("agentModelInterpretation").hidden, true);
+    assert.equal(h.$("agentModelInterpretationTitle").textContent, "");
+    assert.equal(h.$("agentModelInterpretationText").textContent, "");
+    assert.equal(h.$("agentReply").textContent, "确定性报告");
+  }
+});
+
+test("Agent packing receipt: changing task and session clears prior model claims before responses arrive", async (t) => {
+  let release;
+  const first = { turn_id: "receipt-first", status: "completed", request: { mode: "model" }, result: { reply_origin: "host", reply: "首个事实报告",
+    model_interpretation: { trust: "model_claim", text: "只属于前一任务的 AI 解读" } } };
+  const h = harness((url, init) => {
+    if (url.startsWith("/api/agent/turns/receipt-first?")) return response({ turn: first });
+    if (url.includes("/receipt-first/events?")) return response({ turn: first, events: [] });
+    if (url === "/api/agent/turns" && init) return new Promise(resolve => { release = () => resolve(response({ turn_id: "receipt-next", session_id: JSON.parse(init.body).session_id })); });
+    if (url.includes("/receipt-next/events?")) return response({ events: [], turn: { status: "completed", request: { mode: "steps" }, result: { reply: "第二个检查报告" } } });
+  }); t.after(h.close); installLanguage(h); await h.ready(); await h.app.showTurn(first.turn_id);
+  const details = h.$("agentModelInterpretation"), body = h.$("agentModelInterpretationText");
+  assert.equal(details.hidden, false); details.open = true;
+  h.$("agentMessage").value = "检查下一任务"; const pending = h.app.send(); await waitFor(() => typeof release === "function");
+  assert.equal(typeof release, "function"); assert.equal(details.hidden, true); assert.equal(details.open, false); assert.equal(body.textContent, "");
+  h.win.CBI18n.setLocale("en"); assert.equal(details.hidden, true); assert.equal(body.textContent, "");
+  release(); await pending;
+  assert.equal(details.hidden, true); assert.equal(body.textContent, ""); assert.equal(h.$("agentReply").textContent, "第二个检查报告");
+  await h.app.showTurn(first.turn_id); assert.equal(details.hidden, false); assert.equal(details.open, false);
+  assert.equal(h.$("agentModelInterpretationTitle").textContent, "AI interpretation (review required)");
+  await h.app.changeSession("", true);
+  assert.equal(details.hidden, true); assert.equal(details.open, false); assert.equal(body.textContent, "");
+  h.win.CBI18n.setLocale("zh-CN"); assert.equal(details.hidden, true); assert.equal(body.textContent, "");
+});
+
+test("History recovery: session pages merge while refresh preserves unsent local drafts and permissions", async (t) => {
+  const h = harness(historyRoute((url) => {
+    if (url.startsWith("/api/agent/sessions?")) {
+      const cursor = new URL(url, "http://local").searchParams.get("cursor");
+      return response({ workspace: "workspace-1", sessions: cursor ? [savedSession("remote-2")] : [savedSession("remote-1")], next_cursor: cursor ? null : "page-two" });
+    }
+    if (/\/turns\/turn-remote-1/.test(url)) return response({ turn: { turn_id: "turn-remote-1", status: "completed", last_seq: 0, result: {} }, events: [] });
+  })); t.after(h.close); await h.ready();
+  await h.app.changeSession("", true); const draft = h.app.state.session;
+  h.$("agentMessage").value = "不要覆盖这个未发送草稿"; h.$("agentSandbox").value = "read-only"; h.selectFirst();
+  await h.app.loadSessions({ more: true }); await h.app.loadSessions();
+  assert.equal(h.app.state.session, draft); assert.equal(h.$("agentMessage").value, "不要覆盖这个未发送草稿");
+  assert.equal(h.$("agentSandbox").value, "read-only"); assert.equal(h.app.state.selected.size, 1);
+  const options = [...h.$("agentSession").options].map(option => option.value);
+  assert.ok(options.includes(draft)); assert.ok(options.includes("remote-2")); assert.equal(options.filter(id => id === "remote-1").length, 1);
+  assert.equal(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+});
+
+test("History recovery: a stale session page cannot cross a workspace change", async (t) => {
+  let delayed = false, release;
+  const h = harness(historyRoute((url, init) => {
+    if (url === "/api/agent/workspaces" && JSON.parse(init.body).path === "C:/other") return response({ workspace: { id: "workspace-2", root: "C:/other" }, capabilities: historyCaps });
+    if (url.startsWith("/api/agent/sessions?")) {
+      const workspace = new URL(url, "http://local").searchParams.get("workspace");
+      if (workspace === "workspace-1" && delayed) return new Promise(resolve => { release = resolve; });
+      return response({ workspace, sessions: [], next_cursor: null });
+    }
+  })); t.after(h.close); await h.ready(); delayed = true;
+  const pending = h.app.loadSessions(); await settle(); await h.app.openWorkspace("C:/other");
+  release(response({ workspace: "workspace-1", sessions: [savedSession("old-private")], next_cursor: "old-cursor" })); await pending;
+  assert.equal(h.app.state.workspace.id, "workspace-2"); assert.equal(h.app.state.nextSessionCursor, null);
+  assert.equal([...h.$("agentSession").options].some(option => option.value === "old-private"), false);
+});
+
+test("History recovery: invalid scope and repeated cursors retain drafts and provide retry feedback", async (t) => {
+  let mode = "normal";
+  const h = harness(historyRoute((url) => {
+    if (url.startsWith("/api/agent/sessions?")) return response({ workspace: mode === "wrong" ? "other" : "workspace-1", sessions: [], next_cursor: "same-cursor" });
+  })); t.after(h.close); await h.ready();
+  const current = h.app.state.session; h.$("agentMessage").value = "保留";
+  await h.app.loadSessions({ more: true }); assert.match(h.$("agentSessionHistoryStatus").textContent, /无法核对/);
+  mode = "wrong"; await h.app.loadSessions(); assert.match(h.$("agentSessionHistoryStatus").textContent, /无法核对/);
+  assert.equal(h.app.state.session, current); assert.equal(h.$("agentMessage").value, "保留");
+});
+
+test("History recovery: earlier task pages expose old artifacts and stale pages cannot cross sessions", async (t) => {
+  let hold = false, release;
+  const artifact = deliveryArtifact();
+  const h = harness((url) => {
+    if (url.startsWith("/api/agent/turns?")) {
+      const query = new URL(url, "http://local").searchParams;
+      if (query.get("cursor") && hold) return new Promise(resolve => { release = resolve; });
+      const turns = query.get("cursor") ? [{ turn_id: "old-task", session_id: query.get("session_id"), status: "completed" }] : Array.from({ length: 50 }, (_, i) => ({ turn_id: `recent-${i}`, session_id: query.get("session_id"), status: "completed" }));
+      return response({ turns, next_cursor: query.get("cursor") ? null : "older-tasks" });
+    }
+    if (url.includes("/old-task/events?")) return response({ turn: { turn_id: "old-task", status: "completed", last_seq: 0, result: { artifacts: [artifact] } }, events: [] });
+    if (url.startsWith("/api/agent/turns/old-task?")) return response({ turn: { turn_id: "old-task", status: "completed", last_seq: 0, result: { artifacts: [artifact] } } });
+  }); t.after(h.close); await h.ready(); await h.app.loadTurns({ more: true });
+  assert.equal(h.$("agentTurns").querySelectorAll("button").length, 51); await h.app.showTurn("old-task");
+  assert.equal(h.app.state.artifacts.size, 1); assert.equal(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+  assert.equal(h.app.state.taskRows.length, 51); assert.equal(h.app.state.nextTurnCursor, null);
+  assert.match(h.$("agentTurns").querySelector('[aria-current="true"]').textContent, /old-task/);
+  await h.app.loadTurns();
+  hold = true; const pending = h.app.loadTurns({ more: true }); await settle(); await h.app.changeSession("", true);
+  release(response({ turns: [{ turn_id: "stale-private", status: "completed" }], next_cursor: null })); await pending;
+  assert.equal(h.app.state.taskRows.some(row => row.turn_id === "stale-private"), false);
+});
+
+test("History recovery: interrupted terminal tasks drain more than 200 events and recover late artifacts", async (t) => {
+  const artifact = deliveryArtifact(); let pages = 0;
+  const turn = { turn_id: "restart-turn", status: "interrupted", last_seq: 202, result: { reason: "runtime_restart" } };
+  const h = harness((url) => {
+    if (url.startsWith("/api/agent/turns/restart-turn?")) return response({ turn });
+    if (url.includes("/restart-turn/events?")) {
+      pages += 1; const after = Number(new URL(url, "http://local").searchParams.get("after_seq"));
+      return response({ turn, events: after === 0 ? Array.from({ length: 200 }, (_, i) => event(i + 1, "status", { message: "原始记录" })) : [event(201, "artifact", artifact), event(202, "turn.interrupted", { result: turn.result })] });
+    }
+  }); t.after(h.close); await h.ready(); await h.app.showTurn("restart-turn");
+  assert.equal(h.app.state.seq, 200); assert.equal(h.timers.size, 1); assert.match(h.$("agentNotice").textContent, /恢复剩余/);
+  await h.tick(); assert.equal(pages, 2); assert.equal(h.app.state.seq, 202); assert.equal(h.timers.size, 0);
+  assert.equal(h.app.state.artifacts.size, 1); assert.match(h.$("agentNotice").textContent, /重启时中断/);
+  assert.equal(h.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+});
+
+test("History recovery: a terminal event cursor that makes no progress stops bounded automatic retries", async (t) => {
+  const turn = { turn_id: "stuck-turn", status: "completed", last_seq: 202, result: {} }; let pages = 0;
+  const h = harness((url) => {
+    if (url.startsWith("/api/agent/turns/stuck-turn?")) return response({ turn });
+    if (url.includes("/stuck-turn/events?")) { pages += 1; return response({ turn, events: [] }); }
+  }); t.after(h.close); await h.ready(); await h.app.showTurn("stuck-turn");
+  await h.tick(); await h.tick(); assert.equal(pages, 3); assert.equal(h.timers.size, 0);
+  assert.match(h.$("agentNotice").textContent, /尚未完整恢复/);
+});
+
+test("Agent answers: local lexer renders headings, tables, lists and exact code using DOM nodes", (t) => {
+  const h = harness(); t.after(h.close);
+  const source = '# 核对结果\n\n**原文件.xlsx**、*原文*与~~旧值~~。\n\n| 项目 | 数值 |\n|---|---:|\n| sample_count | 6 |\n\n> 仅核对原文。\n\n3. 读取文件\n4. 核对来源\n\n- [x] 已读取\n- [ ] 待复核\n\n```xml\n<source sha="' + 'a'.repeat(64) + '">\n  sample_count=6\n</source>\n```\n\n`Counts!B2`';
+  const host = h.$("agentReply");
+  assert.equal(renderAgentMarkdown(host, source, { lexer: h.win.marked.lexer }), true);
+  assert.equal(host.querySelector("h3").textContent, "核对结果");
+  assert.equal(host.querySelector("strong").textContent, "原文件.xlsx");
+  assert.equal(host.querySelector("em").textContent, "原文");
+  assert.equal(host.querySelector("del").textContent, "旧值");
+  assert.equal(host.querySelectorAll("table").length, 1);
+  assert.equal(host.querySelector("tbody td:last-child").textContent, "6");
+  assert.equal(host.querySelector(".agent-table-scroll").tabIndex, 0);
+  assert.equal(host.querySelector("ol").start, 3);
+  assert.match(host.querySelector("ul").textContent, /☑ 已读取.*☐ 待复核/s);
+  assert.equal(host.querySelector("pre code").textContent, '<source sha="' + 'a'.repeat(64) + '">\n  sample_count=6\n</source>');
+  assert.equal(host.querySelectorAll("source,input").length, 0);
+  assert.match(html, /src="\/static\/vendor\/marked.min.js"/);
+});
+
+test("Agent answers: HTML stays literal, image URLs never load and dangerous links are inactive", (t) => {
+  const h = harness(); t.after(h.close);
+  const host = h.$("agentReply");
+  const source = '[good](https://example.invalid/reference) [js](javascript:alert%281%29) [data](data:text/html,evil) [file](file:///private) [relative](//evil.invalid) [credentials](https://user:secret@example.invalid)\n\n![箱单图片](https://evil.invalid/track.png)\n\n<script>window.bad=1</script>\n\n<img src="https://evil.invalid/x" onerror="bad()">\n\n<svg onload="bad()"><foreignObject><iframe src="https://evil.invalid"></iframe></foreignObject></svg>\n\n<style>@import "https://evil.invalid/a.css";</style>';
+  renderAgentMarkdown(host, source, { lexer: h.win.marked.lexer });
+  assert.equal(host.querySelectorAll("script,img,iframe,svg,style,object,embed,form,input,video,audio,link").length, 0);
+  assert.equal(host.querySelectorAll("a").length, 1);
+  const link = host.querySelector("a");
+  assert.equal(link.href, "https://example.invalid/reference");
+  assert.equal(link.rel, "noopener noreferrer"); assert.equal(link.referrerPolicy, "no-referrer");
+  assert.match(host.textContent, /箱单图片/); assert.match(host.textContent, /<script>window.bad=1<\/script>/);
+  assert.equal(h.win.bad, undefined);
+  assert.equal(host.querySelector("[src],[srcset],[onerror],[onload],[style]"), null);
+});
+
+test("Agent answers: lexer escaping is undone once while source entities, quotes and exact code remain intact", (t) => {
+  const h = harness(); t.after(h.close); const host = h.$("agentReply");
+  const code = '{"kind":"text","literal":"&amp; &quot; &#34; <tag>"}';
+  const prose = '原文 "quote" < 6 & literal &amp; &quot; &#34;';
+  const source = prose + '\n\n`' + code + '`\n\n```json\n' + code + '\n```\n\n\\<escaped\\>\n\n[query](https://example.invalid/?a=1&amp;b=2)';
+  renderAgentMarkdown(host, source, { lexer: h.win.marked.lexer });
+  assert.equal(host.querySelector("p").textContent, prose);
+  assert.equal(host.querySelector("p code").textContent, code);
+  assert.equal(host.querySelector("pre code").textContent, code);
+  assert.match(host.textContent, /<escaped>/);
+  assert.equal(host.querySelector("tag,escaped"), null);
+  assert.equal(new URL(host.querySelector("a").href).searchParams.get("b"), "2");
+  assert.equal(new URL(host.querySelector("a").href).searchParams.has("amp;b"), false);
+});
+
+test("Agent answers: unavailable, failing or excessive lexer output preserves complete plain text", (t) => {
+  const h = harness(); t.after(h.close); const host = h.$("agentReply"), source = "# 原文\n<script>仍是原文</script>";
+  for (const lexer of [undefined, () => { throw new Error("parser unavailable"); },
+    () => Array.from({ length: 7000 }, () => ({ type: "text", text: "ignored" })),
+    () => { let tokens = [{ type: "text", text: "deep" }]; for (let i = 0; i < 34; i++) tokens = [{ type: "blockquote", tokens }]; return tokens; }]) {
+    assert.equal(renderAgentMarkdown(host, source, { lexer }), false);
+    assert.equal(host.textContent, source); assert.equal(host.children.length, 0);
+  }
+  const large = "原".repeat(128001); let called = false;
+  assert.equal(renderAgentMarkdown(host, large, { lexer: () => { called = true; return []; } }), false);
+  assert.equal(called, false); assert.equal(host.textContent, large);
+});
+
+test("Agent subagents: roles, child IDs, outcomes and Markdown survive history reopening and language changes", async (t) => {
+  const saved = storage(), reply = '## 核对结果\n\n| 文件 | 数量 |\n|---|---|\n| 原文件.xlsx | 6 |\n\n```text\nsample_count=6\n' + 'a'.repeat(64) + '\n```';
+  const evidence = "a1234567-child-evidence", review = "b7654321-child-review";
+  const turn = { turn_id: "child-history", task_id: "parent-lease", status: "completed", last_seq: 8, result: { reply } };
+  const events = [event(1, "turn.started"),
+    event(2, "subtask_started", { task_id: evidence, role: "evidence", goal: "读取原文件.xlsx" }),
+    event(3, "model", { task_id: evidence, model: "synthetic-model" }),
+    event(4, "tool_finished", { task_id: evidence, name: "search_sources", result: {} }),
+    event(5, "subtask_finished", { task_id: evidence, role: "evidence", status: "completed", findings: "### 来源\n\n`sample_count=6`", trust: "assistant_claimed" }),
+    event(6, "subtask_started", { task_id: review, role: "review", goal: "复核来源" }),
+    event(7, "subtask_finished", { task_id: review, role: "review", status: "failed", error: "<img src=x>来源不可读" }),
+    event(8, "turn.completed")].map(row => ({ ...row, task_id: "parent-lease", actor_id: "test-owner" }));
+  const route = (url) => {
+    if (url.includes("/child-history/events?")) return response({ turn, events });
+    if (url.startsWith("/api/agent/turns/child-history?")) return response({ turn });
+  };
+  const first = harness(route, saved); installLanguage(first); await first.ready(); await first.app.showTurn(turn.turn_id);
+  const before = first.$("agentReply").textContent;
+  assert.equal(first.$("agentReply").querySelectorAll("table").length, 1);
+  for (const index of [1, 2, 3, 4]) {
+    assert.match(first.$("agentEvents").children[index].querySelector(".subtask-meta").textContent, /证据检索.*a1234567/);
+    assert.doesNotMatch(first.$("agentEvents").children[index].querySelector(".subtask-meta").textContent, /parent-lease|test-owner/);
+  }
+  assert.match(first.$("agentEvents").children[4].querySelector(".subtask-meta").textContent, /已完成/);
+  assert.match(first.$("agentEvents").children[6].querySelector(".subtask-meta").textContent, /独立复核.*b7654321.*未完成/);
+  assert.equal(first.doc.querySelector(".subtask-findings code").textContent, "sample_count=6");
+  assert.equal(first.doc.querySelector("#agentEvents img"), null);
+  first.win.CBI18n.setLocale("en");
+  assert.equal(first.$("agentReply").textContent, before); assert.equal(first.app.state.turn.result.reply, reply);
+  assert.match(first.$("agentEvents").children[6].querySelector(".subtask-meta").textContent, /Independent review.*b7654321.*Incomplete/);
+  assert.match(first.doc.querySelector(".subtask-findings summary").textContent, /model claims/);
+  assert.equal(first.$("agentEvents").children.length, 8);
+  first.close();
+  const second = harness(route, saved); t.after(second.close); installLanguage(second); await second.app.start();
+  assert.equal(second.$("agentReply").textContent, before); assert.equal(second.doc.querySelectorAll("#agentReply table").length, 1);
+  assert.equal(second.$("agentEvents").children.length, 8); assert.equal(second.app.state.subtasks.size, 2);
+  assert.equal(second.calls.filter(call => call.url === "/api/agent/turns" && call.init).length, 0);
+  await second.app.changeSession("", true); assert.equal(second.app.state.subtasks.size, 0);
+});
+
+test("Agent subagents: switching language during event draining retains the terminal snapshot and child role", async (t) => {
+  const turn = { turn_id: "child-drain", status: "interrupted", last_seq: 3, result: { reason: "runtime_restart" } };
+  const h = harness((url) => {
+    if (url.startsWith("/api/agent/turns/child-drain?")) return response({ turn });
+    if (url.includes("/child-drain/events?")) {
+      const after = Number(new URL(url, "http://local").searchParams.get("after_seq"));
+      return response({ turn, events: after ? [event(3, "subtask_finished", { task_id: "c1234567", status: "cancelled" })]
+        : [event(1, "turn.started"), event(2, "subtask_started", { task_id: "c1234567", role: "review" })] });
+    }
+  }); t.after(h.close); installLanguage(h); await h.ready(); await h.app.showTurn(turn.turn_id);
+  h.win.CBI18n.setLocale("en"); assert.equal(h.app.state.turn.status, "interrupted");
+  await h.tick();
+  assert.match(h.$("agentEvents").lastChild.querySelector(".subtask-meta").textContent, /Independent review.*c1234567.*Stopped/);
+  assert.equal(h.timers.size, 0); assert.equal(h.app.state.turn.status, "interrupted");
+});
+
+
+test("History recovery: task pages reject wrong outer workspace or session without changing history", async (t) => {
+  let wrong = null;
+  const h = harness((url) => {
+    if (url.startsWith("/api/agent/turns?")) {
+      const query = new URL(url, "http://local").searchParams;
+      return response({ workspace: wrong === "workspace" ? "other" : query.get("workspace"),
+        session_id: wrong === "session" ? "other" : query.get("session_id"),
+        turns: [{ turn_id: wrong ? "foreign-turn" : "own-turn", status: "completed" }], next_cursor: wrong ? "foreign-cursor" : "own-cursor" });
+    }
+  }); t.after(h.close); await h.ready();
+  for (wrong of ["workspace", "session"]) {
+    await h.app.loadTurns();
+    assert.match(h.$("agentNotice").textContent, /无法核对/);
+    assert.deepEqual(h.app.state.taskRows.map(row => row.turn_id), ["own-turn"]);
+    assert.equal(h.app.state.nextTurnCursor, "own-cursor");
+  }
+});
+
+test("Submission recovery: a later history selection in the same session keeps its own outcome", async (t) => {
+  let delay = false, release;
+  const server = submissionServer();
+  const h = harness(async (url, init) => {
+    if (delay && url.startsWith("/api/agent/turns/registered-1?")) {
+      delay = false;
+      const result = await server.route(url, init);
+      return new Promise(resolve => { release = () => resolve(result); });
+    }
+    return server.route(url, init);
+  });
+  t.after(h.close);
+  await h.ready();
+  h.$("agentMessage").value = "First ambiguous request";
+  await h.app.send();
+  server.records.push({ ...server.records[0], turn_id: "different-history-task",
+    request: { ...server.records[0].request, message: "Other old request" },
+    result: { reply: "Different selected task" } });
+  delay = true;
+  const recovery = h.app.recoverSubmission();
+  await waitFor(() => typeof release === "function");
+  await h.app.showTurn("different-history-task");
+  const notice = h.$("agentNotice").textContent;
+  release();
+  assert.equal(await recovery, false);
+  assert.equal(h.app.state.turn.turn_id, "different-history-task");
+  assert.notEqual(h.app.state.submissionOutcome, "recovered");
+  assert.equal(h.$("agentNotice").textContent, notice);
+  assert.equal(server.stats.tasks, 1);
+});
+
+test("File discovery: a partial list retains visible explicit sources and packing choice without granting permission", async (t) => {
+  let listing = fileReport([{ path: "箱单.json" }, { path: "site-note.txt" }]);
+  const server = submissionServer({ loseFirst: false, capabilities: { features: { ...caps.features, packing_replan: true } } });
+  const h = harness((url, init) => url.startsWith("/api/agent/files?") ? response(listing) : server.route(url, init));
+  t.after(h.close); installLanguage(h); await h.ready();
+  for (const input of h.doc.querySelectorAll("#agentFiles input")) { input.checked = true; input.dispatchEvent(new h.win.Event("change")); }
+  h.$("agentPackingSource").value = "箱单.json"; h.$("agentMessage").value = "Keep this unsent draft";
+  listing = fileReport([{ path: "another.md" }], "workspace-1", { complete: false, depth_limit_reached: true, incomplete_reasons: ["depth_limit"] });
+  await h.app.loadFiles();
+  assert.deepEqual([...h.app.state.selected].sort(), ["site-note.txt", "箱单.json"].sort());
+  assert.equal(h.$("agentPackingSource").value, "箱单.json"); assert.match(h.$("agentFiles").textContent, /已保留此前选择/);
+  assert.equal(h.doc.querySelectorAll("#agentFiles input:checked").length, 2);
+  assert.equal(h.$("agentSandbox").value, "read-only"); assert.equal(h.$("agentRiskConfirmation").value, ""); assert.equal(server.stats.posts, 0);
+  h.win.CBI18n.setLocale("en");
+  assert.match(h.$("agentFilesStatus").textContent, /may be incomplete/); assert.match(h.$("agentFiles").textContent, /Previous selection retained: 箱单.json/);
+  assert.equal(h.$("agentPackingSource").value, "箱单.json"); assert.equal(h.$("agentMessage").value, "Keep this unsent draft");
+  await h.app.send();
+  const sent = h.calls.find(call => call.url === "/api/agent/turns" && call.init).body;
+  assert.deepEqual(sent.files.sort(), ["site-note.txt", "箱单.json"].sort()); assert.deepEqual(sent.packing_sources, [{ source: "箱单.json" }]);
+  assert.equal(sent.sandbox, "read-only"); assert.equal(sent.risk_confirmation, "");
+});
+
+test("File discovery: malformed inventories cannot erase choices or expand Agent formats", async (t) => {
+  for (const kind of ["missing-files", "wrong-workspace", "wrong-purpose", "duplicate-path", "invalid-count", "invalid-flags", "false-complete-at-limit", "ifc-as-agent"]) await t.test(kind, async (t) => {
+    let listing = fileReport([{ path: "箱单.json" }]);
+    const server = submissionServer({ capabilities: { features: { ...caps.features, packing_replan: true } } });
+    const h = harness((url, init) => url.startsWith("/api/agent/files?") ? response(listing) : server.route(url, init));
+    t.after(h.close); installLanguage(h); await h.ready(); h.selectFirst(); h.$("agentPackingSource").value = "箱单.json";
+    const before = JSON.stringify(h.app.state.files), saved = h.saved.getItem("cb_agent_workspaces_v1");
+    listing = fileReport([]);
+    if (kind === "missing-files") delete listing.files;
+    if (kind === "wrong-workspace") listing.workspace = "other-project";
+    if (kind === "wrong-purpose") listing.purpose = "project_control";
+    if (kind === "duplicate-path") listing = fileReport([{ path: "duplicate.md" }, { path: "duplicate.md" }]);
+    if (kind === "invalid-count") listing.returned_count = 1;
+    if (kind === "invalid-flags") listing.complete = false;
+    if (kind === "false-complete-at-limit") listing = fileReport(Array.from({ length: 500 }, (_, index) => ({ path: `listed-${index}.md` })));
+    if (kind === "ifc-as-agent") listing = fileReport([{ path: "design.ifc" }]);
+    await h.app.loadFiles();
+    assert.equal(JSON.stringify(h.app.state.files), before); assert.deepEqual([...h.app.state.selected], ["箱单.json"]);
+    assert.equal(h.$("agentPackingSource").value, "箱单.json"); assert.equal(h.saved.getItem("cb_agent_workspaces_v1"), saved);
+    assert.equal(server.stats.posts, 0); h.win.CBI18n.setLocale("en"); assert.match(h.$("agentFilesStatus").textContent, /could not be validated/);
+  });
+});
+
+test("File discovery: complete absence deselects with a bilingual explanation", async (t) => {
+  let listing = fileReport([{ path: "箱单.json" }]);
+  const server = submissionServer({ capabilities: { features: { ...caps.features, packing_replan: true } } });
+  const h = harness((url, init) => url.startsWith("/api/agent/files?") ? response(listing) : server.route(url, init));
+  t.after(h.close); installLanguage(h); await h.ready(); h.selectFirst(); h.$("agentPackingSource").value = "箱单.json";
+  listing = fileReport([]); await h.app.loadFiles();
+  assert.equal(h.app.state.selected.size, 0); assert.equal(h.$("agentPackingSource").value, "");
+  assert.match(h.$("agentFilesStatus").textContent, /已取消选择：箱单.json/);
+  h.win.CBI18n.setLocale("en"); assert.match(h.$("agentFilesStatus").textContent, /deselected: 箱单.json/);
+  assert.equal(server.stats.posts, 0);
+});
+
+test("File discovery: delayed partial refresh cannot retain sources in a different workspace", async (t) => {
+  let delay = false, release;
+  const server = submissionServer({ capabilities: { features: { ...caps.features, packing_replan: true } } });
+  const h = harness((url, init) => {
+    if (url.startsWith("/api/agent/files?")) {
+      const workspace = new URL(url, "http://localhost").searchParams.get("workspace");
+      if (delay && workspace === "workspace-1") { delay = false; return new Promise(resolve => { release = () => resolve(response(fileReport([], workspace, { complete: false, depth_limit_reached: true, incomplete_reasons: ["depth_limit"] }))); }); }
+      return response(fileReport([{ path: workspace === "workspace-1" ? "old.json" : "new.json" }], workspace));
+    }
+    return server.route(url, init);
+  });
+  t.after(h.close); await h.ready(); h.selectFirst(); h.$("agentPackingSource").value = "old.json";
+  delay = true; const loading = h.app.loadFiles(); await waitFor(() => typeof release === "function");
+  await h.app.openWorkspace("C:/second"); h.selectFirst(); h.$("agentPackingSource").value = "new.json";
+  release(); await loading;
+  assert.deepEqual([...h.app.state.selected], ["new.json"]); assert.equal(h.$("agentPackingSource").value, "new.json");
+  assert.doesNotMatch(h.$("agentFiles").textContent, /old.json/); assert.equal(server.stats.posts, 0);
+});
+
+test("Received material: explicit selection pins exact registered origin, preserves literal names and translates its label", async (t) => {
+  const file = receivedSource(); const server = submissionServer({ loseFirst: false });
+  const h = harness((url, init) => url.startsWith("/api/agent/files?") ? response(fileReport([file, { path: "ordinary.md" }])) : server.route(url, init));
+  t.after(h.close); installLanguage(h); await h.ready();
+  assert.equal(h.app.state.selected.size, 0); assert.equal(h.app.state.selectedBindings.size, 0); assert.equal(server.stats.posts, 0);
+  assert.match(h.$("agentFiles").textContent, /接收的项目资料 · 版本 1/); assert.match(h.$("agentFiles").textContent, /工程原文<img/);
+  assert.equal(h.$("agentFiles").querySelector("img"), null);
+  h.selectFirst(); const binding = { path: file.path, origin: file.origin };
+  assert.deepEqual(JSON.parse(h.saved.getItem("cb_agent_workspaces_v1")).workspaces["workspace-1"].file_bindings, [binding]);
+  h.$("agentMessage").value = "Keep this draft"; selectValue(h, "agentSandbox", "workspace-write"); h.$("agentRiskConfirmation").value = riskPhrase;
+  h.win.CBI18n.setLocale("en");
+  assert.match(h.$("agentFiles").textContent, /Received project material · revision 1/);
+  assert.equal(h.$("agentMessage").value, "Keep this draft"); assert.equal(h.$("agentRiskConfirmation").value, riskPhrase);
+  assert.equal(h.$("agentSandbox").value, "workspace-write"); assert.deepEqual([...h.app.state.selectedBindings], [[file.path, file.origin]]);
+  await h.app.send(); const sent = h.calls.find(call => call.url === "/api/agent/turns" && call.init).body;
+  assert.deepEqual(sent.files, [file.path]); assert.deepEqual(sent.file_bindings, [binding]); assert.equal(sent.sandbox, "workspace-write");
+});
+
+test("Received material: malformed or partial refresh retains the original binding without silently adopting new revision", async (t) => {
+  const first = receivedSource(), second = receivedSource(2, "e".repeat(64)); let listing = fileReport([first]);
+  const server = submissionServer({ loseFirst: false });
+  const h = harness((url, init) => url.startsWith("/api/agent/files?") ? response(listing) : server.route(url, init));
+  t.after(h.close); installLanguage(h); await h.ready(); h.selectFirst();
+  for (const next of [partialInventory([]), partialInventory([second]), { ...fileReport([second]), returned_count: 99 }]) {
+    listing = next; await h.app.loadFiles();
+    assert.deepEqual([...h.app.state.selected], [first.path]); assert.deepEqual(h.app.state.selectedBindings.get(first.path), first.origin);
+    assert.deepEqual(JSON.parse(h.saved.getItem("cb_agent_workspaces_v1")).workspaces["workspace-1"].file_bindings, [{ path: first.path, origin: first.origin }]);
+  }
+  h.$("agentMessage").value = "Use the originally selected version"; await h.app.send();
+  assert.deepEqual(h.calls.find(call => call.url === "/api/agent/turns" && call.init).body.file_bindings, [{ path: first.path, origin: first.origin }]);
+  assert.match(h.$("agentFiles").textContent, /已保留原先选择的版本 1/);
+  h.win.CBI18n.setLocale("en"); assert.match(h.$("agentFiles").textContent, /previously selected revision 1 is retained/);
+});
+
+test("Received material: complete revision or registration change deselects until explicit reselection and uses a new retry ID", async (t) => {
+  const first = receivedSource(); let listing = fileReport([first]);
+  const server = submissionServer();
+  const h = harness((url, init) => url.startsWith("/api/agent/files?") ? response(listing) : server.route(url, init));
+  t.after(h.close); installLanguage(h); await h.ready(); h.selectFirst(); h.$("agentMessage").value = "Read received material";
+  await h.app.send(); const old = h.calls.filter(call => call.url === "/api/agent/turns" && call.init)[0].body;
+  assert.equal(server.stats.tasks, 1);
+  const second = receivedSource(2, "e".repeat(64)); listing = fileReport([second]); await h.app.loadFiles();
+  assert.equal(h.app.state.selected.size, 0); assert.equal(h.app.state.selectedBindings.size, 0);
+  assert.match(h.$("agentFilesStatus").textContent, /登记版本已变化/); assert.equal(server.stats.posts, 1);
+  h.win.CBI18n.setLocale("en"); assert.match(h.$("agentFilesStatus").textContent, /select them again/);
+  h.win.CBI18n.setLocale("zh-CN"); h.selectFirst(); await h.app.send();
+  const sent = h.calls.filter(call => call.url === "/api/agent/turns" && call.init).at(-1).body;
+  assert.notEqual(sent.idempotency_key, old.idempotency_key); assert.deepEqual(sent.file_bindings, [{ path: second.path, origin: second.origin }]); assert.equal(server.stats.tasks, 2);
+  const { file_bindings: oldBinding, idempotency_key: oldKey, ...oldOther } = old;
+  const { file_bindings: newBinding, idempotency_key: newKey, ...newOther } = sent;
+  assert.deepEqual(newOther, oldOther, "only the explicitly reselected binding changes this request fingerprint");
+  const third = { ...second, origin: { ...second.origin, registered_sha256: "f".repeat(64) } }; listing = fileReport([third]); await h.app.loadFiles();
+  assert.equal(h.app.state.selected.size, 0); assert.equal(h.app.state.selectedBindings.size, 0);
+});
+
+test("Received material: retry and reload preserve the pinned binding but never restore write permission", async (t) => {
+  const file = receivedSource(), saved = storage(), server = submissionServer();
+  const route = (url, init) => url.startsWith("/api/agent/files?") ? response(fileReport([file])) : server.route(url, init);
+  const first = harness(route, saved); t.after(first.close); await first.ready(); first.selectFirst();
+  selectValue(first, "agentSandbox", "workspace-write"); first.$("agentMessage").value = "Read received material"; await first.app.send();
+  const a = first.calls.find(call => call.url === "/api/agent/turns" && call.init).body;
+  await first.app.send(); const b = first.calls.filter(call => call.url === "/api/agent/turns" && call.init).at(-1).body;
+  assert.equal(a.idempotency_key, b.idempotency_key); assert.deepEqual(a.file_bindings, b.file_bindings); assert.equal(server.stats.tasks, 1);
+  const reloaded = harness(route, saved); t.after(reloaded.close); await reloaded.ready();
+  assert.deepEqual([...reloaded.app.state.selectedBindings], [[file.path, file.origin]]); assert.deepEqual([...reloaded.app.state.selected], [file.path]);
+  assert.equal(reloaded.$("agentSandbox").value, "read-only"); assert.equal(reloaded.$("agentRiskConfirmation").value, "");
+});
+
+test("Received material: forged origins and generic hidden paths cannot enter the inventory or change existing selection", async (t) => {
+  const valid = receivedSource(), variants = [];
+  for (const patch of [{ kind: "other" }, { import_id: "e".repeat(32) }, { document_id: "../private" }, { document_id: "f".repeat(32) }, { revision: 0 }, { revision: 257 },
+    { revision: 1.5 }, { registered_sha256: "A".repeat(64) }, { document_id: ["d".repeat(32)] }, { registered_sha256: ["a".repeat(64)] },
+    { extra: true }]) variants.push({ ...valid, origin: { ...valid.origin, ...patch } });
+  variants.push({ ...valid, origin: null }, { ...valid, origin: undefined }, { ...valid, path: "ordinary.md" },
+    { ...valid, path: valid.path.replace(".md", ".MD") }, { ...valid, path: valid.path.replace("handoffs/", "other/") },
+    { ...valid, path: `.civil-buddy/out/handoffs/${"b".repeat(32)}/../secret.md` }, { ...valid, path: ".civil-buddy/config.json" });
+  for (const [index, invalid] of variants.entries()) await t.test(`forged-${index}`, async (t) => {
+    let listing = fileReport([valid]); const server = submissionServer({ loseFirst: false });
+    const h = harness((url, init) => url.startsWith("/api/agent/files?") ? response(listing) : server.route(url, init));
+    t.after(h.close); await h.ready(); h.selectFirst(); const saved = h.saved.getItem("cb_agent_workspaces_v1");
+    listing = fileReport([invalid]); await h.app.loadFiles();
+    assert.equal(h.app.state.fileListingError, true); assert.deepEqual([...h.app.state.selectedBindings], [[valid.path, valid.origin]]);
+    assert.equal(h.saved.getItem("cb_agent_workspaces_v1"), saved); assert.equal(server.stats.posts, 0);
+  });
+  const checker = require("../demo/static/modules/file-listing.js");
+  const project = { ...fileReport([valid]), purpose: "project_control" };
+  assert.throws(() => checker.validate(project, "workspace-1", "project_control"), /响应无法核对/);
+  assert.equal(checker.safePath(valid.path), false, "the generic hidden-path ban remains unchanged");
+});
+
+test("Received material: unbound legacy hidden choices are not restored or upgraded from new inventory metadata", async (t) => {
+  const file = receivedSource(), saved = storage();
+  saved.setItem("cb_agent_workspaces_v1", JSON.stringify({ lastRoot: "C:/engineering", workspaces: { "workspace-1": {
+    sessions: [{ id: "old-session", turn: "" }], files: [file.path, "ordinary.md", ".civil-buddy/config.json"]
+  } } }));
+  const h = harness(url => url.startsWith("/api/agent/files?") ? response(fileReport([file, { path: "ordinary.md" }])) : undefined, saved); t.after(h.close); await h.ready();
+  assert.deepEqual([...h.app.state.selected], ["ordinary.md"]); assert.equal(h.app.state.selectedBindings.size, 0);
+  assert.equal(h.doc.querySelectorAll("#agentFiles input:checked").length, 1);
+});
+
+test("Received material: a delayed inventory cannot attach old bindings after workspace changes", async (t) => {
+  const file = receivedSource(); let delayed = false, release;
+  const server = submissionServer({ loseFirst: false });
+  const h = harness((url, init) => {
+    if (url.startsWith("/api/agent/files?")) {
+      const workspace = new URL(url, "http://localhost").searchParams.get("workspace");
+      if (workspace === "workspace-1" && delayed) return new Promise(resolve => { release = () => resolve(response(partialInventory([receivedSource(2)]))); });
+      return response(fileReport(workspace === "workspace-1" ? [file] : [{ path: "new.md" }], workspace));
+    }
+    return server.route(url, init);
+  }); t.after(h.close); await h.ready(); h.selectFirst(); delayed = true;
+  const old = h.app.loadFiles(); await waitFor(() => typeof release === "function"); await h.app.openWorkspace("C:/second"); h.selectFirst(); release(); await old;
+  assert.deepEqual([...h.app.state.selected], ["new.md"]); assert.equal(h.app.state.selectedBindings.size, 0); assert.doesNotMatch(h.$("agentFiles").textContent, /Received|接收/);
 });

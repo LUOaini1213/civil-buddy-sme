@@ -22,6 +22,7 @@ pub mod rag;
 pub mod runtime_core;
 pub mod product;
 pub mod store;
+pub mod sqlite;
 pub mod tier_map;
 pub mod websearch;
 

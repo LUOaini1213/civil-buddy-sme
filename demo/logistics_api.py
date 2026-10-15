@@ -144,7 +144,9 @@ def page():
 @router.get(BASE + "/capabilities")
 def capabilities():
     from packing_assistant.logistics.ocr import capability
+    from packing_assistant.logistics.intake import digital_pdf_capability
     return {"ok": True, "formats": ["xlsx", "xlsm", "csv", "tsv", "json", "pdf", "png", "jpg", "jpeg"],
+            "digital_pdf": digital_pdf_capability(),
             "ocr": {**capability(), "note": "解释器存在不代表模型已就绪；按实际解析结果报告。"},
             "limits": {"source_bytes": 8 * 1024 * 1024, "bundle_bytes": 24 * 1024 * 1024}, "packing_modes": ["packaged", "materials"]}
 

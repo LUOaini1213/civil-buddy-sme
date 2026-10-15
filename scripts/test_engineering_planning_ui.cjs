@@ -27,10 +27,10 @@ function dom(){const doc={nodes:[],ids:{},views:[],activeElement:null,cookie:'',
   for(const m of html.matchAll(/<([a-z]+)\b([^>]*?)>/g)){const attrs=m[2],id=/\bid="([^"]+)"/.exec(attrs),view=/\bdata-view="([^"]+)"/.exec(attrs);if(!id&&!view)continue;const node=doc.createElement(m[1]);if(id)doc.ids[id[1]]=node;if(view){node.dataset.view=view[1];doc.views.push(node);}}
   doc.body=doc.createElement('body');doc.ids.viewMode.value='Week';doc.ids.exportFormat.value='json';return doc;
 }
-async function app(fetcher=async()=>response({projects:[]})){
+async function app(fetcher=async()=>response({projects:[]}),options={}){
   const doc=dom(),charts=[],win={location:{pathname:'/engineering/planning',search:''},history:{replaceState(){}},confirm:()=>true,addEventListener(){},removeEventListener(){}};
   const {startPlanningApp}=await modulePromise;
-  const instance=startPlanningApp(doc,{initialize:false,fetch:fetcher,window:win,Gantt:class{constructor(node,tasks){charts.push(tasks);}}});
+  const instance=startPlanningApp(doc,{initialize:false,fetch:fetcher,window:win,Gantt:class{constructor(node,tasks){charts.push(tasks);}},...options});
   instance.newLocal(plan,'教学计划',true);return{instance,doc,charts};
 }
 const text=(node)=>node.textContent+' '+node.children.map(text).join(' ');
@@ -39,6 +39,22 @@ test('dependencies accept four types and bounded negative lag; resource parser r
   const {parseDependencies,parseResources}=await modulePromise;
   assert.deepEqual(parseDependencies('A:FS:0,A:SS:-2,B:FF:3,C:SF:0').map(d=>d.type),['FS','SS','FF','SF']);
   assert.throws(()=>parseDependencies('A:FS:0,A:FS:2'));assert.throws(()=>parseDependencies('A:FS:99999'));assert.throws(()=>parseResources('__proto__:2'));assert.throws(()=>parseResources('A:1,A:2'));
+});
+
+test('saved plan handoff carries exact revision/hash and refuses unapplied or unsaved changes',async()=>{
+  const binding={kind:'saved_planning',project_id:'b'.repeat(32),revision:3,inputs_sha256:'a'.repeat(64),source_sha256:null,confirmed_solid:false};
+  const {instance,doc}=await app(async()=>response({project:project(3,{agent_selection:binding}),run_id:'a'.repeat(32)}),{agentPlanningSupported:true});
+  await instance.open(binding.project_id);assert.equal(doc.ids.unifiedChat.hidden,false);
+  const query=new URL(doc.ids.unifiedChat.href,'http://localhost').searchParams;assert.equal(query.get('planning_project_id'),binding.project_id);assert.equal(query.get('planning_revision'),'3');assert.equal(query.get('planning_inputs_sha256'),binding.inputs_sha256);
+  const field=doc.nodes.filter(n=>n.attributes['aria-label']==='A 工期').at(-1);field.value='3';await field.emit('input');
+  assert.equal(doc.ids.unifiedChat.href,'#');assert.equal(doc.ids.unifiedChat.getAttribute('aria-disabled'),'true');
+  let prevented=false;await doc.ids.unifiedChat.emit('click',{preventDefault(){prevented=true;}});assert.equal(prevented,true);assert.match(doc.ids.notice.textContent,/先保存/);
+  instance.undo();assert.equal(new URL(doc.ids.unifiedChat.href,'http://localhost').searchParams.get('planning_revision'),'3');
+});
+
+test('older Agent capability or missing bound snapshot does not advertise a working handoff',async()=>{
+  const old=await app(async()=>response({project:project(),run_id:'a'.repeat(32)}));await old.instance.open('b'.repeat(32));assert.equal(old.doc.ids.unifiedChat.hidden,true);assert.match(old.doc.ids.unifiedChatStatus.textContent,/尚不支持/);
+  const updated=await app(async()=>response({project:project(),run_id:'a'.repeat(32)}),{agentPlanningSupported:true});await updated.instance.open('b'.repeat(32));assert.equal(updated.doc.ids.unifiedChat.href,'#');assert.match(updated.doc.ids.unifiedChatStatus.textContent,/缺少版本摘要/);
 });
 test('PPC includes unclosed commitments in denominator and records no fabricated completion',async()=>{
   const {weeklyPpc}=await modulePromise;assert.deepEqual(weeklyPpc([{status:'done'},{status:'planned'},{status:'missed'}]),{total:3,done:1,planned:1,missed:1,percent:33.3});assert.equal(weeklyPpc([]).percent,null);

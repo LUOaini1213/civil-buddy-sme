@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import importlib
 import json
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -17,6 +18,45 @@ MAX_PAGES = 40
 MAX_PIXELS = 25_000_000
 MAX_CELLS = 200000
 MAX_COLUMNS = 128
+
+
+_PDF_DEPENDENCY_REASONS = {
+    "missing_dependency": "数字 PDF 表格解析不可用：当前环境缺少依赖，请按 requirements-logistics.txt 配置环境。Excel、CSV 仍可上传。",
+    "dependency_load_failed": "数字 PDF 表格解析依赖加载失败；请检查当前工作台环境。Excel、CSV 仍可上传。",
+}
+
+
+class DigitalPdfDependencyError(ValueError):
+    """Fixed user-facing diagnosis; never expose a native loader's paths."""
+
+    def __init__(self, reason_code):
+        self.reason_code = reason_code
+        super().__init__(_PDF_DEPENDENCY_REASONS[reason_code])
+
+
+def _digital_pdf_module():
+    try:
+        module = importlib.import_module("pdfplumber")
+        if not callable(getattr(module, "open", None)):
+            raise ImportError("missing PDF opener")
+    except ModuleNotFoundError:
+        raise DigitalPdfDependencyError("missing_dependency") from None
+    except Exception:
+        raise DigitalPdfDependencyError("dependency_load_failed") from None
+    return module
+
+
+def digital_pdf_capability() -> dict:
+    """Current interpreter import readiness, never a table-recognition result."""
+    result = {"available": False, "status": "unavailable", "engine": "pdfplumber",
+              "local_only": True, "verification_scope": "dependency_import_only",
+              "field_accuracy": "not_verified"}
+    try:
+        _digital_pdf_module()
+    except DigitalPdfDependencyError as exc:
+        return {**result, "reason_code": exc.reason_code, "reason": str(exc)}
+    return {**result, "available": True, "status": "available", "reason_code": None,
+            "reason": "数字 PDF 表格解析依赖可用；识别字段仍须对照原件核对。"}
 _LENGTH = {"mm": 1, "毫米": 1, "cm": 10, "厘米": 10, "m": 1000, "米": 1000, "in": 25.4, "inch": 25.4, "inches": 25.4, "英寸": 25.4, "ft": 304.8, "英尺": 304.8}
 _WEIGHT = {"kg": 1, "kgs": 1, "千克": 1, "公斤": 1, "g": .001, "克": .001, "t": 1000, "吨": 1000, "lb": .45359237, "lbs": .45359237, "磅": .45359237}
 _QUANTITY_UNITS = {"pcs", "pc", "ea", "件", "个", "套", "卷", "米", "m", "根", "支", "片", "块", "张", "roll", "rolls", "set", "sets", "pair", "pairs"}
@@ -29,7 +69,7 @@ def _norm(value):
 
 _ALIASES = {
     "container_id": ("集装箱号", "柜号", "container no", "container number", "container id", "ctn no"),
-    "package_type": ("包装类型", "包装形式", "package type", "packing type"),
+    "package_type": ("包装类型", "包装形式", "package type", "packing type", "A-frame", "a_frame", "stillage", "A架"),
     "package_id": ("箱号", "包装号", "package id", "package no", "case no", "case number", "box no", "carton no"),
     "material_id": ("物料编号", "材料编号", "物料编码", "材料编码", "料号", "件号", "item no", "item code", "part no", "material id", "sku"),
     "name": ("name", "品名", "货物名称", "材料名称", "名称", "货物名称及规格", "品名及规格", "description", "item description", "commodity"),
@@ -45,6 +85,11 @@ _ALIASES = {
     "gross_kg": ("gross", "gross weight", "g.w.", "毛重", "gross kg"),
     "dimension_scope": ("dimension scope", "尺寸范围", "尺寸口径"),
     "weight_scope": ("weight scope", "重量范围", "重量口径"),
+    "orientation": ("orientation", "transport orientation", "upright", "this_side_up", "this side up", "运输姿态", "保持直立", "此面向上", "竖放"),
+    "stacking": ("stacking", "stacking requirement", "no_stack", "no stack", "no stacking", "stackable", "堆叠要求", "禁止堆叠", "禁止叠放", "不可堆叠", "可堆叠", "允许堆叠"),
+    "handling_requirements": ("handling", "handling requirements", "handling instructions", "special handling", "transport requirements", "shipping instructions", "fragile", "易碎", "运输要求", "运输要求原文", "装卸要求", "特殊要求", "备注", "notes", "remarks"),
+    "tare_kg": ("tare kg", "tare", "tare weight", "package tare", "每包装皮重", "架体皮重", "皮重"),
+    "capacity_kg": ("capacity kg", "load capacity", "rated capacity", "package capacity", "每包装声明载荷上限", "声明载荷上限", "架体承载上限"),
     "dimensions": ("dimensions", "dimension", "尺寸", "长宽高", "l x w x h", "l*w*h", "l×w×h", "package dimensions", "箱外尺寸"),
 }
 _LOOKUP = {_norm(a): f for f, aliases in _ALIASES.items() for a in (*aliases, f)}
@@ -262,10 +307,7 @@ def _pdf_cells(table, page_number, table_index):
 
 
 def _pdf(data, ocr_backend):
-    try:
-        import pdfplumber
-    except ImportError as exc:
-        raise ValueError("数字 PDF 表格解析需要安装 pdfplumber") from exc
+    pdfplumber = _digital_pdf_module()
     tables, issues, scan_pages = [], [], []
     with pdfplumber.open(BytesIO(data)) as pdf:
         if len(pdf.pages) > MAX_PAGES:
@@ -400,6 +442,8 @@ def _table_rows(tables, issues):
                     continue
                 if targets.count(field) > 1:
                     evidence["reason"] = "同一字段对应多个列，需人工选择，未自动取第一列。"
+                    previous = row["evidence"].get(field)
+                    evidence["alternatives"] = (previous.get("alternatives", [{k: v for k, v in previous.items() if k != "reason"}]) if previous else []) + [{k: v for k, v in evidence.items() if k != "reason"}]
                     row["evidence"][field] = evidence
                     continue
                 if cell.get("reason"):
@@ -408,6 +452,18 @@ def _table_rows(tables, issues):
                     value, reason = _number(raw, field, unit)
                 elif field in ("dimension_scope", "weight_scope"):
                     value, reason = _scope(raw, field == "dimension_scope"), ""
+                elif field in ("orientation", "stacking"):
+                    from packing_assistant.transport_constraints import normalize
+                    value, reason = normalize(field, raw, raw_header)
+                elif field == "package_type" and _norm(raw_header) in {"aframe", "stillage", "a架"}:
+                    if raw.strip().lower() in {"true", "yes", "1", "是"}:
+                        value, reason = "A-frame", ""
+                    elif raw.strip().lower() in {"false", "no", "0", "否", ""}:
+                        value, reason = UNSPECIFIED, ""
+                    else:
+                        value, reason = UNSPECIFIED, "A 架列须明确是/否；外尺寸、皮重和载荷上限需分别填写，不从此格猜测。"
+                elif field == "handling_requirements" and _norm(raw_header) in {"fragile", "易碎"}:
+                    value, reason = (UNSPECIFIED if raw.strip().lower() in {"false", "no", "0", "否", ""} else "fragile=" + raw), ""
                 else:
                     value, reason = raw.strip() or UNSPECIFIED, ""
                 row[field] = value

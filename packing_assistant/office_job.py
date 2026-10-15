@@ -138,7 +138,7 @@ def _write_rows(worksheet: Any, rows: List[List[str]]) -> None:
                 cell.data_type = "s"
 
 
-def _save_workbook(workbook: Any, path: Path) -> Path:
+def _save_workbook(workbook: Any, path: Path, *, new_copy: bool = False) -> Path:
     from io import BytesIO
 
     from packing_assistant.sandbox import guarded_write_bytes
@@ -146,12 +146,46 @@ def _save_workbook(workbook: Any, path: Path) -> Path:
     try:
         with BytesIO() as buffer:
             workbook.save(buffer)
-            return guarded_write_bytes(path, buffer.getvalue())
+            data = buffer.getvalue()
+            if new_copy:
+                return _write_new_xlsx(path, data)
+            return guarded_write_bytes(path, data)
     finally:
         workbook.close()
 
 
-def write_xlsx(path: Path, sheets: List[Tuple[str, List[List[str]]]]) -> Path:
+def _write_new_xlsx(path: Path, data: bytes) -> Path:
+    """Reserve a new export name; an existing source or earlier copy is never replaced."""
+    from packing_assistant.sandbox import assert_write
+
+    number = 1
+    while True:
+        suffix = "" if number == 1 else f"-{number}"
+        candidate = path.with_name(path.stem + suffix + path.suffix)
+        number += 1
+        if candidate.exists() or candidate.is_symlink():
+            continue
+        target = assert_write(candidate)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            stream = target.open("xb")
+        except FileExistsError:
+            continue
+        try:
+            with stream:
+                if stream.write(data) != len(data):
+                    raise OSError("Excel export was not written completely")
+        except Exception:
+            # Only this invocation's incomplete, exclusively created file.
+            try:
+                assert_write(target).unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        return target
+
+
+def write_xlsx(path: Path, sheets: List[Tuple[str, List[List[str]]]], *, new_copy: bool = False) -> Path:
     import openpyxl
 
     wb = openpyxl.Workbook()
@@ -162,7 +196,7 @@ def write_xlsx(path: Path, sheets: List[Tuple[str, List[List[str]]]]) -> Path:
         first = False
         ws.title = _sheet_name(name, used)
         _write_rows(ws, rows)
-    return _save_workbook(wb, Path(path))
+    return _save_workbook(wb, Path(path), new_copy=new_copy)
 
 
 def _query_from_md(md: str) -> str:
@@ -266,7 +300,11 @@ def publish_root_copy(workbook: Path) -> Optional[Path]:
 
 
 def export_md_to_xlsx(md_path: Path, query: str = "") -> List[Path]:
-    """Sibling xlsx always. If the user named a job-root workbook, patch it too."""
+    """Export new XLSX copies. Mentioning an input workbook never authorizes patching it.
+
+    ``query`` remains accepted for callers, but automatic export never invokes
+    ``patch_xlsx``. That dedicated operation retains its separate explicit path.
+    """
     p = Path(md_path)
     if not p.is_file() or p.suffix.lower() != ".md":
         return []
@@ -275,21 +313,17 @@ def export_md_to_xlsx(md_path: Path, query: str = "") -> List[Path]:
     if not sheets:
         return []
     written: List[Path] = []
-    sibling = p.with_suffix(".xlsx")
-    written.append(write_xlsx(sibling, sheets))
+    sibling = write_xlsx(p.with_suffix(".xlsx"), sheets, new_copy=True)
+    written.append(sibling)
     if not job_root_granted():
         return written
-    q = query or _query_from_md(text)
-    target = pick_job_xlsx(q)
     try:
-        if target is not None:
-            written.append(patch_xlsx(target, sheets))
-        else:
-            dest = job_root() / sibling.name
-            # 根目录里已有同名文件、又不是我们上次写的：那是用户自己的表，不覆盖。
-            if dest.resolve() != sibling.resolve() and (not dest.exists() or dest.name in own_exports()):
-                written.append(write_xlsx(dest, sheets))
-                _remember_export(dest)
+        dest = job_root() / sibling.name
+        # A root convenience copy never replaces an original or an earlier export.
+        if dest.resolve() != sibling.resolve() and not dest.exists() and not dest.is_symlink():
+            copied = write_xlsx(dest, sheets, new_copy=True)
+            written.append(copied)
+            _remember_export(copied)
     except (OSError, RuntimeError, *_OFFICE_CONTENT_ERRORS):
         pass
     return written

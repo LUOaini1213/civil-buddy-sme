@@ -127,11 +127,21 @@ pub fn load_env() {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LlmConfig {
     pub api_key: String,
     pub base_url: String,
     pub model: String,
+}
+
+impl std::fmt::Debug for LlmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Environment-provided endpoints may themselves contain credentials.
+        f.debug_struct("LlmConfig")
+            .field("configured", &!self.api_key.is_empty())
+            .field("model", &self.model)
+            .finish_non_exhaustive()
+    }
 }
 
 fn pick_env<F>(get: &F, names: &[&str]) -> String
@@ -212,6 +222,65 @@ pub fn set_runtime_llm(cfg: Option<LlmConfig>) {
 
 pub fn runtime_llm() -> Option<LlmConfig> {
     RUNTIME_LLM.read().ok().and_then(|g| g.clone())
+}
+
+fn provider_url(raw: &str) -> Result<reqwest::Url, &'static str> {
+    let invalid = "invalid_provider_url";
+    if raw.chars().any(char::is_whitespace) || raw.chars().any(char::is_control) {
+        return Err(invalid);
+    }
+    raw
+        .split_once("://")
+        .map(|(_, rest)| rest.split('/').next().unwrap_or(""))
+        .filter(|authority| !authority.is_empty() && !authority.contains('@'))
+        .ok_or(invalid)?;
+    let url = reqwest::Url::parse(raw).map_err(|_| invalid)?;
+    let host = url.host_str().ok_or(invalid)?;
+    let loopback = matches!(host, "localhost" | "127.0.0.1" | "[::1]");
+    if !(url.scheme() == "https" || url.scheme() == "http" && loopback)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.port_or_known_default().is_none_or(|port| port == 0)
+    {
+        return Err(invalid);
+    }
+    Ok(url)
+}
+
+/// Apply one in-memory update atomically. A retained secret remains bound to
+/// its parsed scheme/host/effective port; a path or model change is allowed.
+/// Error strings are fixed public codes and never contain a URL or secret.
+pub fn update_runtime_llm(
+    supplied_key: &str,
+    supplied_base: &str,
+    supplied_model: &str,
+) -> Result<(), &'static str> {
+    let mut runtime = RUNTIME_LLM.write().map_err(|_| "model_configuration_unavailable")?;
+    let current = runtime
+        .clone()
+        .unwrap_or_else(|| llm_from_env_map(|name| env::var(name).ok()));
+    let base = if supplied_base.trim().is_empty() {
+        current.base_url.as_str()
+    } else {
+        supplied_base.trim()
+    };
+    let url = provider_url(base)?;
+    let key = supplied_key.trim();
+    if key.is_empty()
+        && !provider_url(&current.base_url)
+            .is_ok_and(|old| old.origin() == url.origin())
+    {
+        return Err("provider_key_required");
+    }
+    let next = LlmConfig {
+        api_key: if key.is_empty() { current.api_key } else { key.to_owned() },
+        base_url: url.as_str().trim_end_matches('/').to_owned(),
+        model: if supplied_model.trim().is_empty() { current.model } else { supplied_model.trim().to_owned() },
+    };
+    *runtime = Some(next);
+    Ok(())
 }
 
 pub fn llm_config() -> LlmConfig {

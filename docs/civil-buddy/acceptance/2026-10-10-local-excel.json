@@ -1,0 +1,189 @@
+{
+  "schema": "civil-buddy-local-excel-acceptance.v1",
+  "date": "2026-10-10",
+  "implementation_base_commit": "037ea0e37589b38ac160f72415106251e532a815",
+  "evidence_scope_note": "Historical initial feature run on the exact hashes below, committed in 79dd3bfa57187c691cc74480fb351190c0eb5431. Later ownership-enumeration hardening and newer release binaries require their own package acceptance; this record is not retargeted to them.",
+  "tested_scope": "Synthetic same-machine native Excel product flow; local scripted provider only; not real-project/engineering acceptance",
+  "passed": true,
+  "checks_passed": 37,
+  "checks_total": 37,
+  "checks": [
+    {
+      "name": "deployed_product_module_origins",
+      "passed": true
+    },
+    {
+      "name": "explicit_local_desktop_available",
+      "passed": true
+    },
+    {
+      "name": "real_agent_preview_apply_registered_parent",
+      "passed": true
+    },
+    {
+      "name": "parent_download_hash",
+      "passed": true
+    },
+    {
+      "name": "parent_cache_not_misreported",
+      "passed": true
+    },
+    {
+      "name": "readonly_rejected_before_engine",
+      "passed": true
+    },
+    {
+      "name": "wrong_ack_rejected_before_engine",
+      "passed": true
+    },
+    {
+      "name": "stale_hash_rejected_before_engine",
+      "passed": true
+    },
+    {
+      "name": "caller_script_rejected_before_engine",
+      "passed": true
+    },
+    {
+      "name": "native_job_completed",
+      "passed": true
+    },
+    {
+      "name": "registered_derivative_bound",
+      "passed": true
+    },
+    {
+      "name": "native_input_only_recalc_controls_normalized",
+      "passed": true
+    },
+    {
+      "name": "retained_staging_input_exact",
+      "passed": true
+    },
+    {
+      "name": "native_cleanup_verified",
+      "passed": true
+    },
+    {
+      "name": "every_native_saved_formula_verified",
+      "passed": true
+    },
+    {
+      "name": "child_download_hash",
+      "passed": true
+    },
+    {
+      "name": "independent_formula_Quantities_D2",
+      "passed": true
+    },
+    {
+      "name": "independent_formula_Quantities_D3",
+      "passed": true
+    },
+    {
+      "name": "independent_formula_Quantities_D4",
+      "passed": true
+    },
+    {
+      "name": "independent_formula_Rates and quantities_A1",
+      "passed": true
+    },
+    {
+      "name": "readiness_has_actual_engine_evidence",
+      "passed": true
+    },
+    {
+      "name": "professional_review_remains_required",
+      "passed": true
+    },
+    {
+      "name": "idempotent_no_second_engine_job",
+      "passed": true
+    },
+    {
+      "name": "original_and_parent_unchanged",
+      "passed": true
+    },
+    {
+      "name": "changed_original_denied_before_engine",
+      "passed": true
+    },
+    {
+      "name": "changed_original_blocks_delivery",
+      "passed": true
+    },
+    {
+      "name": "cancel_observed_owned_calculation",
+      "passed": true
+    },
+    {
+      "name": "cancel_no_derivative_or_receipt",
+      "passed": true
+    },
+    {
+      "name": "cancel_owned_excel_stopped",
+      "passed": true
+    },
+    {
+      "name": "cancel_original_and_parent_unchanged",
+      "passed": true
+    },
+    {
+      "name": "external_relation_denied_before_engine",
+      "passed": true
+    },
+    {
+      "name": "genuine_excel_layout_change_failclosed",
+      "passed": true
+    },
+    {
+      "name": "restart_history_and_derivative_retained",
+      "passed": true
+    },
+    {
+      "name": "restart_exact_child_download",
+      "passed": true
+    },
+    {
+      "name": "explicit_disabled_launch_rejects_engine",
+      "passed": true
+    },
+    {
+      "name": "disabled_request_does_not_mutate_history",
+      "passed": true
+    },
+    {
+      "name": "isolated_host_stopped",
+      "passed": true
+    }
+  ],
+  "binary_sha256": "66b5155572fe037c8c5ae0077de644bbb0f90289e67985c47bbc52ad71f54cc5",
+  "broker_sha256": "a786c8838df517758fe61204c3d46cd55e2394dc36ec1bd11c2adaaa1fef3777",
+  "runtime_files": {
+    "scripts\\start_unified_workbench.py": "30b9796c9156acbe17ec2e39f39261924b50f1a83246a9d6c3914e58d4a66480",
+    "packing_assistant\\documents\\worker.py": "eacdf362ccb8f17d9e61441994c4f1784f03017688b3bd4d7c28493a60593186",
+    "packing_assistant\\documents\\ooxml.py": "361058f20cdc5de465476c8f32688cf130c8b0dd2a3aca46810969e4a93446f8",
+    "scripts\\excel-desktop-broker.ps1": "a786c8838df517758fe61204c3d46cd55e2394dc36ec1bd11c2adaaa1fef3777",
+    "packing_assistant\\documents\\service.py": "2f85495bb34aae3cb965664c58ec5d68f30eb44a1a9377fc800a1818a4584f3f",
+    "packing_assistant\\documents\\excel_engine.py": "b33b6f334e160c9f454adfc30335bbc3a058ef517a0e2fddaa5602c5e6c80db5"
+  },
+  "additional_scopes": {
+    "offline_admission_and_cache_tests": 25,
+    "rust_local_engine_tests": 11,
+    "agent_ui_tests": 92,
+    "i18n_tests": 4,
+    "simulated_browser_initial_checks": 19,
+    "simulated_browser_registered_child_checks": 15,
+    "real_typed_formula_results": 7,
+    "real_formula_error_refused": true,
+    "abrupt_broker_death_owned_excel_stopped_and_other_synthetic_instance_preserved": true
+  },
+  "boundaries": [
+    "Synthetic native-authored workbooks on this Windows desktop with installed Microsoft Excel only.",
+    "Agent parent turn used a deterministic loopback scripted model; no paid or external model inference.",
+    "Formula caches matched captured native values and independent expected fixture values; engineering facts and visual layout were not approved.",
+    "Genuine row-height changes were refused; unsupported workbook features fail before activation.",
+    "Restart/cancellation checks do not constitute second-computer or real-project acceptance.",
+    "The full offline gate and remote CI are separate evidence, not inferred from this feature acceptance."
+  ]
+}

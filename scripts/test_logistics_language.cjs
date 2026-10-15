@@ -7,6 +7,33 @@ const {JSDOM}=require('jsdom');
 const root=path.join(__dirname,'..');
 const read=p=>fs.readFileSync(path.join(root,p),'utf8');
 
+test('PDF dependency status stays separate from OCR and switches languages from saved capability data',async()=>{
+  const dom=new JSDOM(read('demo/static/logistics.html'),{url:'http://localhost/logistics',runScripts:'outside-only'});
+  const {window}=dom;
+  window.eval(read('demo/static/i18n.js'));window.eval(read('demo/static/i18n-logistics.js'));
+  window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
+  globalThis.CBI18n=window.CBI18n;
+  try{
+    const {startLogisticsApp}=await import('data:text/javascript;base64,'+Buffer.from(read('demo/static/logistics.js')).toString('base64'));
+    const data={formats:['xlsx','csv','pdf'],digital_pdf:{available:false,status:'unavailable',reason_code:'missing_dependency'},ocr:{available:false,ready:false,environment_found:false},limits:{source_bytes:8388608}};
+    const app=startLogisticsApp(window.document,{window,initialize:false,fetch:async url=>new Response(JSON.stringify(url.endsWith('/capabilities')?data:{projects:[]}))});
+    await app.initialize();
+    const status=()=>window.document.getElementById('capabilities').textContent;
+    assert.match(status(),/数字 PDF 表格解析不可用/);assert.match(status(),/本地 OCR 环境尚未就绪/);
+    assert.equal(window.document.getElementById('upload').disabled,false);
+    window.CBI18n.setLocale('en');
+    assert.match(status(),/Digital PDF table parsing is unavailable/);assert.match(status(),/Excel and CSV uploads remain available/);
+    assert.doesNotMatch(status(),/数字|环境|未确认/);
+    window.CBI18n.setLocale('zh-CN');assert.match(status(),/当前环境缺少依赖/);
+    app.state.capabilities={...data,digital_pdf:{available:true,status:'available'}};
+    window.CBI18n.setLocale('en');
+    assert.match(status(),/Digital PDF table dependencies are available/);assert.match(status(),/checking against the original/);
+    assert.match(status(),/OCR/);assert.doesNotMatch(status(),/Digital PDF table parsing is unavailable/);
+    app.state.capabilities={...data,digital_pdf:undefined};
+    window.CBI18n.setLocale('zh-CN');assert.match(status(),/能力尚未核实/);
+  } finally {delete globalThis.CBI18n;window.close();}
+});
+
 test('logistics language switch keeps input, pending edits, sources and confirmation state',async()=>{
   const dom=new JSDOM(read('demo/static/logistics.html'),{url:'http://localhost/logistics',runScripts:'outside-only'});
   const {window}=dom;
@@ -81,4 +108,33 @@ test('packing Vue template compiles and language updates keep user input and sou
   assert.equal(window.document.querySelector('.agent-card .title').textContent,'施工计划');
   assert.equal(window.document.querySelector('.agent-card .body-text').textContent,'柜型');
   vm.$destroy();dom.window.close();
+});
+
+test('handling fields and actionable calculation refusal survive a language switch verbatim',async()=>{
+  const dom=new JSDOM(read('demo/static/logistics.html'),{url:'http://localhost/logistics',runScripts:'outside-only'});
+  const {window}=dom;
+  window.eval(read('demo/static/i18n.js'));window.eval(read('demo/static/i18n-logistics.js'));
+  window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
+  globalThis.CBI18n=window.CBI18n;globalThis.CBLogisticsI18n=window.CBLogisticsI18n;
+  try{
+    const {startLogisticsApp}=await import('data:text/javascript;base64,'+Buffer.from(read('demo/static/logistics.js')).toString('base64'));
+    const failure={ok:false,revision:1,mode:'packaged',result:{ok:false,needs_human:[{row_id:'R00001',field:'handling_requirements',code:'unsupported_handling',message:'柜型'}]}};
+    const app=startLogisticsApp(window.document,{window,initialize:false,fetch:async()=>new Response(JSON.stringify(failure),{headers:{'Content-Type':'application/json'}})});
+    const row={id:'R00001',name:'原始货物',orientation:'upright',stacking:'no_stack',handling_requirements:'柜型',evidence:{handling_requirements:{raw:'柜型',header:'handling',source:{row:2,column:4}}}};
+    app.acceptProject({id:'a'.repeat(32),name:'Synthetic',revision:1,confirmed:true,versions:[],document:{source:{filename:'原件.csv'},rows:[row],totals:[]},audit:{issues:[]},summary:{}});
+    const $=id=>window.document.getElementById(id);
+    $('confirmation').value='我明白，将由持证人员签认';await app.calculate();
+    assert.equal(app.state.packing,null);assert.match($('packingResult').textContent,/R00001/);
+    window.CBI18n.setLocale('en');
+    assert.match($('packingResult').textContent,/unsupported or conflicts/);
+    assert.match($('packingResult').textContent,/柜型/);
+    assert.equal(window.document.querySelector('[data-ledger-field="handling_requirements"]').value,'柜型');
+    assert.equal(window.document.querySelector('[data-ledger-field="orientation"]').value,'upright');
+    assert.match(window.document.querySelector('[data-ledger-field="stacking"]').textContent,/Do not stack/);
+    assert.match($('handlingHelp').textContent,/Stability, securing, lifting/);
+    $('packingResult').querySelector('button').click();
+    assert.match($('sourceFacts').textContent,/柜型/);
+    window.CBI18n.setLocale('zh-CN');
+    assert.match($('packingResult').textContent,/R00001/);assert.equal(app.state.project.document.rows[0].handling_requirements,'柜型');
+  }finally{delete globalThis.CBI18n;delete globalThis.CBLogisticsI18n;dom.window.close();}
 });

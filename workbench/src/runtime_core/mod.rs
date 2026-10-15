@@ -9,7 +9,7 @@ pub use budget::{BudgetLimits, BudgetReservation, BudgetSnapshot, BudgetTree, Us
 pub use context::{
     check_request_budget, prepare_context, ContextReport, ContextRequest, PreparedContext,
 };
-pub use persistence::{RuntimeCore, RuntimeEvent, TurnLease, TurnRecord, TurnStart, TurnStatus};
+pub use persistence::{RuntimeCore, RuntimeEvent, SessionSummary, TurnLease, TurnRecord, TurnStart, TurnStatus};
 pub use workspace::WorkspaceContext;
 
 use serde::{Deserialize, Serialize};

@@ -1,5 +1,10 @@
 // Presentation-only English translations for the logistics and packing workbenches.
 window.CBI18n?.add({
+  "数字 PDF 表格解析依赖可用；识别字段仍须对照原件核对。": "Digital PDF table dependencies are available; extracted fields still require checking against the original.",
+  "数字 PDF 表格解析不可用：当前环境缺少依赖，请按 requirements-logistics.txt 配置环境。Excel、CSV 仍可上传。": "Digital PDF table parsing is unavailable: dependencies are missing in this environment. Configure it using requirements-logistics.txt. Excel and CSV uploads remain available.",
+  "数字 PDF 表格解析依赖加载失败；请检查当前工作台环境。Excel、CSV 仍可上传。": "Digital PDF table dependencies could not load. Check the current workbench environment. Excel and CSV uploads remain available.",
+  "数字 PDF 表格解析能力尚未核实。": "Digital PDF table parsing availability has not been checked.",
+  "文件类型：xlsx / xlsm / csv / tsv / pdf / png / jpg，单文件最多 {v0} MB。{v1} {v2} 扫描件识别不会自动下载模型，未知字段保持待确认。": "File types: xlsx / xlsm / csv / tsv / pdf / png / jpg; maximum {v0} MB per file. {v1} {v2} Scanned-document recognition does not download models automatically; unknown fields require review.",
   "装箱拼柜 · Civil Buddy": "Packing & Loading · Civil Buddy",
   "装箱拼柜": "Packing & Loading",
   "大 Team⊃A/B ·": "Lead team + A/B ·",
@@ -850,6 +855,11 @@ window.CBLogisticsI18n = {
       no_material_rows: 'No material rows with explicit headers were found. Check the source layout.',
       shared_cell: 'This source value spans several rows. It is counted once and is not allocated to individual rows or packages.',
       unresolved_field: 'This field needs review against its source.',
+      unsupported_handling: 'A handling requirement is unsupported or conflicts with another value. Review the original instructions before calculating.',
+      material_handling_not_modelled: 'Automatic boxing cannot enforce this handling requirement. Provide loaded package dimensions, gross mass and count, then use packaged mode.',
+      frame_data_missing: 'Provide loaded outer dimensions, net mass, tare, gross mass and declared payload capacity per frame. Do not estimate frame data.',
+      frame_capacity_exceeded: 'Net cargo mass exceeds the declared frame payload capacity. Check the frame data or redistribute the cargo.',
+      frame_mass_mismatch: 'Net cargo mass plus frame tare does not reconcile with gross mass. Check that all weights describe the same loaded package.',
       ocr_requires_confirmation: 'Check this OCR value against the original image.',
       zero_value: 'The source explicitly states zero. Check whether this row belongs in the shipment.',
       quantity_mismatch: 'Item quantity differs from package count × items per package.',
@@ -866,6 +876,17 @@ window.CBLogisticsI18n = {
   }
 };
 window.CBI18n?.add({"原始检查说明": "Original check message"});
+window.CBI18n?.add({
+  "运输姿态": "Transport orientation", "堆叠要求": "Stacking requirement", "运输要求原文": "Original handling requirements", "同字段原始列": "Original columns for this field",
+  "每包装皮重 kg": "Tare per package, kg", "每包装声明载荷上限 kg": "Declared payload capacity per package, kg",
+  "保持所填长宽高方向": "Keep the stated L/W/H orientation", "直立运输（高度保持向上）": "Upright (height stays vertical)",
+  "无姿态限制": "No orientation restriction", "禁止堆叠": "Do not stack", "允许堆叠（本次仍单层）": "Stacking allowed (this run stays on the floor)",
+  "有直立、禁止堆叠或 A 架要求时，自动成箱会阻断。请提供已包装整体数据后选择已包装箱件模式。": "Automatic boxing stops for upright, no-stacking or A-frame requirements. Provide the complete loaded package data and select packaged mode.",
+  "所填高度即运输时向上的方向；按外包络固定方向、地板单层计算。A 架需补每架净重、皮重、毛重与声明载荷上限。防倾、系固、吊装及架体结构不在本次计算范围内。": "Height is the upward dimension during transport. The declared envelope stays in its fixed orientation on the floor. A-frames need net mass, tare, gross mass and declared payload capacity per frame. Stability, securing, lifting and frame structure are outside this calculation.",
+  "本次已核对：整体外包络固定方向、地板单层、柜内边界、互不重叠和声明重量。": "Checked: fixed package envelopes, floor-only placement, container boundaries, no overlap and declared mass.",
+  "未核对：架体结构、防倾稳定、绑扎系固和吊装；几何排布不代表运输放行。": "Not checked: frame structure, stability, securing and lifting. A geometric layout is not transport clearance.",
+  "固定方向 / 地板单层": "Fixed orientation / floor only", " · 架体重量对账及声明载荷上限已检查": " · Frame mass reconciliation and declared payload capacity checked"
+});
 window.CBI18n?.add({
   "理解任务": "Understand task", "召唤岗位": "Select specialists", "人工确认": "Human approval",
   "拼柜": "Container loading", "合规校核": "Compliance checks", "落盘": "Save outputs",

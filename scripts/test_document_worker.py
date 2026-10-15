@@ -236,6 +236,65 @@ class DocumentWorkerTests(unittest.TestCase):
         p = {"op": "set_cell", "sheet": "Quantities", "cell": "C4", "expected": {"type": "blank", "value": None}, "value": {"type": "text", "value": "new"}}
         self.error(self.request("apply", "data.xlsx", {"patches": [p]}), "unsupported")
 
+    def excel_verification_request(self):
+        from test_excel_engine import workbook, saved
+        original = workbook()
+        candidate_bytes, receipt = saved(original)
+        source = self.workspace / "engine-input.xlsx"
+        source.write_bytes(original)
+        candidate = self.workspace / ".civil-buddy/out/.tmp/excel/test/output.xlsx"
+        candidate.parent.mkdir(parents=True)
+        candidate.write_bytes(candidate_bytes)
+        request = self.request("verify_excel_engine_output", source.name, {
+            "candidate_source": str(candidate),
+            "expected_candidate_sha256": sha256(candidate_bytes).hexdigest(),
+            "engine_receipt": receipt,
+        }, expected_sha256=sha256(original).hexdigest())
+        return request, source, candidate
+
+    def test_excel_engine_inspection_requires_hash_and_does_not_start_or_write(self):
+        from test_excel_engine import workbook
+        source = self.workspace / "engine-input.xlsx"
+        source.write_bytes(workbook())
+        request = self.request("inspect_excel_engine_input", source.name)
+        self.error(request, "invalid_request")
+        request["expected_sha256"] = sha256(source.read_bytes()).hexdigest()
+        result = self.good(request)
+        self.assertTrue(result["eligible"])
+        self.assertFalse(result["engine_started"])
+        self.assertEqual(result["formula_count"], 4)
+        self.assertFalse((self.workspace / ".civil-buddy").exists())
+        request["arguments"] = {"program": "anything"}
+        self.error(request, "invalid_request")
+
+    def test_excel_verification_is_read_only_and_binds_both_files(self):
+        request, source, candidate = self.excel_verification_request()
+        before = {p: p.read_bytes() for p in self.workspace.rglob("*") if p.is_file()}
+        result = self.good(request)
+        self.assertEqual(result["verification"]["status"], "pass")
+        self.assertTrue(result["verification"]["persisted_formula_caches_verified"])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.workspace.rglob("*") if p.is_file()})
+        candidate.write_bytes(candidate.read_bytes() + b"changed")
+        self.error(request, "conflict")
+        source.write_bytes(source.read_bytes() + b"changed")
+        self.error(request, "conflict")
+
+    def test_excel_candidate_must_stay_in_workspace_output(self):
+        request, _source, candidate = self.excel_verification_request()
+        copied = self.workspace / "candidate.xlsx"
+        copied.write_bytes(candidate.read_bytes())
+        request["arguments"]["candidate_source"] = str(copied)
+        self.error(request, "invalid_request")
+        request["arguments"]["candidate_source"] = "../outside.xlsx"
+        self.error(request, "path_denied")
+
+    def test_excel_verification_rejects_unbound_receipt_and_extra_fields(self):
+        request, _source, _candidate = self.excel_verification_request()
+        request["arguments"]["engine_receipt"]["output_sha256"] = "0" * 64
+        self.error(request, "invalid_engine_receipt")
+        request["arguments"]["executable"] = "excel.exe"
+        self.error(request, "invalid_request")
+
     def test_pdf_read_annotation_form_fill_page_order_and_reopen(self):
         from pypdf import PdfReader
         source = self.workspace / "drawing.pdf"

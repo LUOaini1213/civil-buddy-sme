@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 import os
 from pathlib import Path
 import subprocess
@@ -60,6 +61,21 @@ class HostWorkerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             dispatch("packing_assistant.engineering.worker", self.request("ifc_check", payload={"path": "secret.ifc"}), self.root)
 
+    @unittest.skipUnless(sys.platform == "win32" or sys.platform.startswith("linux"), "OS backend is not implemented here")
+    def test_fixed_saved_plan_cpm_runs_inside_original_os_worker_without_nested_spawn(self):
+        from packing_assistant.engineering.planning_binding import inputs
+        plan = {"start_date": "2026-09-21", "calendar": {"weekdays": [0, 1, 2, 3, 4], "holidays": []},
+                "tasks": [{"id": "A", "name": "Synthetic A", "duration": 2}], "resources": []}
+        payload = inputs(plan, "cpm")
+        result = self.process("packing_assistant.engineering.worker", self.request("planning_calculate", payload=payload), backend="os")
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["sandbox"]["enforces"]["write"])
+        self.assertTrue(result["sandbox"]["enforces"]["spawn"])
+        self.assertEqual(result["sandbox"]["selftest"]["spawn_process"], "denied")
+        self.assertEqual(result["result"]["result"]["duration_workdays"], 2)
+        self.assertEqual(result["result"]["result"]["finish_date"], "2026-09-22")
+        self.assertEqual(result["result"]["plan"], payload["plan"])
+
     def test_app_mode_is_explicit_and_never_claims_kernel_enforcement(self):
         result = self.process("packing_assistant.host_worker", self.request())
         self.assertTrue(result["ok"], result)
@@ -89,6 +105,64 @@ class HostWorkerTests(unittest.TestCase):
         self.assertFalse(result["result"]["results"][1]["found"])
         rejected = self.process("packing_assistant.review_worker", self.request("run_agent", texts=[]))
         self.assertFalse(rejected["ok"])
+
+    def test_received_document_expected_hash_reaches_actual_fixed_worker(self):
+        from scripts.test_document_worker import word_fixture
+        source = ".civil-buddy/out/handoffs/" + "a" * 32 + "/" + "b" * 32 + ".docx"
+        path = self.root / source
+        path.parent.mkdir(parents=True)
+        original = word_fixture()
+        path.write_bytes(original)
+        expected = sha256(original).hexdigest()
+        for operation in ("inspect", "read"):
+            with self.subTest(operation=operation):
+                response = self.process("packing_assistant.documents.worker",
+                                        self.request(operation, source=source, expected_sha256=expected))
+                self.assertTrue(response["ok"], response)
+                self.assertEqual(response["result"]["source_sha256"], expected)
+        replacement = bytearray(original)
+        replacement[-1] ^= 1
+        path.write_bytes(replacement)
+        rejected = self.process("packing_assistant.documents.worker",
+                                self.request("read", source=source, expected_sha256=expected))
+        self.assertFalse(rejected["ok"], rejected)
+        self.assertEqual(rejected["error"]["code"], "conflict")
+        self.assertIsNone(rejected["result"])
+
+    def test_bound_document_changed_during_parse_does_not_return_stale_content(self):
+        from packing_assistant.documents.ooxml import Word
+        from scripts.test_document_worker import word_fixture
+        source = ".civil-buddy/out/handoffs/" + "a" * 32 + "/" + "b" * 32 + ".docx"
+        path = self.root / source
+        path.parent.mkdir(parents=True)
+        original = word_fixture()
+        expected = sha256(original).hexdigest()
+        replacement = bytearray(original)
+        replacement[-1] ^= 1
+        for operation in ("inspect", "read"):
+            path.write_bytes(original)
+            method = getattr(Word, operation)
+
+            def replace_after_parse(document, *arguments):
+                result = method(document, *arguments)
+                path.write_bytes(replacement)
+                return result
+
+            with self.subTest(operation=operation), patch.object(Word, operation, new=replace_after_parse):
+                response = dispatch("packing_assistant.documents.worker",
+                                    self.request(operation, source=source, expected_sha256=expected), self.root)
+            self.assertFalse(response["ok"], response)
+            self.assertEqual(response["error"]["code"], "conflict")
+            self.assertIsNone(response["result"])
+
+    def test_snapshot_recheck_rejects_growth_beyond_the_trusted_read_limit(self):
+        from packing_assistant.documents.common import DocumentError, verify_source_snapshot
+        path = self.root / "source.md"
+        original = b"synthetic source"
+        path.write_bytes(original + b" growing")
+        with self.assertRaises(DocumentError) as caught:
+            verify_source_snapshot(self.root, path, sha256(original).hexdigest(), len(original))
+        self.assertEqual(caught.exception.code, "conflict")
 
     @unittest.skipUnless(sys.platform == "win32" or sys.platform.startswith("linux"), "OS backend is not implemented here")
     def test_real_os_probe_and_retrieval_write_inside_allowed_root(self):

@@ -25,6 +25,7 @@ except ImportError:  # Direct invocation from scripts/.
 
 ROOT = Path(__file__).resolve().parents[1]
 EXTRA = (
+    "examples/packing-replan/README.md", "examples/packing-replan/geometry-only.json",
     "SECURITY.md", "docs/civil-buddy/release-handoff.md",
     "docs/civil-buddy/sme-integration.md", "README.zh.md",
     "docs/civil-buddy/submission-sync-20260927.md",
@@ -46,8 +47,21 @@ EXTRA = (
     "workbench/scripts/run_tender_extract.py", "workbench/scripts/run_packing_sidecar.py",
     "scripts/docker_smoke.sh",
     "scripts/build_workbench_release.py", "scripts/build_unified_release.py",
+    "scripts/prepare_unified_workbench.py", "scripts/prepare-unified-workbench.bat",
+    "scripts/excel-desktop-broker.ps1",
+    "scripts/start-unified-workbench.bat", "requirements-unified-windows-py311.lock",
+    "requirements-unified-windows-py311-speech.lock",
+    "requirements-unified-windows-py311-planning.lock",
+    "requirements-unified-windows-py311-speech-planning.lock",
+    "scripts/check_optional_preparation.py", "docs/voice-input.md",
+    "scripts/instance_backup.py", "docs/civil-buddy/instance-backup.md",
     "docs/civil-buddy/architecture/implementation.md",
     "docs/civil-buddy/acceptance/2026-09-21.json",
+    "docs/civil-buddy/acceptance/2026-09-30-practical.json",
+    "docs/civil-buddy/acceptance/2026-10-03-packing-replan.json",
+    "docs/civil-buddy/acceptance/2026-10-03-live-packing.json",
+    "docs/civil-buddy/acceptance/2026-10-03-packing-receipts.json",
+    "docs/civil-buddy/acceptance/2026-10-10-local-excel.json",
     "docs/civil-buddy/architecture/civil-buddy-rust-architecture.md",
     "docs/civil-buddy/architecture/civil-buddy-document-skills.md",
     "docs/civil-buddy/architecture/civil-buddy-agent-infra.md",
@@ -58,7 +72,7 @@ MAX_FILE = 512 * 1024 * 1024
 MAX_ARCHIVE_CONTENT = 1024 * 1024 * 1024
 FORBIDDEN_ROOTS = (
     "demo/data/", "demo/out/", "workbench/target/", "target/", "work/",
-    "output/", "outputs/", "dist/", "runtime/",
+    "output/", "outputs/", "dist/", "runtime/", ".civil-buddy-runtime/",
 )
 
 
@@ -112,6 +126,8 @@ def committed_inputs(root: Path) -> tuple[dict[str, Path], str]:
     additions = set(EXTRA) | {name for name in tracked if name.startswith("workbench/src/") and name.endswith(".rs")}
     for name in additions:
         inputs[name] = legacy.checked_path(root, name)
+    for name in ("prepare-unified-workbench.bat", "start-unified-workbench.bat"):
+        inputs[name] = legacy.checked_path(root, "scripts/" + name)
     folded = set()
     for name, path in inputs.items():
         safe_name(name)
@@ -179,17 +195,87 @@ def release_readme(version: str, architecture: str, commit: str) -> str:
 
 ## 首次准备
 
-先完整解压到可写目录，再在解压根目录打开 PowerShell。请手动建立本地虚拟环境并安装依赖：
+先安装 **Windows x64 CPython 3.11**，完整解压本包到可写的短目录，例如 `C:/CivilBuddy`。双击
+`prepare-unified-workbench.bat` 完成首次准备，再双击 `start-unified-workbench.bat` 打开统一工作台。
+只有显式准备或重建会安装依赖；启动入口不自动安装任何依赖。准备使用
+`requirements-unified-windows-py311.lock` 中固定版本、校验哈希的 wheel，
+覆盖基础服务、文档与物流数字 PDF；不会安装全局依赖，也不会修改工程或产品历史。
+环境保存在包内 `.civil-buddy-runtime` 的版本目录，不能随 ZIP 或升级直接搬走。
+准备及启动检查会在独立进程中检查必要的原生依赖能否加载，不启动产品或调用模型。
+Windows 深目录可能导致 DLL 加载失败；遇到加载提示，应核对所选环境，
+或将新的程序包解压到另一个短目录并重新准备，保留原环境、工程和状态。
+准备失败可以重试；新的准备未成功前保留原有已准备环境的选择。
+
+本地语音和资源排程可通过固定依赖方案准备。例如，需要两种能力时执行：
+
+```powershell
+.\\prepare-unified-workbench.bat --profile speech-planning
+.\\start-unified-workbench.bat
+```
+
+`core` 是基础、文档和物流；`speech` 增加 CPU 本地语音；`planning` 增加 CP-SAT
+资源排程、图算法和安全 XML 读取；`speech-planning` 包含后两种能力。每个方案都有
+完整的固定版本和 wheel 哈希锁，核心依赖版本不变。切换方案会使用另一份专用环境，
+不会向原环境补装。依赖、原生库及固定求解器检查通过后才选取新环境。
+省略 `--profile` 时，新包采用 `core`，已准备的包沿用当前方案；`--rebuild` 也沿用
+已知方案。准备记录损坏时，应显式指定 `--rebuild --profile <所需方案>`。
+如需切回基础环境，使用 `--profile core`。离线准备的 wheel 目录需包含所选方案的全部文件。
+
+依赖准备不会下载或加载语音模型。启动后在语音入口显式准备模型，核对转录文本后再发送。
+准备失败后，再次点击语音会重新检查并允许重试。CAD、IFC、OCR 和 Java 项目格式等
+其他可选能力仍需单独配置，以上方案不包含其完整运行环境。
+
+如已准备环境的依赖、解释器或准备记录损坏，关闭使用该环境的工作台，再运行：
+
+```powershell
+.\\prepare-unified-workbench.bat --rebuild
+```
+
+重建使用同一版本锁，在新目录安装并完成核查后才切换选择，不修改或删除旧环境。
+失败目录会保留；再次执行 `--rebuild` 会创建另一个新目录。普通准备复用当前成功选择。
+如需离线准备，先将版本锁指定的全部 wheel 放入一个目录，再显式指定：
+
+```powershell
+.\\prepare-unified-workbench.bat --wheelhouse C:/CivilBuddyWheels
+# 离线重建可在同一命令后追加 --rebuild。
+```
+
+离线准备仍校验固定版本和哈希，不从其他来源补下载。
+
+默认通过 `py -3.11` 或 `python` 找到解释器。已有 3.11 解释器不在 PATH 时，
+可在 PowerShell 显式指定：
+
+```powershell
+& 'C:/Python311/python.exe' scripts/prepare_unified_workbench.py --python 'C:/Python311/python.exe'
+```
+
+两个双击入口也支持用 `CIVIL_PYTHON` 指定引导解释器。准备后可在 PowerShell 检查再启动：
+
+```powershell
+.\\start-unified-workbench.bat --check
+.\\start-unified-workbench.bat --port 8766
+```
+
+**人工配置其他 Python 3.11+ 环境**仍可使用以下方式；该方式不使用上面的 3.11 固定锁：
 
 ```powershell
 py -3.11 -m venv .venv
-& ".\\.venv\\Scripts\\python.exe" -m pip install -r requirements.txt -r requirements-documents.txt
+& ".\\.venv\\Scripts\\python.exe" -m pip install -r requirements.txt -r requirements-documents.txt -r requirements-logistics.txt
 ```
 
 安装需要网络；上述命令只修改本目录 `.venv`，不会安装全局依赖。统一启动器不自动安装任何依赖。
 已有兼容解释器时，可直接使用其完整路径，并把同一路径传给 `--python`。
 
 ## 统一入口
+
+先检查解释器、必需依赖、可执行文件、端口和目录配置：
+
+```powershell
+& ".\\.venv\\Scripts\\python.exe" scripts/start_unified_workbench.py --binary bin/civil-workbench.exe --python .venv/Scripts/python.exe --state-root runtime/unified --check
+```
+
+`--check` 不启动产品、不访问模型、不创建工程或状态文件；它会运行限时的 Python 依赖探测。
+缺少 CAD、工程、语音等可选依赖只显示能力提示。普通启动也会执行相同的预检。
 
 ```powershell
 & ".\\.venv\\Scripts\\python.exe" scripts/start_unified_workbench.py --binary bin/civil-workbench.exe --python .venv/Scripts/python.exe --state-root runtime/unified --open
@@ -198,25 +284,59 @@ py -3.11 -m venv .venv
 主程序和 Python 领域服务均监听本机；浏览器打开 `http://127.0.0.1:8765/static/agent.html`。
 保留启动窗口，按 Ctrl+C 停止两个服务。端口冲突时追加 `--port 8766`。
 `--state-root` 保存产品状态与日志；新文档副本保存在所选工程目录 `.civil-buddy/out`。
-升级时另行保留自己的工程目录和状态目录，勿将旧 `.env` 或状态混入分发包。
+上面的相对状态目录用于本机演示。具名日常工程应将状态放在包外；升级时保留工程根、
+状态基础目录的两个绝对路径和 `--user-id`，勿将旧 `.env` 或状态混入分发包。
 
 无需模型 Key 可执行资料结构检查。自然语言 Agent 任务需在页面模型设置配置兼容服务，
 或显式传入自己创建的 `--env-file <路径>`；`.env.example` 仅为模板。Jev 为可选工程决策建议，默认关闭。
 岗位签认、引用哈希、先预览再保存及只读权限仍由主程序执行；模型不能把文件或自身提议变成工程事实。
 
-具名账号和独立工程启动、登录、备份及同事导入见 `docs/civil-buddy/release-handoff.md`。
+箱单受限重排示例见 `examples/packing-replan/README.md`。将示例复制到测试工程目录，
+在 Agent 页勾选 JSON 并显式选择“箱单重排核对”，使用“检查资料”可不调用模型。
+示例尺寸与约束均为合成测试输入；不能据此装运放行。普通 Excel 箱单仍使用装箱/物流页面。
+
+具名账号和独立工程启动、登录、停机备份及原路径恢复见 `docs/civil-buddy/release-handoff.md`。
 具名模式使用 `--user-id`、`--workspace`、`--token-file`；每位用户独立目录与进程，
 不是同一进程多租户平台。`examples/facade-demo` 是明确标注的合成演示资料。
+
+例如已按交接指南建立工程目录和个人口令后，可在**新版解压目录**继续启动原实例：
+
+```powershell
+& ".\\.venv\\Scripts\\python.exe" scripts/start_unified_workbench.py --binary bin/civil-workbench.exe --python .venv/Scripts/python.exe --state-root C:/CivilBuddyState/teammate-a/demo --user-id teammate-a --workspace C:/CivilJobs/demo --token-file C:/CivilBuddySecrets/teammate-a/login-token.txt --port 8765 --open
+```
+
+每次传最初的 `--state-root` 基础目录；启动器会追加 `accounts/<user>/projects/<root-hash>/`，
+不要把终端 `State:` 显示的叶目录再次传入。若旧实例最初用了 `runtime/unified`，新版必须继续
+指向旧程序目录中该基础目录的绝对路径，不能复制到新版目录后直接重新绑定。
+个人完整备份需先停止两个服务，再使用 `scripts/instance_backup.py backup` 保存工程和
+对应实例状态；`verify` 核对完整清单及逐文件哈希，`restore` 只写入原归属、原绝对路径
+下不存在或为空的目标。操作独占启动器和 Rust 主机锁，遇到非空目录拒绝覆盖。
+具体命令、范围和限制见 `docs/civil-buddy/instance-backup.md`。
+完整个人备份含归属数据库，不能交给同事；同事使用支持导入的业务项目包建立新副本，
+这不会迁移 Rust Agent 的完整执行历史，也不会继承签认。
 
 ## 原入口与可选能力
 
 原 Python CLI `python -m packing_assistant.civil` 和 `start-workbench.bat` 保留。
 旧启动器可能按原流程准备本地 `.venv`；统一入口不调用该安装流程。两种入口不要使用同一个端口同时运行。
-CAD、工程计算、排程、语音依赖分别见 `requirements-cad.txt`、`requirements-engineering.txt`、
-`requirements-planning.txt`、`requirements-asr.txt`，请只在同一虚拟环境内按需安装。
+物流数字 PDF 缺依赖时会在预检单独提示；基础服务能启动不代表扫描件可识别。
+本地语音及资源排程可使用前述固定方案。其他 CAD、工程计算、项目格式等依赖见
+`requirements-cad.txt`、`requirements-engineering.txt`、`requirements-planning.txt`。需要其他
+可选能力时，请另建人工配置的虚拟环境，
+安装基础、文档和物流依赖，再安装所需可选依赖，并将该环境的解释器传给统一启动器的 `--python`。
+不要直接给 `.civil-buddy-runtime` 中的发布包环境补装依赖；更换能力时重新选择受支持方案。
+可选包安装完成不代表 CAD 原生库、工程求解器或语音模型已通过实际运行验收。
 Java/JVM、Office 或 OCR 引擎均不随包提供。
 
-文档副本只是待核查草稿；PDF 正文改写/OCR、Office 排版渲染与 Excel 公式重算尚未提供。
+文档副本只是待核查草稿；PDF 正文改写/OCR、Office 排版渲染尚未提供。
+已安装 Microsoft Excel 的本地 Windows 桌面可显式追加 `--excel-engine windows-desktop`。
+在 Agent 页对已登记的 XLSX 副本执行重算，每次需允许工作区写入并输入签认提示句。
+普通启动默认关闭该通道；预检不启动 Excel。公开代理模式禁止启用。
+重算前检查受支持的工作簿内容；宏、外部链接、数据连接、图表或其他不支持的功能会拒绝。
+重算只打开宿主创建的暂存副本；核对独立实例、每个公式缓存、内容和样式后才登记新副本。
+若原副本带强制重算请求标志，会另建计算暂存副本，仅清除这两个请求标志，并记录双哈希。
+若 Excel 改变默认行高等排版数据，核对失败，不发布新副本。原件和旧副本均保留。
+重算回执证明实际计算与保存缓存；不代替工程审核、专业签认或排版视觉验收。
 岗位目录不代表每个岗位都有数值求解器；任何工程结论仍需有资格的人审核签认。
 
 ## 来源与校验

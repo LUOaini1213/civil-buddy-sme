@@ -8,14 +8,17 @@ import re
 from packing_assistant.runtime.cancel import check
 from .records import digest
 
-NUMERIC = {"package_count", "quantity", "units_per_package", "length_mm", "width_mm", "height_mm", "net_kg", "gross_kg"}
-TEXT = {"package_id", "container_id", "package_type", "material_id", "name", "spec", "unit", "dimension_scope", "weight_scope"}
+from .ledger import NUMERIC_FIELDS, TEXT_FIELDS
+NUMERIC = set(NUMERIC_FIELDS)
+TEXT = set(TEXT_FIELDS)
 ALIASES = {"箱数": "package_count", "包装数": "package_count", "件数": "quantity", "数量": "quantity", "每箱件数": "units_per_package",
            "长": "length_mm", "长度": "length_mm", "宽": "width_mm", "宽度": "width_mm", "高": "height_mm", "高度": "height_mm",
            "净重": "net_kg", "毛重": "gross_kg", "箱号": "package_id", "材料编号": "material_id", "名称": "name", "规格": "spec",
            "单位": "unit", "集装箱号": "container_id", "柜号": "container_id", "包装类型": "package_type",
            "尺寸口径": "dimension_scope", "重量口径": "weight_scope"}
 ALIASES.update({
+    "运输姿态": "orientation", "堆叠要求": "stacking", "运输要求原文": "handling_requirements", "皮重": "tare_kg", "载荷上限": "capacity_kg",
+    "orientation": "orientation", "stacking": "stacking", "handling requirements": "handling_requirements", "tare weight": "tare_kg", "load capacity": "capacity_kg",
     "package count": "package_count", "box count": "package_count", "quantity": "quantity",
     "items per package": "units_per_package", "units per package": "units_per_package",
     "length": "length_mm", "width": "width_mm", "height": "height_mm",
@@ -69,6 +72,9 @@ def propose_changes(document, changes, reason):
                 raise ValueError("尺寸口径仅支持 package / item。")
             if field == "weight_scope" and value not in {"package", "item", "row"}:
                 raise ValueError("重量口径仅支持 package / item / row。")
+            from packing_assistant.transport_constraints import CHOICES
+            if field in CHOICES and value not in CHOICES[field]:
+                raise ValueError("请选择明确的运输姿态或堆叠要求。")
         before = rows[ident].get(field, "UNSPECIFIED")
         if before == value:
             continue
@@ -145,6 +151,11 @@ def propose_command(document, message):
         elif field in {"dimension_scope", "weight_scope"}:
             value = {"每箱": "package", "包装": "package", "单件": "item", "每件": "item", "整行": "row",
                      "per package": "package", "per box": "package", "per item": "item", "per row": "row"}.get(value.lower(), value)
+        elif field in {"orientation", "stacking"}:
+            from packing_assistant.transport_constraints import normalize
+            value, reason = normalize(field, value)
+            if reason:
+                raise ValueError(reason)
         changes.append({"row_id": ident, "field": field, "value": value})
     revised_units = {change["row_id"]: change["value"] for change in changes if change["field"] == "unit"}
     for ident, unit in explicit_quantity_units:

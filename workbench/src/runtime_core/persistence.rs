@@ -64,6 +64,17 @@ pub struct TurnRecord {
     pub last_seq: u64,
 }
 
+/// Discovery metadata only. Deliberately excludes prompts, results, paths and
+/// permissions; opening this summary never starts or replays a turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub session_id: SessionId,
+    pub latest_turn_id: TurnId,
+    pub updated_at: String,
+    pub status: TurnStatus,
+    pub turn_count: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeEvent {
     #[serde(default)]
@@ -105,7 +116,7 @@ impl RuntimeCore {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
-        let db = Connection::open(path)?;
+        let db = crate::sqlite::open(path)?;
         db.busy_timeout(Duration::from_secs(5))?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
             CREATE TABLE IF NOT EXISTS runtime_workspaces (
@@ -121,6 +132,7 @@ impl RuntimeCore {
             CREATE UNIQUE INDEX IF NOT EXISTS runtime_one_active_session
                 ON runtime_turns(workspace_id, session_id) WHERE status IN ('running','cancelling');
             CREATE INDEX IF NOT EXISTS runtime_session_turns ON runtime_turns(workspace_id,session_id,created_at);
+            CREATE INDEX IF NOT EXISTS runtime_actor_sessions ON runtime_turns(workspace_id,json_extract(request_json,'$.actor_id'),session_id,created_at DESC);
             CREATE TABLE IF NOT EXISTS runtime_events (
                 turn_id TEXT NOT NULL REFERENCES runtime_turns(turn_id), seq INTEGER NOT NULL CHECK(seq > 0),
                 task_id TEXT NOT NULL, event TEXT NOT NULL, data_json TEXT NOT NULL, ts TEXT NOT NULL,
@@ -163,10 +175,23 @@ impl RuntimeCore {
         key: &str,
         request_sha256: &str,
     ) -> Result<TurnStart> {
-        if key.is_empty() || key.len() > 128 || !key.bytes().all(|b| b.is_ascii_graphic()) {
-            return Err(RuntimeError::InvalidId(key.chars().take(128).collect()));
-        }
+        validate_turn_key(key)?;
         self.start_turn(workspace, session, request, Some((key, request_sha256)))
+    }
+
+    /// Recover an already accepted delivery when no current model key is set.
+    /// This never creates a turn, lease, cancellation token or event. Admission
+    /// authorization and current source checks remain the caller's obligation.
+    pub fn existing_turn_keyed(
+        &self,
+        workspace: &WorkspaceContext,
+        session: &SessionId,
+        key: &str,
+        request_sha256: &str,
+    ) -> Result<Option<TurnRecord>> {
+        validate_turn_key(key)?;
+        let db = self.0.db.lock().map_err(|_| RuntimeError::Poisoned)?;
+        read_keyed_turn(&db, workspace.id(), session, key, request_sha256)
     }
 
     fn start_turn(
@@ -181,13 +206,7 @@ impl RuntimeCore {
         if let Some((key, fingerprint)) = key {
             // Checked before the busy rule: a retry of a still-running turn
             // must get that turn back, not 409.
-            let found: Option<(String, String, String)> = tx.query_row("SELECT session_id,request_sha256,turn_id FROM runtime_turn_keys WHERE workspace_id=?1 AND idempotency_key=?2",
-                params![workspace.id(), key], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
-            if let Some((stored_session, stored_fingerprint, turn)) = found {
-                if stored_session != session.as_str() || stored_fingerprint != fingerprint {
-                    return Err(RuntimeError::IdempotencyConflict);
-                }
-                let record = read_turn(&tx, workspace.id(), session, &TurnId::parse(turn)?)?;
+            if let Some(record) = read_keyed_turn(&tx, workspace.id(), session, key, fingerprint)? {
                 return Ok(TurnStart::Existing(record));
             }
         }
@@ -272,6 +291,77 @@ impl RuntimeCore {
             )
         })
         .collect()
+    }
+
+    /// Filter the actor before grouping, including counts and latest status.
+    /// Rows without a recorded actor cannot establish ownership and are hidden.
+    /// The extra (101st) row lets the HTTP layer detect another bounded page.
+    pub fn list_sessions(
+        &self,
+        workspace: &WorkspaceContext,
+        actor: &str,
+        before: Option<(&str, &SessionId)>,
+        limit: usize,
+    ) -> Result<Vec<SessionSummary>> {
+        let db = self.0.db.lock().map_err(|_| RuntimeError::Poisoned)?;
+        let mut statement = db.prepare(
+            "WITH scoped AS (
+                SELECT session_id,turn_id,status,
+                    MAX(updated_at) OVER (PARTITION BY session_id) AS session_updated_at,
+                    COUNT(*) OVER (PARTITION BY session_id) AS turn_count,
+                    ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY created_at DESC,rowid DESC) AS latest
+                FROM runtime_turns
+                WHERE workspace_id=?1 AND json_extract(request_json,'$.actor_id')=?2
+            )
+            SELECT session_id,turn_id,session_updated_at,status,turn_count
+            FROM scoped WHERE latest=1 AND (?3 IS NULL OR session_updated_at<?3
+                OR (session_updated_at=?3 AND session_id<?4))
+            ORDER BY session_updated_at DESC,session_id DESC LIMIT ?5",
+        )?;
+        let rows = statement.query_map(
+            params![workspace.id(), actor, before.map(|(updated, _)| updated),
+                before.map(|(_, session)| session.as_str()), limit.min(101) as i64],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, i64>(4)?)),
+        )?;
+        rows.map(|row| {
+            let (session, turn, updated_at, status, turn_count) = row?;
+            Ok(SessionSummary {session_id: SessionId::parse(session)?,
+                latest_turn_id: TurnId::parse(turn)?, updated_at,
+                status: TurnStatus::parse(&status)?, turn_count:turn_count as u64})
+        }).collect()
+    }
+
+    /// Actor-scoped history pages keep the existing newest-created ordering.
+    /// Resolve the boundary inside the same scope instead of trusting client
+    /// timestamps/row IDs, and never invoke execution or event replay.
+    pub fn list_turns_page(
+        &self,
+        workspace: &WorkspaceContext,
+        actor: &str,
+        session: Option<&SessionId>,
+        before: Option<&TurnId>,
+        limit: usize,
+    ) -> Result<Vec<TurnRecord>> {
+        let db = self.0.db.lock().map_err(|_| RuntimeError::Poisoned)?;
+        let boundary: Option<(String, i64)> = before.map(|turn| {
+            db.query_row("SELECT created_at,rowid FROM runtime_turns WHERE workspace_id=?1
+                AND json_extract(request_json,'$.actor_id')=?2 AND (?3 IS NULL OR session_id=?3) AND turn_id=?4",
+                params![workspace.id(), actor, session.map(SessionId::as_str), turn.as_str()],
+                |row| Ok((row.get(0)?,row.get(1)?))).optional()?.ok_or(RuntimeError::NotFound)
+        }).transpose()?;
+        let mut statement = db.prepare("SELECT turn_id,session_id FROM runtime_turns
+            WHERE workspace_id=?1 AND json_extract(request_json,'$.actor_id')=?2
+                AND (?3 IS NULL OR session_id=?3)
+                AND (?4 IS NULL OR created_at<?4 OR (created_at=?4 AND rowid<?5))
+            ORDER BY created_at DESC,rowid DESC LIMIT ?6")?;
+        let rows = statement.query_map(params![workspace.id(), actor, session.map(SessionId::as_str),
+            boundary.as_ref().map(|(created,_)| created.as_str()), boundary.as_ref().map(|(_,rowid)| rowid),
+            limit.min(101) as i64], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?;
+        rows.map(|row| {
+            let (turn, session) = row?;
+            read_turn(&db, workspace.id(), &SessionId::parse(session)?, &TurnId::parse(turn)?)
+        }).collect()
     }
 
     pub fn replay(
@@ -575,6 +665,31 @@ impl Drop for TurnLease {
 
 fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+fn validate_turn_key(key: &str) -> Result<()> {
+    if key.is_empty() || key.len() > 128 || !key.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(RuntimeError::InvalidId(key.chars().take(128).collect()));
+    }
+    Ok(())
+}
+
+fn read_keyed_turn(
+    db: &Connection,
+    workspace: &str,
+    session: &SessionId,
+    key: &str,
+    fingerprint: &str,
+) -> Result<Option<TurnRecord>> {
+    let found: Option<(String, String, String)> = db.query_row(
+        "SELECT session_id,request_sha256,turn_id FROM runtime_turn_keys WHERE workspace_id=?1 AND idempotency_key=?2",
+        params![workspace, key], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    ).optional()?;
+    let Some((stored_session, stored_fingerprint, turn)) = found else { return Ok(None); };
+    if stored_session != session.as_str() || stored_fingerprint != fingerprint {
+        return Err(RuntimeError::IdempotencyConflict);
+    }
+    read_turn(db, workspace, session, &TurnId::parse(turn)?).map(Some)
 }
 
 fn read_turn(

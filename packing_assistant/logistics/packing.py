@@ -11,6 +11,7 @@ def _positive(value, integer=False):
 
 def prepare(project, mode, container_type, max_containers):
     from .ledger import validate_document, audit_document, package_identities
+    from packing_assistant.transport_constraints import ledger_issues, requirements
     if not project.get("confirmed"):
         raise ValueError("请先核对并确认当前版本台账；未确认台账不能进入装箱。")
     if mode not in {"packaged", "materials"} or container_type not in {"20GP", "40GP", "40HQ", "45HQ"}:
@@ -23,11 +24,15 @@ def prepare(project, mode, container_type, max_containers):
         return {"ok": False, "error": "ledger_errors", "detail": "台账存在未解决错误。", "needs_human": errors}
     if not doc["rows"]:
         raise ValueError("台账没有货物行。")
-    needs, boxes, materials, seen = [], [], [], set()
+    needs, boxes, materials, seen, constraints = [], [], [], set(), []
     identities, _ = package_identities(doc["rows"])
     for row in doc["rows"]:
         check()
         ident = row["id"]
+        blocked = ledger_issues(row, mode)
+        if blocked:
+            needs.extend(blocked)
+            continue
         required = ["length_mm", "width_mm", "height_mm", "gross_kg" if mode == "packaged" else "net_kg", "quantity"] + (["package_count"] if mode == "packaged" else [])
         missing = [f for f in required if not _positive(row.get(f), f in {"quantity", "package_count"})]
         if any(row.get("evidence", {}).get(f, {}).get("group") for f in required):
@@ -53,6 +58,11 @@ def prepare(project, mode, container_type, max_containers):
             needs.append({"row_id": ident, "message": "单次最多 200 个包装箱或 5000 件材料，请拆分台账。"})
             continue
         if mode == "packaged":
+            declared, _ = requirements(row)
+            constraints.append({"row_id": ident, "declared": declared, "handling_requirements": row.get("handling_requirements", "UNSPECIFIED"),
+                                "effective_orientation": "fixed", "effective_stacking": "floor_only",
+                                "frame_mass_capacity_checked": bool(declared.get("frame")),
+                                "not_checked": ["frame_structure", "stability", "securing", "lifting"]})
             for index in range(int(row["package_count"])):
                 boxes.append({"box_id": f"{ident}-{index + 1}", "source_row_id": ident, "source_package_id": row.get("package_id"),
                               "source_container_id": identity[0] if identity else row.get("container_id"),
@@ -68,7 +78,7 @@ def prepare(project, mode, container_type, max_containers):
         needs.append({"row_id": "", "message": "单次总量超过 200 箱 / 5000 件，请拆分台账。"})
     if needs:
         return {"ok": False, "error": "needs_human", "needs_human": needs, "solver_connected": False}
-    return {"ok": True, "boxes": boxes, "materials": materials}
+    return {"ok": True, "boxes": boxes, "materials": materials, "constraints": constraints}
 
 
 def verify_packaged_layout(boxes, plan, container_type, max_containers):
@@ -134,9 +144,10 @@ def pack(project, mode, container_type, max_containers):
     success = success and verified
     return {"ok": success, "solver_connected": True, "can_fit": plan.get("can_fit", False), "boxes": boxes,
             "layout_verified": verified,
+             "constraints": prepared["constraints"],
             "container_plan": plan, "n_boxes": len(boxes), "containers_used": plan.get("containers_used", "UNSPECIFIED"), "container_type": container_type,
-            "detail": "仅已包装箱拼柜，不重新成箱；未声明堆叠/旋转能力，采用不堆叠、不旋转。" if success else "引擎未得到满足当前上限的三维可用方案。",
-            "mode_note": "结果是内部几何装载草稿；不是订舱、系固或 VGM 签认。"}
+             "detail": "已包装整体保持所填长宽高方向、地板单层排布，不重新成箱；允许旋转或堆叠也仍采用此保守计算范围。" if success else "引擎未得到满足当前上限的三维可用方案。",
+             "mode_note": "仅核对外包络几何与声明重量/载荷；未校核架体结构、防倾稳定、绑扎系固或吊装，不是订舱或 VGM 签认。"}
 
 
 def run_pack(project, mode, container_type, max_containers, *, timeout=60):

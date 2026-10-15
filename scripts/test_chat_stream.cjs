@@ -733,13 +733,13 @@ test("saving model settings prevents duplicate writes and refreshes configuratio
 test("model errors redact submitted keys and distinguish refresh failures from rejected writes", async () => {
   const failed = ui(async () => ({ ok: false, status: 400, statusText: "invalid local-test-secret" }));
   await failed.evaluate('cbLlmSubmit({ api_key: "local-test-secret" }, "保存")');
-  assert.match(failed.elements.cbLlmStatus.textContent, /保存失败/);
+  assert.match(failed.elements.cbLlmStatus.textContent, /未能确认设置是否生效/);
   assert.doesNotMatch(failed.elements.cbLlmStatus.textContent, /local-test-secret/);
   let count = 0;
   const unconfirmed = ui(async () => ++count === 1 ? response(config()) : { ok: false, status: 503, statusText: "unavailable" });
   await unconfirmed.evaluate('cbLlmSubmit({ clear: true }, "已恢复启动配置")');
   assert.equal(count, 2);
-  assert.match(unconfirmed.elements.cbLlmStatus.textContent, /设置已提交.*未能核对/);
+  assert.match(unconfirmed.elements.cbLlmStatus.textContent, /未能确认设置是否生效.*刷新页面核对/);
   assert.equal(unconfirmed.elements.cbLlmReset.disabled, false);
 });
 

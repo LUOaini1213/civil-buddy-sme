@@ -10,11 +10,12 @@ import re
 import tempfile
 from uuid import uuid4
 
-from .common import DocumentError, bounded, digest, fail, validation
+from .common import DocumentError, bounded, digest, fail, validation, verify_source_snapshot
 from .ooxml import Word, Spreadsheet
 
 MAX_BYTES = 25_000_000
-OPERATIONS = {"capabilities", "inspect", "read", "preview", "apply", "validate"}
+OPERATIONS = {"capabilities", "inspect", "read", "preview", "apply", "validate", "inspect_readiness",
+              "inspect_excel_engine_input", "verify_excel_engine_output"}
 
 
 def _process_alive(pid):
@@ -47,12 +48,13 @@ def _process_alive(pid):
 
 def capabilities():
     return {"docx": {"available": True, "operations": ["replace_paragraph", "replace_cell"],
-                     "native_track_changes": False, "render": False},
+                     "native_track_changes": False, "render": False, "readiness_inspection": True},
             "xlsx": {"available": True, "operations": ["set_cell", "set_range"],
-                     "recalculate": False, "render": False, "macro_edit": False},
+                     "recalculate": False, "render": False, "macro_edit": False, "readiness_inspection": True},
             "pdf": {"available": importlib.util.find_spec("pypdf") is not None,
                     "operations": ["annotate", "fill_fields", "reorder_pages"],
-                    "form_fields": "text_only", "ocr": False, "render": False, "body_edit": False}}
+                    "form_fields": "text_only", "ocr": False, "render": False, "body_edit": False,
+                    "readiness_inspection": True}}
 
 
 def _document(data, suffix):
@@ -87,8 +89,9 @@ def _execute(request):
         encoded = json.dumps(request, ensure_ascii=False, allow_nan=False)
     except (TypeError, ValueError):
         fail("invalid_request", "Request must contain finite JSON values")
-    if len(encoded.encode("utf-8")) > 1_100_000:
-        fail("too_large", "Document request exceeds 1.1 MB")
+    request_limit = 4_200_000 if request.get("operation") == "verify_excel_engine_output" else 1_100_000
+    if len(encoded.encode("utf-8")) > request_limit:
+        fail("too_large", "Document request exceeds its operation input limit")
     call_id = request.get("call_id")
     if not isinstance(call_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", call_id):
         fail("invalid_request", "call_id must be a bounded identifier")
@@ -113,8 +116,8 @@ def _execute(request):
         fail("too_large", "Source document exceeds 25 MB")
     sha = digest(data)
     expected = request.get("expected_sha256")
-    if operation in ("preview", "apply") and not expected:
-        fail("invalid_request", "preview/apply require expected_sha256")
+    if operation in ("preview", "apply", "inspect_readiness", "inspect_excel_engine_input", "verify_excel_engine_output") and not expected:
+        fail("invalid_request", "This document operation requires expected_sha256")
     if expected is not None and expected != sha:
         fail("conflict", "Source SHA-256 differs from expected_sha256; inspect the current version")
     document = _document(data, source.suffix.lower())
@@ -123,13 +126,56 @@ def _execute(request):
         fail("invalid_request", "arguments must be an object")
     base = {"source": str(source), "source_sha256": sha, "format": source.suffix[1:].lower(),
             "capabilities": capabilities()[source.suffix[1:].lower()]}
+    if operation in ("inspect_excel_engine_input", "verify_excel_engine_output"):
+        if not isinstance(document, Spreadsheet):
+            fail("unsupported", "The local Excel engine only accepts ordinary XLSX files")
+        from .excel_engine import inspect_engine_input, verify_engine_output
+        if operation == "inspect_excel_engine_input":
+            if args:
+                fail("invalid_request", "Excel input inspection does not accept arguments")
+            result = inspect_engine_input(document)
+        else:
+            if set(args) != {"candidate_source", "expected_candidate_sha256", "engine_receipt"}:
+                fail("invalid_request", "Excel output verification requires the fixed candidate and receipt fields")
+            candidate = bounded(workspace, args["candidate_source"])
+            if not candidate.is_relative_to(workspace / ".civil-buddy" / "out") or candidate.suffix.lower() != ".xlsx" or not candidate.is_file():
+                fail("invalid_request", "The Excel candidate must be an existing XLSX under the workspace output directory")
+            if candidate.stat().st_size > MAX_BYTES:
+                fail("too_large", "Excel candidate exceeds 25 MB")
+            candidate_bytes = candidate.read_bytes()
+            if len(candidate_bytes) > MAX_BYTES or digest(candidate_bytes) != args["expected_candidate_sha256"]:
+                fail("conflict", "Excel candidate changed before verification")
+            result = verify_engine_output(data, candidate_bytes, args["engine_receipt"])
+            if digest(candidate.read_bytes()) != args["expected_candidate_sha256"]:
+                fail("conflict", "Excel candidate changed during verification")
+        if digest(source.read_bytes()) != sha:
+            fail("conflict", "Excel input changed during verification")
+        return {**base, **result}
+    if operation == "inspect_readiness":
+        from .readiness import inspect_readiness
+        result = inspect_readiness(document, base["format"])
+        if isinstance(document, Spreadsheet):
+            from .excel_engine import inspect_engine_input
+            try:
+                result["recalculation_admission"] = inspect_engine_input(document)
+            except DocumentError as exc:
+                result["recalculation_admission"] = {"profile": "civil-xlsx-engine-v1", "eligible": False,
+                    "reason": {"code": exc.code, "message": str(exc)}}
+        if digest(source.read_bytes()) != sha:
+            fail("conflict", "Source changed during readiness inspection")
+        return {**base, **result}
     if operation in ("inspect", "validate"):
         detail = document.inspect()
         if operation == "validate":
             detail["validation"] = {**detail.get("validation", validation()), "source_hash": "pass", "content_changes": "not_checked"}
+        if expected is not None:
+            verify_source_snapshot(workspace, source, sha, MAX_BYTES)
         return {**base, **detail}
     if operation == "read":
-        return {**base, **document.read(args)}
+        detail = document.read(args)
+        if expected is not None:
+            verify_source_snapshot(workspace, source, sha, MAX_BYTES)
+        return {**base, **detail}
     patches = _patches(args)
     output, changes, report = document.patch(patches)
     if len(output) > 50_000_000:

@@ -75,16 +75,42 @@ echo "$hdrs" | grep -qi "set-cookie:.*HttpOnly" || fail "cookie not HttpOnly"
 ok "?token= -> 303 + HttpOnly cookie"
 curl -s -H "Cookie: $cookie" "$B/demo" | grep -q "Run the linked demo" || fail "/demo with cookie"
 ok "GET /demo with the cookie -> the English page"
-OUT="$WORK/demo.json" code -X POST -H "Cookie: $cookie" "$B/api/tender/link/demo" >/dev/null
-python3 - "$WORK/demo.json" <<'PY' || fail "demo route"
-import json, sys
-d = json.load(open(sys.argv[1], encoding="utf-8"))
-assert d["ok"] and d["stale_statements"] == ["S2", "S3", "S6", "S7"], d.get("stale_statements")
-assert d["rev_a"]["plan"]["containers_used"] == 6 and d["rev_b"]["plan"]["containers_used"] == 8
-print(f"ok   POST /api/tender/link/demo through Caddy: rev A 6 x 40HQ, rev B 8 x 40HQ, stale {', '.join(d['stale_statements'])}, {d['duration_ms']} ms")
+[ "$(OUT="$WORK/demo.json" code -X POST -H "Cookie: $cookie" "$B/api/tender/link/demo")" = 200 ] || fail "demo route HTTP status"
+[ "$(OUT="$WORK/up.json" code -H "Cookie: $cookie" -F "tender=@$EX/facade_itt_doc.md" -F "panel_list=@$EX/facade_panels.xlsx" "$B/api/tender/link")" = 200 ] || fail "upload"
+python3 - "$WORK/demo.json" "$WORK/up.json" "$EX" <<'PY' || fail "demo/upload refusal contract"
+import hashlib, json, sys
+from pathlib import Path
+d, upload = (json.load(open(p, encoding="utf-8")) for p in sys.argv[1:3])
+examples = Path(sys.argv[3])
+stale = ["S1", "S2", "S3", "S6"]
+def refused(result, source):
+    assert result["ok"] is True and result["plan"] is None, "original source unexpectedly produced a plan"
+    assert result["submit_blocked"] is True and result["confirmed_by_person"] is False, "draft was released"
+    assert result["inputs"]["plan"] == {"name": None, "sha256": None}, "stale plan remains attached"
+    assert result["inputs"]["panel_list"]["sha256"] == hashlib.sha256((examples / source).read_bytes()).hexdigest()
+    assert [s["id"] for s in result["statements"]] == [f"S{i}" for i in range(1, 8)]
+    assert all(s["status"] == "human_required" for s in result["statements"]) and result["counts"]["covered"] == 0
+    refusal = result["plan_refusal"]
+    assert (refusal["source"], refusal["error"]) == ("needs_human", "unsupported_transport_requirements")
+    assert refusal["needs_human"], "source rows missing"
+    for row in refusal["needs_human"]:
+        assert row["id"] and row["name"] and row["sheet_row"] >= 2 and row["ask"]
+        assert row["reason"] == "unsupported_transport_requirements"
+        assert all(term in row["requirements"]["note"] for term in ("upright", "A-frame", "do not stack"))
+    assert {f["name"] for f in result["files"]} == {"tender-packing-link.md", "bidbook.en.md", "tender-packing-link.json"}
+assert d["ok"] is True and d["synthetic"] is True and d["stale_statements"] == stale
+a, b = d["rev_a"], d["rev_b"]
+for result, source in ((a, "facade_panels.xlsx"), (b, "facade_panels_rev_b.xlsx"), (upload, "facade_panels.xlsx")):
+    refused(result, source)
+assert b["previous_job_id"] == a["job_id"] and b["job_id"] != a["job_id"]
+assert b["session_id"] == a["session_id"] and b["stale_statements"] == stale
+old, new = (r["inputs"]["panel_list"]["sha256"] for r in (a, b))
+assert old != new, "rev B reused the old input"
+assert any(c["input"] == "panel_list" and c["old_sha256"] == old and c["new_sha256"] == new
+           for c in b["changes_since_previous"]["inputs_changed"])
+print("ok   demo/upload through Caddy: transport constraints retained; rev B source/hash changed; no plan reused; drafts blocked")
 PY
 PASS=$((PASS + 1))
-[ "$(OUT="$WORK/up.json" code -H "Cookie: $cookie" -F "tender=@$EX/facade_itt_doc.md" -F "panel_list=@$EX/facade_panels.xlsx" "$B/api/tender/link")" = 200 ] || fail "upload"
 ok "multipart upload through Caddy -> 200"
 head -c 20971520 /dev/zero > "$WORK/big.md"
 [ "$(code -H "Cookie: $cookie" -F "tender=@$WORK/big.md" -F "panel_list=@$EX/facade_panels.xlsx" "$B/api/tender/link")" = 413 ] || fail "20 MB body not refused"
@@ -116,7 +142,15 @@ ok "job folder seeded with the three SYNTHETIC facade files only"
 OUT="$WORK/agent.json" code -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   --data '{"text":"Link the tender facade_itt_doc.md to the packing list facade_panels.xlsx and write the logistics response","session_id":"ls-agent"}' \
   "$B/api/agent" >/dev/null
-grep -q "tender_packing_link" "$WORK/agent.json" || fail "typed agent request on the seeded job folder"
+python3 - "$WORK/agent.json" <<'PY' || fail "typed agent refusal contract"
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+r = d["tender_packing_link"]
+assert d["ok"] is True and r["plan"] is None
+assert r["plan_refusal"]["error"] == "unsupported_transport_requirements" and r["plan_refusal"]["needs_human"]
+assert d["submit_blocked"] is True and r["confirmed_by_person"] is False
+assert r["inputs"]["plan"]["sha256"] is None
+PY
 ok "typed agent request on the seeded SYNTHETIC job folder -> linked run"
 compose up -d --force-recreate gateway >/dev/null 2>&1
 for _ in $(seq 1 90); do [ "$(code "$B/api/health")" = 200 ] && break; sleep 1; done

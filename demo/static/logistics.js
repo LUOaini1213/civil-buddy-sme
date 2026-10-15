@@ -6,6 +6,23 @@ const t = (source, values) => {
   return result;
 };
 const translateAgain = text => { const entry = translatedMessages.get(text); return entry ? t(entry.source, entry.values) : text; };
+export function capabilityText(data={}) {
+  const digital=data.digital_pdf || {}, ocr=data.ocr || {};
+  const pdfStatus=digital.available===true && digital.status==='available'
+    ? t('数字 PDF 表格解析依赖可用；识别字段仍须对照原件核对。')
+    : digital.reason_code==='missing_dependency'
+      ? t('数字 PDF 表格解析不可用：当前环境缺少依赖，请按 requirements-logistics.txt 配置环境。Excel、CSV 仍可上传。')
+      : digital.reason_code==='dependency_load_failed'
+        ? t('数字 PDF 表格解析依赖加载失败；请检查当前工作台环境。Excel、CSV 仍可上传。')
+        : t('数字 PDF 表格解析能力尚未核实。');
+  const ocrStatus=ocr.ready===true && ocr.available===true
+    ? t('{v0} 模型已就绪。',{v0:ocr.engine || t('本地 OCR')})
+    : ocr.environment_found
+      ? t('{v0} 环境已安装，模型尚未就绪。',{v0:ocr.engine || 'OCR'})
+      : t('本地 OCR 环境尚未就绪。');
+  return t('文件类型：xlsx / xlsm / csv / tsv / pdf / png / jpg，单文件最多 {v0} MB。{v1} {v2} 扫描件识别不会自动下载模型，未知字段保持待确认。',
+    {v0:Math.floor((data.limits?.source_bytes || 8388608)/1048576),v1:pdfStatus,v2:ocrStatus});
+}
 const UNKNOWN = 'UNSPECIFIED';
 const SIGNOFF = '我明白，将由持证人员签认';
 const SIGNOFFS = [SIGNOFF, 'I understand; a licensed person will sign this off.'];
@@ -14,13 +31,17 @@ export const FIELDS = [
   ['package_count','包装数','integer'],['quantity','数量（原单位）','integer'],['units_per_package','每包装数量','integer'],['unit','原始单位'],
   ['length_mm','长度 mm','number'],['width_mm','宽度 mm','number'],['height_mm','高度 mm','number'],
   ['dimension_scope','尺寸口径','dimension'],['net_kg','净重 kg','number'],['gross_kg','毛重 kg','number'],['weight_scope','重量口径','weight'],
+  ['orientation','运输姿态','orientation'],['stacking','堆叠要求','stacking'],['handling_requirements','运输要求原文'],
+  ['tare_kg','每包装皮重 kg','number'],['capacity_kg','每包装声明载荷上限 kg','number'],
 ];
 const labels = Object.fromEntries(FIELDS.map(([key,label])=>[key,label]));
 const scopes = {dimension:[[UNKNOWN,'待确认'],['package','每包装外尺寸'],['item','单件材料尺寸']],weight:[[UNKNOWN,'待确认'],['package','每包装重量'],['item','单件重量'],['row','整行总重量']]};
+scopes.orientation=[[UNKNOWN,'待确认'],['fixed','保持所填长宽高方向'],['upright','直立运输（高度保持向上）'],['free','无姿态限制']];
+scopes.stacking=[[UNKNOWN,'待确认'],['no_stack','禁止堆叠'],['allowed','允许堆叠（本次仍单层）']];
 const copy = value => JSON.parse(JSON.stringify(value));
 export function displayValue(value, field) {
   if (value === UNKNOWN || value === null || value === undefined || value === '') return t('待确认');
-  const options = field === 'dimension_scope' ? scopes.dimension : field === 'weight_scope' ? scopes.weight : null;
+  const options = field === 'dimension_scope' ? scopes.dimension : field === 'weight_scope' ? scopes.weight : scopes[field];
   const label = options?.find(([key])=>key===value)?.[1];
   return label ? t(label) : String(value);
 }
@@ -56,7 +77,7 @@ export function startLogisticsApp(document, options={}) {
   const $=id=>document.getElementById(id), win=options.window || globalThis.window;
   const fetcher=options.fetch || globalThis.fetch;
   const element=(tag,text,cls)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=String(text);if(cls)node.className=cls;return node;};
-  const state={project:null,draft:null,latestRevision:null,historical:false,pending:new Map(),proposal:null,sequence:0,busy:null,page:0,packing:null,calculationAttempt:null,chats:[],selectedSource:null,recentProjects:[],comparison:null};
+  const state={project:null,draft:null,latestRevision:null,historical:false,pending:new Map(),proposal:null,sequence:0,busy:null,page:0,packing:null,calculationAttempt:null,chats:[],selectedSource:null,recentProjects:[],comparison:null,capabilities:null};
   let controller=null, operation=null, recentSequence=0, previewSequence=0;
   const doc=()=>state.project?.document || state.draft?.document;
   const projectId=()=>state.project?.id;
@@ -99,6 +120,7 @@ export function startLogisticsApp(document, options={}) {
     $('historyBadge').textContent=state.historical?t("正在只读查看版本 {v0}，不允许用历史版本覆盖最新台账。回到最新版本后可撤销上次修改。", {v0: state.project.revision}):'';
     $('agentLink').hidden=!writable();if(writable())$('agentLink').href=`/?logistics_project_id=${projectId()}`;
     $('modeHelp').textContent=$('packingMode').value==='materials'?t('裸材料模式需要单件材料尺寸、单件净重及明确数量，不能带有已包装箱号或包装数。包装采用引擎规则，须另行复核。'):t('已包装模式需要每包装外尺寸、每包装毛重、包装数及数量。共享合并值不能拆成单行重量。缺项由服务报告，不猜测。');
+    if($('handlingHelp'))$('handlingHelp').textContent=$('packingMode').value==='materials'?t('有直立、禁止堆叠或 A 架要求时，自动成箱会阻断。请提供已包装整体数据后选择已包装箱件模式。'):t('所填高度即运输时向上的方向；按外包络固定方向、地板单层计算。A 架需补每架净重、皮重、毛重与声明载荷上限。防倾、系固、吊装及架体结构不在本次计算范围内。');
   }
   function optionsIn(select,values,placeholder){const previous=select.value;select.replaceChildren(element('option',placeholder));select.children[0].value='';for(const [value,label] of values){const item=element('option',label);item.value=String(value);select.append(item);}select.value=values.some(([value])=>String(value)===previous)?previous:'';}
   function renderLedger(){
@@ -163,6 +185,7 @@ export function startLogisticsApp(document, options={}) {
     const shared=group && (row[field]===UNKNOWN || row[field]==null);
     const anchor=group ? doc().rows.find(item=>item.id===group.anchor_row_id && item.evidence?.[field]?.group?.id===group.id) : null;
     for(const [label,value]of [[t('当前值'),shared?t('共享合并值，未分摊到本行'):displayValue(row[field],field)],[t('原始值'),ev?.raw ?? t('未提供原始证据')],[t('共享原文'),group?(anchor?.evidence?.[field]?.raw || t('待确认')):null],[t('共享值（不分摊）'),group?displayValue(anchor?.[field],field):null],[t('共享组'),group?.id],[t('覆盖材料行'),group?.row_ids?.join('、')],[t('唯一记值行'),group?.anchor_row_id],[t('共享口径'),group?t('原图合并值仅记录一次，不代表各行分别具有此值；该字段只读。'):null],[t('位置'),sourceLocation(location)],[t('坐标单位'),location.coordinate_system],[t('原表头'),ev?.header],[t('核对说明'),ev?.reason],[t('人工修订'),ev?.corrections?JSON.stringify(ev.corrections):ev?.correction?typeof ev.correction==='string'?ev.correction:JSON.stringify(ev.correction):null]])if(value!==undefined && value!==null){$('sourceFacts').append(element('dt',t(label)),element('dd',value));}
+    if(ev?.alternatives?.length){$('sourceFacts').append(element('dt',t('同字段原始列')));for(const original of ev.alternatives)$('sourceFacts').append(element('dd',`${original.header || ''} · ${sourceLocation(original.source || {})} · ${original.raw ?? ''}`));}
     const ext=doc()?.source.filename.toLowerCase().split('.').pop(),url=sourceURL();
     if(ext==='pdf' && Number.isInteger(location.page) && $('sourcePreview').children[0])$('sourcePreview').children[0].src=`${url}#page=${location.page}`;
     // Bounding boxes are shown numerically unless the parser provides explicit coordinate dimensions.
@@ -176,12 +199,29 @@ export function startLogisticsApp(document, options={}) {
     for(const change of draft.changes || draft.proposal?.changes || []){const row=element('tr');for(const value of [`${change.row_id || t('项目')} / ${t(labels[change.field]) || (change.field==='revision'?t('版本'):change.field)}`,displayValue(change.before,change.field),displayValue(change.after,change.field)])row.append(element('td',value));$('proposalRows').append(row);}controls();
   }
   function renderPacking(){
-    $('packingResult').replaceChildren();if(!state.packing){$('packingResult').append(element('p',t('计算成功后展示引擎返回的结果；失败不会标记为已完成。'),'empty'));return;}
+    $('packingResult').replaceChildren();
+    const failed=state.calculationAttempt?.report;
+    if(failed){
+      $('packingResult').append(element('p',t('本次计算未成功，以下为失败报告。'),'notice error'));
+      const list=element('ul');for(const issue of (failed.result?.needs_human || failed.needs_human || []).slice(0,100)){
+        const item=element('li');item.append(element('strong',[issue.row_id,issue.field?t(labels[issue.field] || issue.field):''].filter(Boolean).join(' · ')));
+        item.append(element('p',globalThis.CBLogisticsI18n?.issue(issue) || issue.message || issue.ask || issue.reason));
+        if(globalThis.CBI18n?.locale==='en' && issue.message)item.append(element('p',issue.message,'muted'));
+        if(issue.row_id && issue.field && doc()?.rows.some(row=>row.id===issue.row_id)){const button=element('button',t('查看来源'));button.type='button';button.addEventListener('click',()=>showSource(issue.row_id,issue.field));item.append(button);}list.append(item);
+      }$('packingResult').append(list);
+      const detail=element('details');detail.append(element('summary',t('引擎完整计算记录')),element('pre',JSON.stringify(failed,null,2)));$('packingResult').append(detail);
+    }
+    if(!state.packing){if(!failed)$('packingResult').append(element('p',t('计算成功后展示引擎返回的结果；失败不会标记为已完成。'),'empty'));return;}
     const {payload}=state.packing,result=payload.result;
     if(state.calculationAttempt && state.calculationAttempt.status!=='success')$('packingResult').append(element('p',t('本次计算尚未成功，以下保留的是上次成功记录。'),'stale'));
     if(!currentPacking())$('packingResult').append(element('p',t("上次计算记录（版本 {v0}）。当前台账、模式或柜型选项已改变，请重新计算。", {v0: state.packing.revision}),'stale'));
     if(payload.ok!==true || result?.can_fit===false)$('packingResult').append(element('p',t('本次未得到可用装载方案，请处理引擎报告的问题。'),'notice error'));
     else{$('packingResult').append(element('h3',t("版本 {v0} · {v1}结果", {v0: state.packing.revision, v1: state.packing.mode==='packaged'?t('已包装拼柜'):t('材料装箱与拼柜')})));const cards=element('div',undefined,'result-grid');for(const [label,value]of [[t('使用柜数'),result?.containers_used],[t('包装箱数'),result?.n_boxes],[t('柜型'),result?.container_type || state.packing.container]]){if(value===undefined)continue;const card=element('div',undefined,'metric');card.append(element('span',t(label)),element('strong',displayValue(value)));cards.append(card);}$('packingResult').append(cards);}
+    if(result?.constraints?.length){
+      $('packingResult').append(element('p',t('本次已核对：整体外包络固定方向、地板单层、柜内边界、互不重叠和声明重量。'),'notice'));
+      $('packingResult').append(element('p',t('未核对：架体结构、防倾稳定、绑扎系固和吊装；几何排布不代表运输放行。'),'muted'));
+      const list=element('ul');for(const constraint of result.constraints){const item=element('li',`${constraint.row_id} · ${t('固定方向 / 地板单层')}`);if(constraint.frame_mass_capacity_checked)item.append(element('span',t(' · 架体重量对账及声明载荷上限已检查')));if(constraint.handling_requirements && constraint.handling_requirements!==UNKNOWN)item.append(element('p',constraint.handling_requirements));list.append(item);}$('packingResult').append(list);
+    }
     const detail=element('details'),summary=element('summary',t('引擎完整计算记录')),pre=element('pre',JSON.stringify(payload,null,2));detail.append(summary,pre);$('packingResult').append(detail);
   }
   function renderChat(){ $('chatLog').replaceChildren();if(!state.chats.length)$('chatLog').append(element('p',t('先保存项目，再提问或提出明确修改。提案须单独确认。'),'muted'));for(const item of state.chats){const node=element('div',undefined,`message ${item.role}${item.error?' error':''}`);node.append(element('small',item.role==='user'?t('你'):t("Civil Buddy · 版本 {v0}", {v0: item.revision})),element('span',item.text));$('chatLog').append(node);} }
@@ -280,7 +320,7 @@ export function startLogisticsApp(document, options={}) {
     const attempt={status:'running'};state.calculationAttempt=attempt;
     const completed=await perform(t('正在按已确认台账计算…'),false,async requestData=>{const data=await requestData(`/api/logistics/projects/${id}/pack`,json({expected_revision:revision,mode,container_type:container,max_containers:max,confirmation:$('confirmation').value}));
       if(data.revision!==revision || data.mode!==mode)throw new Error(t('计算响应与请求版本或模式不一致，未采用结果。'));
-      if(data.ok!==true || data.result?.ok!==true || data.result?.can_fit!==true){notify(t('未生成可用装载方案，请检查引擎报告。'),true);const pre=element('pre',JSON.stringify(data,null,2));renderPacking();$('packingResult').append(element('p',t('本次计算未成功，以下为失败报告。'),'notice error'),pre);return;}
+      if(data.ok!==true || data.result?.ok!==true || data.result?.can_fit!==true){attempt.report=copy(data);attempt.status='failed';notify(t('未生成可用装载方案，请检查引擎报告。'),true);renderPacking();return;}
       attempt.status='success';state.packing={projectId:id,revision,mode,container,max,payload:copy(data)};renderPacking();notify(t('计算已完成；结果绑定本次台账版本与选项。'));});
     if(state.calculationAttempt===attempt){if(attempt.status==='running')attempt.status='failed';if(!completed)renderPacking();controls();}return completed;
   }
@@ -294,7 +334,7 @@ export function startLogisticsApp(document, options={}) {
   async function initialize(){
     const initialSequence=state.sequence,params=new URLSearchParams(win?.location?.search || '');
     void refreshProjects();
-    try{const response=await request('/api/logistics/capabilities'),data=await response.json();const ocr=data.ocr || {};const status=ocr.ready===true && ocr.available===true?t("{v0} 模型已就绪。", {v0: ocr.engine || t('本地 OCR')}):ocr.environment_found?t("{v0} 环境已安装，模型尚未就绪。", {v0: ocr.engine || 'OCR'}):t('本地 OCR 环境尚未就绪。');$('capabilities').textContent=t("本页支持 xlsx / xlsm / csv / tsv / pdf / png / jpg，单文件最多 {v0} MB。{v1}{v2} 扫描件识别不会自动下载模型，未知字段保持待确认。", {v0: Math.floor((data.limits?.source_bytes || 8388608)/1048576), v1: status, v2: ocr.reason || ''});}catch(error){$('capabilities').textContent=t("能力信息未读取：{v0}", {v0: error.message});}
+    try{const response=await request('/api/logistics/capabilities');state.capabilities=await response.json();$('capabilities').textContent=capabilityText(state.capabilities);}catch(error){state.capabilities=null;$('capabilities').textContent=t("能力信息未读取：{v0}", {v0: error.message});}
     if(state.sequence!==initialSequence || state.project || state.draft)return;
     const id=params.get('project_id');if(id){await openProject(id);const proposal=params.get('proposal_id');if(proposal && projectId()===id)await loadLinkedProposal(proposal);}
   }
@@ -320,7 +360,7 @@ export function startLogisticsApp(document, options={}) {
     optionsIn($('compareProjects'),state.recentProjects.filter(item=>item.id!==projectId()).map(item=>[item.id,`${item.name} · v${item.revision}`]),t('选择另一项目'));
     if(source)showSource(...source);
     if(state.notice)notify(translateAgain(state.notice.message),state.notice.error);
-    $('capabilities').textContent=translateAgain($('capabilities').textContent);
+    $('capabilities').textContent=state.capabilities?capabilityText(state.capabilities):translateAgain($('capabilities').textContent);
     if(row && field){const node=[...document.querySelectorAll('[data-ledger-field]')].find(node=>node.dataset.rowId===row && node.dataset.ledgerField===field);node?.focus?.();if(node?.setSelectionRange && selection[0]!=null)try{node.setSelectionRange(...selection);}catch{}}
   });
   render();if(options.initialize!==false)void initialize();

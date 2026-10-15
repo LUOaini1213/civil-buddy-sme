@@ -14,6 +14,10 @@ planning, schedule and site routes. Switching does not reload the page or submit
   must already be installed or explicitly prepared.
 - Bounded English planning and logistics commands. Displayed examples use the same validation and
   proposal/confirmation paths as their Chinese equivalents.
+- Saved-plan handoff, revision mismatch notices, source-bound plan cards and the distinction between
+  historical records and this turn's fixed-solver recomputation.
+- Separate digital-PDF dependency and scan-OCR readiness, plus finite voice preparation failure and
+  timeout messages. Switching language preserves source fields and the editable speech draft.
 
 The language choice does **not** translate source documents, filenames, table values, quotations,
 identifiers, solver numbers or units. Existing replies, raw tool records, imported reports and some

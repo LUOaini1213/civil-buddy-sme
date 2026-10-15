@@ -18,7 +18,7 @@ os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from demo import logistics_api as api
-from packing_assistant.logistics import agent, bundle, packing
+from packing_assistant.logistics import agent, bundle, packing, intake as document_intake
 from packing_assistant.logistics.intake import parse_document
 from packing_assistant.logistics.records import LogisticsStore, digest, validate_record, MAX_HISTORY
 from packing_assistant.engineering.schedule import ScheduleConflict
@@ -439,6 +439,52 @@ class Workbench(unittest.TestCase):
         self.assertTrue(self.post(f"/projects/{ident}/confirm", {"expected_revision": 2}).json()["project"]["confirmed"])
         self.assertFalse(self.post(f"/projects/{ident}/undo", {"expected_revision": 2}).json()["project"]["confirmed"])
         self.assertEqual(self.client.get(api.BASE + f"/projects/{ident}/source").content, SOURCE)
+
+    def test_http_pdf_dependency_failures_match_capability_keep_state_and_csv_usable(self):
+        project = self.create()
+        ident = project["id"]
+        original = self.store.confirm(ident, 1)
+        original_import = document_intake.importlib.import_module
+        for error, code in [
+            (ModuleNotFoundError("dependency missing at C:/private/synthetic.py"), "missing_dependency"),
+            (ImportError("DLL failure at C:/private/synthetic.pyd"), "dependency_load_failed"),
+            (OSError("DLL failure at C:/private/synthetic.dll"), "dependency_load_failed"),
+        ]:
+            def failed_import(name, *args, **kwargs):
+                if name == "pdfplumber":
+                    raise error
+                return original_import(name, *args, **kwargs)
+            with self.subTest(error=type(error).__name__), patch.object(document_intake.importlib, "import_module", side_effect=failed_import):
+                files_before = {path.relative_to(self.root): path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+                projects_before = self.store.list_projects()
+                cached_before = deepcopy(api.DOCUMENTS._items)
+                capability = self.client.get(api.BASE + "/capabilities")
+                self.assertEqual(capability.status_code, 200, capability.text)
+                data = capability.json()
+                self.assertIn("pdf", data["formats"])
+                self.assertFalse(data["digital_pdf"]["available"])
+                self.assertEqual(data["digital_pdf"]["reason_code"], code)
+                self.assertIn("ocr", data)
+                refused = self.client.post(api.BASE + "/upload?ocr_backend=none",
+                                           files={"file": ("synthetic.pdf", b"%PDF-1.4\n", "application/pdf")})
+                self.assertEqual(refused.status_code, 422, refused.text)
+                self.assertEqual(refused.json()["detail"], data["digital_pdf"]["reason"])
+                self.assertNotIn("private", refused.text)
+                self.assertNotIn("DLL", refused.text)
+                self.assertNotIn("Traceback", refused.text)
+                self.assertEqual(api.DOCUMENTS._items, cached_before)
+                self.assertEqual(self.store.list_projects(), projects_before)
+                self.assertEqual({path.relative_to(self.root): path.read_bytes() for path in self.root.rglob("*") if path.is_file()}, files_before)
+                self.assertEqual(self.store.open(ident), original)
+                self.assertEqual(self.client.get(api.BASE + f"/projects/{ident}/source").content, SOURCE)
+                response = self.client.post(api.BASE + "/upload", files={"file": ("synthetic.csv", SOURCE, "text/csv")})
+                self.assertEqual(response.status_code, 200, response.text)
+                upload = response.json()
+                created = self.post("/projects", {"document_id": upload["document_id"], "name": "CSV despite PDF unavailable"})
+                self.assertEqual(created.status_code, 200, created.text)
+                csv_ident = created.json()["project"]["id"]
+                self.assertEqual(self.client.get(api.BASE + f"/projects/{csv_ident}/source").content, SOURCE)
+                self.assertEqual(self.store.open(ident), original)
 
     def test_http_permission_extra_fields_and_local_only(self):
         project = self.create()
