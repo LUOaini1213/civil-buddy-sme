@@ -21,6 +21,7 @@ use std::{
 
 const MAX_SOURCE: usize = 16 * 1024 * 1024;
 const MAX_PACKAGE: u64 = 128 * 1024 * 1024;
+mod import;
 type Error = (StatusCode, Json<Value>);
 fn err(code: StatusCode, text: impl ToString) -> Error {
     (code, Json(json!({"detail":text.to_string()})))
@@ -63,6 +64,7 @@ pub fn initialize(db: &Connection) -> Result<(), String> {
       CREATE TABLE IF NOT EXISTS project_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,workspace TEXT NOT NULL,record TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS project_events_scope ON project_events(workspace,seq);
       CREATE TABLE IF NOT EXISTS artifact_readiness(workspace TEXT NOT NULL,id TEXT NOT NULL,record TEXT NOT NULL,PRIMARY KEY(workspace,id));
+      CREATE TABLE IF NOT EXISTS project_imports(workspace TEXT NOT NULL,package_sha256 TEXT NOT NULL,record TEXT NOT NULL,PRIMARY KEY(workspace,package_sha256));
       UPDATE project_documents SET record=json_set(record,'$.review_version',0) WHERE json_type(record,'$.review_version') IS NULL;")
       .map_err(|e| e.to_string())
 }
@@ -93,6 +95,7 @@ pub fn router(state: Arc<ProductState>) -> Router {
         )
         .route("/api/agent/artifacts/{id}/preview", get(preview_artifact))
         .layer(DefaultBodyLimit::max(64 * 1024))
+        .merge(import::router())
         .with_state(state)
 }
 
@@ -296,25 +299,26 @@ async fn register_document(
         let hash = super::tools::sha256(&bytes);
         let mut db = st.index.lock().map_err(internal)?;
         let tx = db.transaction().map_err(internal)?;
-        let stored_bytes: i64 = tx.query_row("SELECT coalesce(sum(length(payload)),0) FROM project_revisions WHERE workspace=?1",[&req.workspace],|r|r.get(0)).map_err(internal)?;
+        let stored_bytes: i64 = tx.query_row("SELECT (SELECT coalesce(sum(length(payload)),0) FROM project_revisions WHERE workspace=?1)+(SELECT coalesce(sum(json_extract(record,'$.source_metadata_bytes')),0) FROM project_imports WHERE workspace=?1)",[&req.workspace],|r|r.get(0)).map_err(internal)?;
         if stored_bytes.saturating_add(bytes.len() as i64)>512*1024*1024 { return Err(bad("Project revision snapshots exceed the 512 MiB workspace limit")); }
         let registered = records(&tx,"SELECT record FROM project_documents WHERE workspace=?1",&req.workspace)?;
         if registered.iter().any(|d|d["path"]==source && d["id"].as_str()!=req.document_id.as_deref()) { return Err(conflict("This path is already registered to another document")); }
-        let (doc_id, revision, review_version) = if let Some(ref doc_id) = req.document_id {
+        let (doc_id, revision, review_version, provenance) = if let Some(ref doc_id) = req.document_id {
             let old = document(&tx, &req.workspace, doc_id)?;
             if old["revision"].as_u64().unwrap_or(0)>=256 { return Err(bad("A controlled document supports up to 256 revisions; preserve its history before starting a new document")); }
             if req.expected_revision != old["revision"].as_u64() { return Err(conflict("Document revision changed; reload before saving")); }
             if old["sha256"] == hash && old["path"] == source && old["revision_label"] == label { return Err(conflict("This exact revision is already registered")); }
-            (doc_id.clone(), old["revision"].as_u64().unwrap_or(0) + 1, next_review_version(&old)?)
+            (doc_id.clone(), old["revision"].as_u64().unwrap_or(0) + 1, next_review_version(&old)?, old.get("provenance").cloned())
         } else {
             if req.expected_revision.is_some() { return Err(bad("A new document cannot have an expected revision")); }
             let count: i64 = tx.query_row("SELECT count(*) FROM project_documents WHERE workspace=?1", [&req.workspace], |r| r.get(0)).map_err(internal)?;
             if count >= 100 { return Err(bad("This workspace supports up to 100 controlled documents")); }
-            (id(), 1, 1)
+            (id(), 1, 1, None)
         };
         let revision = i64::try_from(revision).map_err(|_|bad("Revision is out of range"))?;
-        let doc = json!({"id":doc_id,"workspace":req.workspace,"title":title,"discipline":discipline,"path":source,
+        let mut doc = json!({"id":doc_id,"workspace":req.workspace,"title":title,"discipline":discipline,"path":source,
             "revision":revision,"review_version":review_version,"revision_label":label,"sha256":hash,"status":"work_in_progress","updated_at":now(),"actor_id":st.auth.owner()});
+        if let Some(provenance) = provenance { doc["provenance"] = provenance; }
         tx.execute("INSERT INTO project_revisions(workspace,document_id,revision,record,payload) VALUES(?1,?2,?3,?4,?5)", params![req.workspace,doc_id,revision,doc.to_string(),bytes]).map_err(internal)?;
         tx.execute("INSERT OR REPLACE INTO project_documents(workspace,id,record) VALUES(?1,?2,?3)", params![req.workspace,doc_id,doc.to_string()]).map_err(internal)?;
         // Retain the original evidence revision. A person must explicitly rebase
@@ -406,22 +410,23 @@ async fn save_issue(
         let mut doc = document(&tx,&req.workspace,&req.document_id)?;
         if doc["revision"] != req.document_revision { return Err(conflict("Issue evidence revision changed; reload and review the current source")); }
         require_current(&ws, &doc)?;
-        let (issue_id, version, created_at) = if let Some(ref issue_id) = req.id {
+        let (issue_id, version, created_at, provenance) = if let Some(ref issue_id) = req.id {
             let raw: Option<String> = tx.query_row("SELECT record FROM project_issues WHERE workspace=?1 AND id=?2",params![req.workspace,issue_id],|r|r.get(0)).optional().map_err(internal)?;
             let old: Value = serde_json::from_str(&raw.ok_or_else(||err(StatusCode::NOT_FOUND,"Issue not found"))?).map_err(internal)?;
             if req.expected_version != old["version"].as_u64() { return Err(conflict("Issue was changed; reload before saving")); }
             if old["document_id"] != req.document_id { return Err(bad("An issue's document cannot be replaced")); }
-            (issue_id.clone(),old["version"].as_u64().unwrap_or(0)+1,old["created_at"].clone())
+            (issue_id.clone(),old["version"].as_u64().unwrap_or(0)+1,old["created_at"].clone(),old.get("provenance").cloned())
         } else {
             if req.expected_version.is_some() || req.status != "open" { return Err(bad("New issues must start open")); }
             let count: i64 = tx.query_row("SELECT count(*) FROM project_issues WHERE workspace=?1",[&req.workspace],|r|r.get(0)).map_err(internal)?;
             if count>=2000 { return Err(bad("This workspace supports up to 2000 issues")); }
-            (id(),1,json!(now()))
+            (id(),1,json!(now()),None)
         };
-        let issue = json!({"id":issue_id,"version":version,"workspace":req.workspace,"document_id":req.document_id,
+        let mut issue = json!({"id":issue_id,"version":version,"workspace":req.workspace,"document_id":req.document_id,
             "document_revision":req.document_revision,"source_sha256":doc["sha256"],"kind":req.kind,"title":title,
             "description":description,"assignee":assignee,"due_date":req.due_date,"status":req.status,"resolution":resolution,
             "created_at":created_at,"updated_at":now(),"actor_id":st.auth.owner(),"notification_sent":false});
+        if let Some(provenance) = provenance { issue["provenance"] = provenance; issue["evidence_status"] = json!("current"); }
         tx.execute("INSERT OR REPLACE INTO project_issues(workspace,id,record) VALUES(?1,?2,?3)",params![req.workspace,issue_id,issue.to_string()]).map_err(internal)?;
         // Any new issue or changed resolution invalidates the document's prior
         // review. Closing an issue is not itself a document acceptance.

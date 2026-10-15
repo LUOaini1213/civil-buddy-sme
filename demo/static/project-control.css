@@ -30,5 +30,11 @@ body { margin: 0; background: var(--cb-bg); color: var(--cb-text); font-family: 
 .pc-metric { padding: 14px 20px; border-radius: 12px; border: 1px solid var(--cb-line); background: var(--cb-panel); }
 .pc-metric strong { display: block; font-size: 25px; }
 .pc-hash { font-family: ui-monospace,monospace; font-size: 11px; color: var(--cb-text-muted); }
+.pc-main .pc-check { flex-direction: row; align-items: flex-start; gap: 9px; }
+.pc-main .pc-check input { width: auto; flex: none; margin-top: 5px; }
+#pcImportSubmit { justify-self: start; }
+#pcImportReceipt p { overflow-wrap: anywhere; }
+.pc-provenance { margin-top: 10px; font-size: 13px; color: var(--cb-text-muted); }
+.pc-provenance summary { font-weight: 500; }
 @media(max-width:850px) { .pc-columns { grid-template-columns: 1fr; gap: 0; } .pc-intro { display: block; } .pc-main { padding: 20px 14px 40px; } .pc-panel { padding: 16px; } }
 @media(max-width:520px) { .pc-metrics { grid-template-columns: 1fr; gap: 8px; } .pc-metric strong { display: inline; margin-right: 12px; font-size: 20px; } }

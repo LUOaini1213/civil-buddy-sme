@@ -21,6 +21,20 @@
       <p id="pcStatus" role="status" aria-live="polite" data-i18n-skip>正在读取工程列表…</p>
       <p class="pc-muted">每个实例使用一个身份。负责人仅用于记录，不会自动发送通知；内部复核不替代专业签认。</p>
     </section>
+    <section class="pc-panel" id="pcImportPanel" aria-label="导入资料交接包">
+      <h2>导入资料交接包</h2>
+      <p class="pc-muted">将另一实例导出的资料与事项创建为当前工程的副本。先核验 ZIP，再单独允许写入；不会恢复原复核、运行任务或覆盖原文件。</p>
+      <form id="pcImportForm" class="pc-form">
+        <label>资料交接包（ZIP，最大 128 MiB）<input id="pcImportFile" type="file" accept=".zip,application/zip" aria-describedby="pcImportStatus"></label>
+        <div class="pc-row"><button id="pcImportPreview" type="button" disabled>核验所选交接包</button><button id="pcImportReset" type="button" disabled>清空所选交接包</button></div>
+        <div id="pcImportReceipt" class="pc-card" data-i18n-skip hidden></div>
+        <p class="pc-muted">包内仅含已登记资料的当前快照，不含旧修订原件。导入后内部复核全部重置；缺失旧证据的事项必须人工核对当前资料后再更新。</p>
+        <label class="pc-check"><input id="pcImportAllow" type="checkbox" disabled><span>允许在当前工程创建资料副本和事项记录</span></label>
+        <button id="pcImportSubmit" type="submit" disabled>确认导入副本</button>
+        <p id="pcImportStatus" role="status" aria-live="polite" data-i18n-skip>请选择工程文件夹和 ZIP，再核验交接包。</p>
+        <p id="pcImportUnconfirmed" class="pc-muted" role="status" aria-live="polite" data-i18n-skip hidden></p>
+      </form>
+    </section>
     <div class="pc-metrics" id="pcMetrics" data-i18n-skip></div>
     <div class="pc-columns">
       <section class="pc-panel">

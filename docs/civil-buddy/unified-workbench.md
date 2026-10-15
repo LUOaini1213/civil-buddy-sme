@@ -75,6 +75,18 @@ restore target. Restore requires the original user and absolute paths. See the
 
 For a named account and a single private job directory, use the launcher options `--user-id`, `--workspace` and `--token-file` together. The full [release and handoff guide](release-handoff.md) describes state ownership, login, project-package transfer, restart recovery and outstanding real-world acceptance. Named instances isolate users by separate processes and physical workspaces; they are not a shared-process multi-tenant service.
 
+### Receiving project document handoffs
+
+The project-records page accepts its own document handoff ZIPs in a different authorized project. Select the ZIP, verify its source and counts, then explicitly allow new copies and confirm the import. Verification does not write records or files. A changed project or file invalidates the preview and write choice. Cancelling an HTTP wait does not undo a server import; an uncertain result can be checked by refreshing records or explicitly retrying the exact same package.
+
+Import creates new document and issue IDs, new local revision-one snapshots beneath `.civil-buddy/out/handoffs/`, and a receiving-user audit trail. Source identities, original paths and revisions remain provenance. Previous internal reviews are cleared; previously resolved issues require review again. An issue referring to an earlier revision absent from the ZIP is marked with unavailable evidence and local revision zero. Only an explicit issue update after checking the current document rebinds that evidence. Registered imported sources remain selectable in the revision editor even though ordinary file discovery omits hidden output directories.
+
+The exact package hash and target project form a durable idempotency key. An explicit retry, including after restart, reads the original import receipt instead of creating more copies. The ZIP, manifest, audit, member paths, expanded sizes, snapshot hashes and references are validated before publication. Normal failures roll back records and owned new files. This is not a demonstrated crash-atomic filesystem/database restore: process failure can leave an uncommitted output directory. The import does not restore account bindings, credentials, model settings, Agent history or old revision files omitted by the exporter. Package and project storage limits still apply.
+
+Pass the original exported ZIP directly. The receiver admits the workbench's native single-disk ZIP subset: Stored/Deflate, UTF-8 paths, no additional ZIP metadata, encryption or ZIP64. Recompressing the package may add unsupported metadata; an ordinary archive without the workbench manifest is not a document handoff.
+
+Execution scope and source identities are recorded in the [2026-10-15 handoff acceptance record](acceptance/2026-10-15-project-handoff-import.json).
+
 ## Provider configuration details
 
 ```dotenv
