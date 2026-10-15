@@ -356,7 +356,7 @@ fn search_kb_fts(
     if !db.is_file() {
         return None;
     }
-    let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let conn = crate::sqlite::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     let q = tokens(query);
     if q.is_empty() {
         return Some(vec![]);
@@ -515,4 +515,42 @@ fn search_kb_scan(
         }
     }
     sort_and_limit(hits, limit)
+}
+
+#[cfg(all(test, windows))]
+mod sqlite_longpaths_tests {
+    use super::*;
+
+    #[test]
+    fn sqlite_longpaths_fts_reads_the_database_without_scan_fallback() {
+        let temporary = std::env::temp_dir().join(format!("civil-sqlite-fts-{}", uuid::Uuid::new_v4()));
+        let mut repo = temporary.clone();
+        for i in 0..10 {
+            repo.push(format!("{i}-{}", "检索资料".repeat(10)));
+        }
+        fs::create_dir_all(repo.join("data")).unwrap();
+        assert!(repo.to_string_lossy().len() > 1040);
+        let mut paths = Paths::from_demo(repo.join("demo"));
+        paths.repo_root = repo.clone();
+        let db = crate::sqlite::open(db_path(&paths)).unwrap();
+        db.execute_batch("CREATE VIRTUAL TABLE kb_fts USING fts5(kb UNINDEXED, path UNINDEXED, body);
+            CREATE TABLE kb_index(kb TEXT, path TEXT, layer TEXT, category TEXT, expert_id TEXT, boost REAL);
+            CREATE TABLE kb_chunks(kb TEXT, path TEXT, seq INTEGER, body TEXT);
+            INSERT INTO kb_fts VALUES('demo_kb','company/database-only.txt','uniquesqliteneedle persisted text');
+            INSERT INTO kb_index VALUES('demo_kb','company/database-only.txt','company','','',0);
+            INSERT INTO kb_chunks VALUES('demo_kb','company/database-only.txt',0,'uniquesqliteneedle persisted text');").unwrap();
+        drop(db);
+        assert!(!paths.kb_root.exists(), "there must be no text file for a scan to find");
+        // Call the private FTS path, not the public fallback wrapper: inability
+        // to open a database must fail this test rather than become a scan.
+        let hits = search_kb_fts(&paths, "synthetic", "synthetic", "uniquesqliteneedle", 5).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "company/database-only.txt");
+        assert!(hits[0].snippet.contains("uniquesqliteneedle"));
+        let root = temporary.canonicalize().unwrap();
+        let temp_root = std::env::temp_dir().canonicalize().unwrap();
+        assert_eq!(root.parent(), Some(temp_root.as_path()));
+        assert!(root.file_name().unwrap().to_string_lossy().starts_with("civil-sqlite-fts-"));
+        fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -11,7 +11,7 @@ use axum::{
     routing::{get, post},
     Form, Json, Router,
 };
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, OptionalExtension};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -178,7 +178,7 @@ impl InstanceAuth {
             reject_owned_overlap(&state, true)?;
             reject_owned_overlap(root, false)?;
         }
-        let mut db = Connection::open(folder.join("identity.sqlite")).map_err(|e| e.to_string())?;
+        let mut db = crate::sqlite::open(folder.join("identity.sqlite")).map_err(|e| e.to_string())?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS instance_owner(id INTEGER PRIMARY KEY CHECK(id=1),user_id TEXT NOT NULL,workspace_root TEXT NOT NULL)").map_err(|e| e.to_string())?;
         let tx = db.transaction().map_err(|e| e.to_string())?;
         let root = self
@@ -213,7 +213,7 @@ impl InstanceAuth {
             if std::fs::symlink_metadata(&binding).is_ok() {
                 reject_links(&binding)?;
             }
-            let mut db = Connection::open(binding).map_err(|e| e.to_string())?;
+            let mut db = crate::sqlite::open(binding).map_err(|e| e.to_string())?;
             db.busy_timeout(Duration::from_secs(5))
                 .map_err(|e| e.to_string())?;
             db.execute_batch("CREATE TABLE IF NOT EXISTS workspace_owner(id INTEGER PRIMARY KEY CHECK(id=1),user_id TEXT NOT NULL,state_root TEXT NOT NULL)").map_err(|e| e.to_string())?;

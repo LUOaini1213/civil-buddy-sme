@@ -68,7 +68,7 @@ impl ProductState {
         let runtime =
             RuntimeCore::open(folder.join("runtime.sqlite")).map_err(|e| e.to_string())?;
         runtime.recover_interrupted().map_err(|e| e.to_string())?;
-        let index = Connection::open(folder.join("index.sqlite")).map_err(|e| e.to_string())?;
+        let index = crate::sqlite::open(folder.join("index.sqlite")).map_err(|e| e.to_string())?;
         index.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS workspaces(id TEXT PRIMARY KEY,root TEXT UNIQUE NOT NULL); CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,path TEXT NOT NULL,record TEXT NOT NULL);").map_err(|e|e.to_string())?;
         super::project_control::initialize(&index)?;
         super::excel::initialize(&index)?;
