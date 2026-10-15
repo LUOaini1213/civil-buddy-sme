@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import math
 from pathlib import Path
+import stat
 
 
 class DocumentError(ValueError):
@@ -27,6 +28,33 @@ def bounded(workspace: Path, value: str) -> Path:
     if not target.is_relative_to(workspace):
         fail("path_denied", "Document paths must stay within the workspace")
     return target
+
+
+def verify_source_snapshot(workspace: Path, source: Path, expected: str, max_bytes: int):
+    """Recheck a parsed snapshot before returning it; this is application policy."""
+    try:
+        relative = source.relative_to(workspace)
+    except ValueError:
+        fail("path_denied", "Source snapshot leaves its workspace")
+    current = workspace
+    try:
+        for part in (None, *relative.parts):
+            if part is not None:
+                current = current / part
+            metadata = current.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or getattr(metadata, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+                fail("path_denied", "Source snapshot path contains a link or junction")
+        if not stat.S_ISREG(metadata.st_mode):
+            fail("conflict", "Source snapshot is no longer a regular file")
+        checked = bounded(workspace, str(source))
+        if metadata.st_size > max_bytes:
+            fail("conflict", "Source snapshot grew beyond its read limit")
+        with checked.open("rb") as stream:
+            data = stream.read(max_bytes + 1)
+    except OSError:
+        fail("conflict", "Source snapshot is no longer readable")
+    if len(data) > max_bytes or digest(data) != expected:
+        fail("conflict", "Source snapshot changed while it was being read")
 
 
 def text(value, *, maximum=100_000) -> str:

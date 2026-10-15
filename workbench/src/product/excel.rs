@@ -244,7 +244,7 @@ async fn start(
             "Only registered XLSX artifacts can be recalculated",
         ));
     }
-    if project_control::artifact_source_status(&ws, &record) != "current" {
+    if project_control::artifact_source_status(&st, &ws, &record) != "current" {
         return Err(error(
             StatusCode::CONFLICT,
             "source_conflict",
@@ -462,7 +462,7 @@ async fn execute(
             )
         })?;
     if parent_record["output_sha256"] != input_hash
-        || project_control::artifact_source_status(&ws, &parent_record) != "current"
+        || project_control::artifact_source_status(st, &ws, &parent_record) != "current"
     {
         return Err(failure(
             "source_conflict",
@@ -538,7 +538,7 @@ async fn execute(
     if sha256(&bounded_bytes(&staging).map_err(|e| failure("verification_failed", e))?)
         != input_hash
         || sha256(&bounded_bytes(&source).map_err(|e| failure("source_conflict", e))?) != input_hash
-        || project_control::artifact_source_status(&ws, &parent_record) != "current"
+        || project_control::artifact_source_status(st, &ws, &parent_record) != "current"
     {
         return Err(failure(
             "source_conflict",
@@ -602,7 +602,7 @@ async fn execute(
             "Input artifact changed before publication",
         )
     })?;
-    if project_control::artifact_source_status(&ws, &parent_record) != "current"
+    if project_control::artifact_source_status(st, &ws, &parent_record) != "current"
         || sha256(&bounded_bytes(&candidate).map_err(|e| failure("verification_failed", e))?)
             != output_hash
         || sha256(
@@ -700,7 +700,7 @@ fn publish(
             )
         },
     )?;
-    if project_control::artifact_source_status(ws, parent) != "current" {
+    if project_control::artifact_source_status(st, ws, parent) != "current" {
         return Err(failure(
             "source_conflict",
             "Original source changed before registration",
@@ -709,12 +709,15 @@ fn publish(
     // Complete the artifact and job in one transaction. Orphan candidates are
     // never treated as registered deliveries after storage/crash failures.
     let artifact_id = uuid::Uuid::new_v4().simple().to_string();
-    let artifact = json!({"id":artifact_id,"actor_id":st.auth.owner(),"name":target.file_name().unwrap_or_default().to_string_lossy(),
+    let mut artifact = json!({"id":artifact_id,"actor_id":st.auth.owner(),"name":target.file_name().unwrap_or_default().to_string_lossy(),
         "url":format!("/api/agent/artifacts/{artifact_id}?workspace={workspace}"),"source":parent["source"],"source_sha256":parent["source_sha256"],
         "output_sha256":receipt["output_sha256"],"provenance":"excel_recalculated","parent_artifact_id":parent["id"],"parent_output_sha256":parent["output_sha256"],
         "excel_job_id":id,"evidence_validation":parent["evidence_validation"],
         "validation":{"source_unchanged":"pass","parent_unchanged":"pass","reopened":"pass","recalculation":"performed_by_excel",
             "cached_values":"engine_refreshed_and_saved_verified","semantic_preserved":true,"professional_review":"required","automatic_acceptance":false}});
+    if let Some(origin) = parent.get("source_origin") {
+        artifact["source_origin"] = origin.clone();
+    }
     let mut db = st
         .index
         .lock()

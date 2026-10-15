@@ -95,14 +95,14 @@ export function createAgentWorkbench(deps) {
     ? globalThis.crypto.randomUUID().replaceAll("-", "") : Date.now().toString(36) + Math.random().toString(36).slice(2));
   const $ = (id) => doc.getElementById(id);
   const node = (tag, text, cls) => { const n = doc.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
-  const state = { capabilities: null, workspace: null, session: "", files: [], selected: new Set(), turn: null,
+  const state = { capabilities: null, workspace: null, session: "", files: [], selected: new Set(), selectedBindings: new Map(), turn: null,
     seq: 0, emptyEventPages: 0, nextTurnCursor: null, turnsLoading: false, sessionListEpoch: 0, sessionsLoading: false, nextSessionCursor: null, sessionHistoryMessage: null, artifacts: new Map(), artifactChecks: new Map(), engineeringResults: new Map(), epoch: 0, workspaceEpoch: 0, fileEpoch: 0, listEpoch: 0,
     contextData: null, taskRows: [], eventRows: [], subtasks: new Map(), packingResults: new Map(), modelConfig: null, writeGateReason: null, sourceEvidence: null, modelInterpretationText: null,
     engineeringEpoch: 0, engineeringRows: [], engineeringLoading: false, engineeringStatus: null, pendingPlanning: null, terminalNotice: false, experts: [],
     excelJobs: new Map(), excelActions: new Map(), excelLoading: false, excelError: "", excelTruncated: false, excelEpoch: 0,
     opening: false, submitting: false, cancelling: false, modelBusy: false, modelConfigured: false, disposed: false,
     pendingSubmission: null, submissionScope: "", submissionRecovery: "", recoveringSubmission: false, submissionOutcome: null,
-    fileReport: null, fileListingError: false, removedFiles: [] };
+    fileReport: null, fileListingError: false, removedFiles: [], changedFiles: [] };
   let saved = { lastRoot: "", workspaces: {} }, timer = null, controller = null, started = false;
   let excelTimer = null;
   let submissionI18n = null, pendingSubmissions = [];
@@ -119,6 +119,10 @@ export function createAgentWorkbench(deps) {
   try { const value = JSON.parse(storage.getItem(STORE_KEY) || "null"); if (object(value) && object(value.workspaces)) saved = value; } catch (_) { /* Storage is optional. */ }
   function persist() { try { storage.setItem(STORE_KEY, JSON.stringify(saved)); } catch (_) { /* Storage may be disabled. */ } }
   function record() { return state.workspace && saved.workspaces[state.workspace.id]; }
+  function sourceBindings() {
+    return [...state.selected].filter(path => state.selectedBindings.has(path)).map(path => ({ path, origin: { ...state.selectedBindings.get(path) } }));
+  }
+  function persistSources() { record().files = [...state.selected]; record().file_bindings = sourceBindings(); persist(); }
   function sessionRecord() { return record() && record().sessions.find((item) => item.id === state.session); }
   function persistSubmissions() { try { storage.setItem(SUBMISSION_KEY, JSON.stringify(pendingSubmissions.slice(-32).map(submissionMetadata))); } catch (_) { /* In-memory explicit retry remains available. */ } }
   function actorScope() { return JSON.stringify([state.capabilities?.identity?.mode || "undeclared", state.capabilities?.identity?.user_id || ""]); }
@@ -137,6 +141,7 @@ export function createAgentWorkbench(deps) {
   function submissionRequest(value) {
     return { workspace: value.workspace, session_id: value.session_id, message: value.message, locale: value.locale || "zh-CN",
       mode: value.mode || "model", sandbox: value.sandbox || "read-only", files: value.files || [],
+      ...(value.file_bindings?.length ? { file_bindings: value.file_bindings.map(item => ({ path: item.path, origin: fileListing.handoffOrigin(item.path, item.origin) })) } : {}),
       engineering: (value.engineering || []).map(item => ({ kind: item.kind, project_id: item.project_id, revision: item.revision,
         source_sha256: item.source_sha256 ?? null, inputs_sha256: item.inputs_sha256, confirmed_solid: item.confirmed_solid === true })),
       planning_action: value.planning_action || "inspect", packing_sources: (value.packing_sources || []).map(item => ({ source: item.source })),
@@ -398,7 +403,7 @@ export function createAgentWorkbench(deps) {
     const rows = state.files.map(file => ({ ...file, retained: false }));
     if (state.fileReport?.complete !== true || state.fileListingError) {
       const paths = new Set(rows.map(file => file.path));
-      for (const path of state.selected) if (!paths.has(path)) rows.push({ path, name: path, retained: true });
+      for (const path of state.selected) if (!paths.has(path)) rows.push({ path, name: path, retained: true, origin: state.selectedBindings.get(path) });
     }
     return rows;
   }
@@ -407,6 +412,7 @@ export function createAgentWorkbench(deps) {
     const messages = [fileListing.notice(state.fileReport, t)];
     if (state.fileListingError) messages.push(fileListing.failure(t));
     if (state.removedFiles.length) messages.push(t("完整列表中已找不到这些来源，已取消选择：{paths}。", { paths: state.removedFiles.join("；") }));
+    if (state.changedFiles.length) messages.push(t("这些接收资料的登记版本已变化，已取消选择；请核对后重新勾选：{paths}。", { paths: state.changedFiles.join("；") }));
     $("agentFilesStatus").textContent = messages.filter(Boolean).join(" ");
     $("agentFilesStatus").hidden = !$("agentFilesStatus").textContent;
   }
@@ -419,8 +425,18 @@ export function createAgentWorkbench(deps) {
     if (!files.length) { host.appendChild(node("p", t("这个文件夹暂未列出可读资料。"), "muted")); return; }
     for (const file of files) {
       const label = node("label", undefined, "file-row"), check = node("input"); check.type = "checkbox"; check.checked = state.selected.has(file.path);
-      check.addEventListener("change", () => { check.checked ? state.selected.add(file.path) : state.selected.delete(file.path); record().files = [...state.selected]; persist(); paintPackingSources(); controls(); });
+      check.addEventListener("change", () => {
+        if (check.checked) {
+          state.selected.add(file.path);
+          const origin = fileListing.handoffOrigin(file.path, file.origin);
+          if (origin) state.selectedBindings.set(file.path, origin);
+        } else { state.selected.delete(file.path); state.selectedBindings.delete(file.path); }
+        persistSources(); paintFiles(); controls();
+      });
       const info = node("span", file.name || file.path); info.appendChild(node("small", file.path + (Number.isFinite(file.size) ? t(" · {size} 字节", { size: file.size.toLocaleString() }) : "")));
+      if (file.origin) info.appendChild(node("small", t("接收的项目资料 · 版本 {revision}", { revision: file.origin.revision })));
+      const selectedOrigin = state.selectedBindings.get(file.path);
+      if (selectedOrigin && !fileListing.sameOrigin(selectedOrigin, file.origin)) info.appendChild(node("small", t("已保留原先选择的版本 {revision}；刷新不会自动改用新版本，执行时服务器仍会核对。", { revision: selectedOrigin.revision })));
       if (file.retained) info.appendChild(node("small", fileListing.retained(file.path, t)));
       label.append(check, info); host.appendChild(label);
     }
@@ -444,9 +460,11 @@ export function createAgentWorkbench(deps) {
       const report = fileListing.validate(data, id, "agent");
       const paths = new Set(report.files.map(file => file.path));
       state.removedFiles = report.complete ? [...state.selected].filter(path => !paths.has(path)) : [];
-      if (report.complete) state.selected = new Set([...state.selected].filter(path => paths.has(path)));
+      state.changedFiles = report.complete ? report.files.filter(file => state.selected.has(file.path)
+        && (file.origin || state.selectedBindings.has(file.path)) && !fileListing.sameOrigin(state.selectedBindings.get(file.path), file.origin)).map(file => file.path) : [];
+      if (report.complete) for (const path of [...state.removedFiles, ...state.changedFiles]) { state.selected.delete(path); state.selectedBindings.delete(path); }
       state.fileReport = report; state.files = report.files; state.fileListingError = false;
-      record().files = [...state.selected]; persist(); paintFiles();
+      persistSources(); paintFiles();
     } catch (error) { if (state.workspace?.id === id && version === state.fileEpoch) {
       state.fileListingError = true; paintFiles(); notice(t("资料列表读取失败：") + t(error.message), true);
     } }
@@ -588,7 +606,7 @@ export function createAgentWorkbench(deps) {
       if (!data.workspace || typeof data.workspace.id !== "string" || typeof data.workspace.root !== "string") throw new Error(t("工作区响应缺少标识或路径"));
       if (expectedId && data.workspace.id !== expectedId) throw new Error(t("工程链接与服务器返回的工程不一致，请从项目页重新打开。"));
       state.workspace = data.workspace;
-      state.files = []; state.fileReport = null; state.fileListingError = false; state.removedFiles = [];
+      state.files = []; state.fileReport = null; state.fileListingError = false; state.removedFiles = []; state.changedFiles = [];
       $("agentMessage").value = "";
       $("agentRiskConfirmation").value = "";
       if (data.capabilities) paintCapabilities(data.capabilities);
@@ -599,7 +617,14 @@ export function createAgentWorkbench(deps) {
       saved.workspaces[state.workspace.id] = item;
       state.session = item.sessions.some((s) => s.id === item.current) ? item.current : item.sessions[0].id;
       item.current = state.session;
-      state.selected = new Set(restoreSelection && Array.isArray(item.files) ? item.files : []); saved.lastRoot = state.workspace.root; persist();
+      state.selectedBindings = new Map();
+      if (restoreSelection && Array.isArray(item.file_bindings)) for (const binding of item.file_bindings) {
+        const origin = fileListing.handoffOrigin(binding?.path, binding?.origin);
+        if (origin && !state.selectedBindings.has(binding.path)) state.selectedBindings.set(binding.path, origin);
+      }
+      state.selected = new Set(restoreSelection && Array.isArray(item.files) ? item.files.filter(path => fileListing.safePath(path) || state.selectedBindings.has(path)) : []);
+      state.selectedBindings = new Map([...state.selectedBindings].filter(([path]) => state.selected.has(path)));
+      saved.lastRoot = state.workspace.root; persistSources();
       if (manual) {
         // A prior project-page link must not override this explicit choice on reload.
         const url = new URL(win.location.href);
@@ -1303,6 +1328,7 @@ export function createAgentWorkbench(deps) {
       if (!(await verifyEngineering(epoch))) return;
       if (!submissionCurrent(scope)) return;
       const payload = { workspace: state.workspace.id, session_id: state.session, message, locale: win.CBI18n?.locale || "zh-CN", mode: $("agentMode").value, sandbox: $("agentSandbox").value, files: [...state.selected],
+        ...(state.selectedBindings.size ? { file_bindings: sourceBindings() } : {}),
         ...(state.capabilities?.features?.packing_replan === true ? { packing_sources: packingSource && state.selected.has(packingSource) ? [{ source: packingSource }] : [] } : {}),
         ...(state.capabilities?.features?.saved_planning === true ? { planning_action: $("agentMode").value === "steps" && $("agentPlanningRecalculate")?.checked && state.engineeringRows.some(row => row.selected && row.kind === "saved_planning") ? "calculate" : "inspect" } : {}),
         expert_id: $("agentExpert").value, risk_confirmation: $("agentRiskConfirmation").value.trim(), engineering: state.engineeringRows.filter((row) => row.selected).map((row) => ({ ...row.snapshot, confirmed_solid: row.kind === "cad_section" && row.confirmed })) };

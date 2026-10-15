@@ -10,7 +10,7 @@ import re
 import sqlite3
 import time
 
-from packing_assistant.documents.common import DocumentError, bounded, digest, fail, integer
+from packing_assistant.documents.common import DocumentError, bounded, digest, fail, integer, verify_source_snapshot
 from packing_assistant.documents.ooxml import Spreadsheet, Word, W, S, _pt
 
 SCHEMA = 1
@@ -309,8 +309,8 @@ def _execute(request):
         else:
             result = base
         # A concurrently changed source invalidates this request instead of returning stale evidence.
-        if any(not s["path"].is_file() or digest(s["path"].read_bytes()) != s["sha"] for s in selected):
-            fail("conflict", "A selected source changed during retrieval; retry with its current revision")
+        for source in selected:
+            verify_source_snapshot(workspace, source["path"], source["sha"], MAX_BYTES)
         return result
 
 

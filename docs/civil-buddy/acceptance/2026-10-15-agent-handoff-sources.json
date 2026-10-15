@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-15",
+  "feature": "agent_explicit_received_project_sources",
+  "baseline_commit": "80052ecc0ff1c57427241ad8a70870250ccbe5c8",
+  "production_acceptance": false,
+  "binary": {
+    "sha256": "eb8909ca4cb3b5cf50847b82ca3d52dcd53a8dc003db5228f37966a1dc2177fe",
+    "platform": "Windows x86_64 MSVC",
+    "profile": "development"
+  },
+  "validation": {
+    "controlled_native": {
+      "pass": 8,
+      "fail": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered": 0
+    },
+    "existing_native": {
+      "pass": 18,
+      "fail": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered": 0
+    },
+    "full_native": {
+      "pass": 344,
+      "fail": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered": 0
+    },
+    "frontend": [
+      {
+        "label": "agent-ui",
+        "command": [
+          "C:\\Users\\LW\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+          "--test",
+          "scripts/test_agent_ui.cjs"
+        ],
+        "exit_code": 0,
+        "log": "C:\\Users\\LW\\Documents\\Codex\\2026-09-21\\c\\work\\agent-handoff-sources-20261015\\frontend-20261015-035232-596bed0d\\agent-ui.log",
+        "log_sha256": "711e8883e3c0742d65ed89aac3bdb8f4c072c55a85bf2cd07812c58a4b593ee1"
+      },
+      {
+        "label": "project-control-ui",
+        "command": [
+          "C:\\Users\\LW\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+          "--test",
+          "scripts/test_project_control_ui.cjs"
+        ],
+        "exit_code": 0,
+        "log": "C:\\Users\\LW\\Documents\\Codex\\2026-09-21\\c\\work\\agent-handoff-sources-20261015\\frontend-20261015-035232-596bed0d\\project-control-ui.log",
+        "log_sha256": "79f5614695d5e3458019bb02249b2fc0e92c408fc7e77cba33520b5cfe9bf81d"
+      },
+      {
+        "label": "i18n",
+        "command": [
+          "C:\\Users\\LW\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+          "--test",
+          "scripts/test_i18n.cjs"
+        ],
+        "exit_code": 0,
+        "log": "C:\\Users\\LW\\Documents\\Codex\\2026-09-21\\c\\work\\agent-handoff-sources-20261015\\frontend-20261015-035232-596bed0d\\i18n.log",
+        "log_sha256": "ea0441a6c964dcdfdfb8102db0a3017a480b25f291312b407763a92f4cb0e470"
+      },
+      {
+        "label": "product-i18n",
+        "command": [
+          "C:\\Users\\LW\\civil-buddy\\.venv\\Scripts\\python.exe",
+          "scripts/test_product_language.py"
+        ],
+        "exit_code": 0,
+        "log": "C:\\Users\\LW\\Documents\\Codex\\2026-09-21\\c\\work\\agent-handoff-sources-20261015\\frontend-20261015-035232-596bed0d\\product-i18n.log",
+        "log_sha256": "efc21b2aa84f35e292c49e63c0ef60f848e6e506b8e246a464c0074ce84cc9a1"
+      },
+      {
+        "label": "js-syntax",
+        "command": [
+          "C:\\Users\\LW\\civil-buddy\\.venv\\Scripts\\python.exe",
+          "scripts/test_js_syntax.py"
+        ],
+        "exit_code": 0,
+        "log": "C:\\Users\\LW\\Documents\\Codex\\2026-09-21\\c\\work\\agent-handoff-sources-20261015\\frontend-20261015-035232-596bed0d\\js-syntax.log",
+        "log_sha256": "ad2cb97aba33a5fb6926009cb4db376ff9b86d08007dcb2305add5bab59e77a4"
+      }
+    ],
+    "python": {
+      "passed": true,
+      "scope": "Offline actual fixed worker and parser regressions with synthetic files. No model/provider, user project or Office application used.",
+      "stages": [
+        {
+          "script": "scripts/test_host_worker.py",
+          "exit_code": 0,
+          "passed": true,
+          "ran": 11,
+          "skipped": 0
+        },
+        {
+          "script": "scripts/test_source_retrieval.py",
+          "exit_code": 0,
+          "passed": true,
+          "ran": 16,
+          "skipped": 1
+        },
+        {
+          "script": "scripts/test_document_worker.py",
+          "exit_code": 0,
+          "passed": true,
+          "ran": 18,
+          "skipped": 1
+        }
+      ]
+    },
+    "actual_http_checks": 43,
+    "actual_cookie_dom_checks": 14,
+    "real_provider_calls": 0
+  },
+  "flow": "Two fresh named local users: export six synthetic snapshots; receive four supported sources; explicitly select; read and search; delegate; preview and save exactly one Word and one workbook; verify source versions; restart and replay without execution.",
+  "invariants_verified": [
+    "Exact import/document/revision/hash binding required only for controlled hidden sources",
+    "Noncanonical aliases, unregistered siblings and metadata cannot become Agent material",
+    "Final independent source-quote verification is tied to selected versions",
+    "Actual document copies have host-recorded source lineage, originals preserved byte-for-byte",
+    "Same-byte registered revision changes invalidate earlier lineage; missing proof is unavailable",
+    "Registration or byte changes after admission refuse source reads",
+    "Parent and child model views omit repeated worker protocol diagnostics while preserving business results and complete original audit events",
+    "Restart retains task/events/artifacts and same-key retries do not execute again"
+  ],
+  "scope": "Two new named users and physical workspaces on one Windows computer; synthetic engineering documents and local scripted model, actual fixed Python workers and JSDOM/HTTP. Not field, second-computer, microphone or Office acceptance.",
+  "limitations": [
+    "Local scripted model does not establish live DeepSeek task quality",
+    "Same Windows computer and JSDOM, not second-computer or native browser acceptance",
+    "No field microphone, Office visual rendering, Excel recalculation or engineering sign-off",
+    "Application source checks do not establish Windows read/network confinement or eliminate every filesystem race",
+    "IFC/DXF are handoff snapshots, not supported Agent geometry inputs"
+  ],
+  "evidence": {
+    "build": {
+      "path": "work\\agent-handoff-sources-20261015\\native-v4-build-20261015-043106-78c0c483\\report.json",
+      "sha256": "984ef99acd26b9645a94312a95a4ee7113d3790701e708a5b1fd2394eafddd71"
+    },
+    "full": {
+      "path": "work\\agent-handoff-sources-20261015\\native-v4-full-20261015-043121-b568a369\\report.json",
+      "sha256": "b1773aa36e08be30e09054ef2921f94f33329a86e7672299418dcfeeb521de97"
+    },
+    "controlled": {
+      "path": "work\\agent-handoff-sources-20261015\\native-v4-controlled-20261015-042843-a8e70f83\\report.json",
+      "sha256": "83ab62fe3135ae24fd75fb14c9f7cfccb2aebd3d8e93389f6ca78d38d00ec9b4"
+    },
+    "existing": {
+      "path": "work\\agent-handoff-sources-20261015\\native-v4-existing-20261015-043007-908b6e77\\report.json",
+      "sha256": "a12aa33ce5072aef70b62c6e97d632ad23b6efd4bda21781c176e5b7582764a8"
+    },
+    "actual": {
+      "path": "work\\agent-handoff-sources-20261015\\actual-20261015-123405-b6673175\\report.json",
+      "sha256": "a55d396b6b8a853e46b981d05c896348d150e919d7d263a8d6a3e9dd4ab59e06"
+    },
+    "frontend": {
+      "path": "work\\agent-handoff-sources-20261015\\frontend-20261015-035232-596bed0d\\report.json",
+      "sha256": "675ed917a5b251171b1f451abed6ec6964d14a80c79f143606a8475e4cc64507"
+    },
+    "python": {
+      "path": "work\\agent-handoff-sources-20261015\\python-20261015-115413-2f042de0\\report.json",
+      "sha256": "eee2389e61ab95d2eb895202e7e9b47dd78c96b9c23c1734846f86684145362c"
+    }
+  },
+  "prior_attempts": "Native v1 fixture compile failure and earlier source generations are preserved separately. The first actual attempt lacked TextEncoder in its JSDOM bridge; the next exposed real context overflow after both copies were saved. A later fixture re-used a revision label and was correctly rejected as a duplicate; the final fixture uses distinct explicit labels. Final matching source-generation reports use the unchanged full-child scenario after the product model-view fix."
+}

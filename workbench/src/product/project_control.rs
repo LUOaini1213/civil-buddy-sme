@@ -99,9 +99,14 @@ pub fn router(state: Arc<ProductState>) -> Router {
         .with_state(state)
 }
 
-async fn source_files(State(st): State<Arc<ProductState>>, Query(q): Query<Scope>) -> Result<Json<Value>, Error> {
+async fn source_files(
+    State(st): State<Arc<ProductState>>,
+    Query(q): Query<Scope>,
+) -> Result<Json<Value>, Error> {
     let ws = st.workspace(&q.workspace).map_err(bad)?;
-    let report = super::file_listing::list_files(&ws, super::file_listing::FileListPurpose::ProjectControl).map_err(bad)?;
+    let report =
+        super::file_listing::list_files(&ws, super::file_listing::FileListPurpose::ProjectControl)
+            .map_err(bad)?;
     let mut value = serde_json::to_value(report).map_err(bad)?;
     value["workspace"] = json!(q.workspace);
     Ok(Json(value))
@@ -161,7 +166,10 @@ fn source_root_component_matches(
 // Match the lexical root before resolving: canonicalizing the source first would
 // hide a symlink/junction. The resulting relative path still goes through every
 // WorkspaceContext read restriction, including link, secret and traversal checks.
-fn read_artifact_source(ws: &WorkspaceContext, source: &str) -> Result<Vec<u8>, Error> {
+pub(super) fn artifact_source_relative(
+    ws: &WorkspaceContext,
+    source: &str,
+) -> Result<String, Error> {
     let path = std::path::Path::new(source);
     let relative = if path.is_absolute() {
         let mut components = path.components();
@@ -177,15 +185,16 @@ fn read_artifact_source(ws: &WorkspaceContext, source: &str) -> Result<Vec<u8>, 
     } else {
         path
     };
-    read_source(
-        ws,
-        relative
-            .to_str()
-            .ok_or_else(|| bad("Source path must be Unicode"))?,
-    )
+    Ok(relative
+        .to_str()
+        .ok_or_else(|| bad("Source path must be Unicode"))?
+        .replace('\\', "/"))
+}
+fn read_artifact_source(ws: &WorkspaceContext, source: &str) -> Result<Vec<u8>, Error> {
+    read_source(ws, &artifact_source_relative(ws, source)?)
 }
 
-pub(super) fn artifact_source_status(ws: &WorkspaceContext, record: &Value) -> &'static str {
+pub(super) fn artifact_source_byte_status(ws: &WorkspaceContext, record: &Value) -> &'static str {
     match (record["source"].as_str(), record["source_sha256"].as_str()) {
         (Some(source), Some(expected)) => match read_artifact_source(ws, source) {
             Ok(bytes) if super::tools::sha256(&bytes) == expected => "current",
@@ -194,6 +203,38 @@ pub(super) fn artifact_source_status(ws: &WorkspaceContext, record: &Value) -> &
         },
         _ => "not_recorded",
     }
+}
+pub(super) fn artifact_source_status(
+    st: &ProductState,
+    ws: &WorkspaceContext,
+    record: &Value,
+) -> &'static str {
+    let bytes = artifact_source_byte_status(ws, record);
+    if bytes != "current" {
+        return bytes;
+    }
+    let Some(source) = record["source"].as_str() else {
+        return "not_recorded";
+    };
+    let Ok(path) = artifact_source_relative(ws, source) else {
+        return "unavailable";
+    };
+    let Some(raw) = record.get("source_origin") else {
+        return if super::controlled_sources::requires_binding(ws, &path) {
+            "not_recorded"
+        } else {
+            bytes
+        };
+    };
+    let Ok(origin) = serde_json::from_value::<super::controlled_sources::SourceOrigin>(raw.clone())
+    else {
+        return "unavailable";
+    };
+    let binding = super::controlled_sources::FileBinding {
+        path: path.clone(),
+        origin,
+    };
+    super::controlled_sources::binding_status(st, ws, &binding)
 }
 fn document(db: &Connection, workspace: &str, doc_id: &str) -> Result<Value, Error> {
     let raw: Option<String> = db
@@ -987,7 +1028,10 @@ async fn inspect_artifact(
     result["inspected_by"] = json!(st.auth.owner());
     result["inspected_at"] = json!(now());
     result["artifact_id"] = json!(artifact_id);
-    result["original_source_status"] = json!(artifact_source_status(&ws, &record));
+    result["original_source_status"] = json!(artifact_source_status(&st, &ws, &record));
+    if let Some(origin) = record.get("source_origin") {
+        result["source_origin"] = origin.clone();
+    }
     super::excel::merge_readiness(&st, &q.workspace, &record, &mut result).map_err(bad)?;
     st.index
         .lock()
@@ -1024,6 +1068,9 @@ async fn preview_artifact(
             return Err(bad(
                 "This artifact is not eligible for a native PDF preview",
             ));
+        }
+        if record.get("source_origin").is_some() && artifact_source_status(&st,&ws,&record)!="current" {
+            return Err(conflict("Imported source revision changed after inspection; the earlier copy is not current"));
         }
         let bytes = read_source(&ws, &path)?;
         if super::tools::sha256(&bytes) != record["output_sha256"] {
@@ -1092,7 +1139,7 @@ mod artifact_source_tests {
         let paths = [PathBuf::from("source.xlsx"), source.clone(), canonical];
         for path in &paths {
             assert_eq!(
-                artifact_source_status(&ws, &record(path)),
+                artifact_source_byte_status(&ws, &record(path)),
                 "current",
                 "{path:?}"
             );
@@ -1102,7 +1149,7 @@ mod artifact_source_tests {
         std::fs::write(&source, b"changed after registration").unwrap();
         for path in &paths {
             assert_eq!(
-                artifact_source_status(&ws, &record(path)),
+                artifact_source_byte_status(&ws, &record(path)),
                 "changed",
                 "{path:?}"
             );
@@ -1110,14 +1157,14 @@ mod artifact_source_tests {
         std::fs::remove_file(&source).unwrap();
         for path in &paths {
             assert_eq!(
-                artifact_source_status(&ws, &record(path)),
+                artifact_source_byte_status(&ws, &record(path)),
                 "unavailable",
                 "{path:?}"
             );
         }
-        assert_eq!(artifact_source_status(&ws, &json!({})), "not_recorded");
+        assert_eq!(artifact_source_byte_status(&ws, &json!({})), "not_recorded");
         assert_eq!(
-            artifact_source_status(&ws, &json!({"source":"source.xlsx"})),
+            artifact_source_byte_status(&ws, &json!({"source":"source.xlsx"})),
             "not_recorded"
         );
     }
@@ -1131,7 +1178,7 @@ mod artifact_source_tests {
             std::fs::write(&absolute, ORIGINAL).unwrap();
             for source in [absolute.clone(), absolute.canonicalize().unwrap()] {
                 assert_eq!(
-                    artifact_source_status(&ws, &record(&source)),
+                    artifact_source_byte_status(&ws, &record(&source)),
                     "unavailable",
                     "{source:?}"
                 );
@@ -1152,7 +1199,7 @@ mod artifact_source_tests {
                 literal,
             ] {
                 assert_eq!(
-                    artifact_source_status(&ws, &record(&source)),
+                    artifact_source_byte_status(&ws, &record(&source)),
                     "unavailable",
                     "{source:?}"
                 );
@@ -1164,14 +1211,14 @@ mod artifact_source_tests {
             std::fs::write(&absolute, ORIGINAL).unwrap();
             for source in [PathBuf::from(path), absolute] {
                 assert_eq!(
-                    artifact_source_status(&ws, &record(&source)),
+                    artifact_source_byte_status(&ws, &record(&source)),
                     "unavailable",
                     "{source:?}"
                 );
             }
         }
         assert_eq!(
-            artifact_source_status(&ws, &record(ws.root())),
+            artifact_source_byte_status(&ws, &record(ws.root())),
             "unavailable"
         );
     }
@@ -1216,7 +1263,7 @@ mod artifact_source_tests {
                 link.0.join("source.xlsx"),
             ] {
                 assert_eq!(
-                    artifact_source_status(&ws, &record(&source)),
+                    artifact_source_byte_status(&ws, &record(&source)),
                     "unavailable",
                     "{source:?}"
                 );
@@ -1232,6 +1279,9 @@ mod artifact_source_tests {
         let other = fixture.0.join("PROJECT/source.xlsx");
         std::fs::create_dir_all(other.parent().unwrap()).unwrap();
         std::fs::write(&other, ORIGINAL).unwrap();
-        assert_eq!(artifact_source_status(&ws, &record(&other)), "unavailable");
+        assert_eq!(
+            artifact_source_byte_status(&ws, &record(&other)),
+            "unavailable"
+        );
     }
 }

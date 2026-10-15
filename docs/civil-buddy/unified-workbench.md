@@ -87,6 +87,20 @@ Pass the original exported ZIP directly. The receiver admits the workbench's nat
 
 Execution scope and source identities are recorded in the [2026-10-15 handoff acceptance record](acceptance/2026-10-15-project-handoff-import.json).
 
+### Selecting received materials in Agent
+
+After importing on the project-records page, open the same receiving project in Agent, refresh **Selected source files**, and explicitly tick the entries labelled **Received project material**. Importing does not select sources, start a task or grant write permission. PDF, DOCX, XLSX, TXT, Markdown, CSV and JSON are supported Agent source formats. IFC/DXF snapshots remain project-records materials; use existing domain workflows separately. This follow-up does not make them Agent document inputs.
+
+A received selection retains its exact path, import ID, local document ID, current registered revision and registered SHA-256. The imported hidden path admitted by this selection flow is `.civil-buddy/out/handoffs/<import_id>/<document_id>.<supported-extension>`, proven against the current project records and original import receipt. This does not open other hidden outputs, source manifests, audit files or instance state to discovery. Ordinary visible source paths keep their existing selection behavior. Inventory metadata is not an assertion that the file bytes have just been verified; the host rechecks the selected registration and actual bytes for execution.
+
+If a complete refresh shows a changed registered version or hash, Agent deselects that material and asks you to review and select it again. A partial or malformed response retains the previous explicit selection and its original binding; it never silently upgrades to a newer revision, and the server still rejects a stale binding when submitted. Chinese/English switching preserves the selected identity and original title. Task recovery keeps that same identity without automatically resubmitting or restoring a prior write authorization.
+
+Use read-only inspection first. Creating a draft still requires the existing workspace-write and document-preview checks, and saves a new copy; the received source and sender's original are not overwritten. Missing or inconsistent registration proof prevents the received source from being used as verified material. An older saved artifact without the required source-origin receipt reports that its source version **was not recorded and cannot be verified**, even if its source bytes still match; review or regenerate it from an explicitly selected current source before relying on its provenance.
+
+The [received-source acceptance record](acceptance/2026-10-15-agent-handoff-sources.json) binds this follow-up to the tested native binary, fixed workers and actually served assets. Two new named instances on one Windows computer exercised the full import, explicit selection, read, retrieval, delegation, preview, Word/Excel copies, source-version checks and restart flow using synthetic documents and a local scripted model. Cookie/DOM checks used JSDOM with standard browser API bridges, rather than a native browser. This does not establish real-project, live-model, Office, microphone or second-computer acceptance. The earlier handoff-import record remains separate.
+
+Worker events retain the full original protocol and isolation diagnostics. For known fixed-worker envelopes, the main and child agents receive a compact model view that omits repeated outer protocol version, call ID and sandbox diagnostics; business results, errors, source identities, quotes and validation fields remain unchanged. Their system instructions still explain that successful tools do not establish kernel read or network isolation. This reduces repeated context without raising the context or usage limits. Larger conversations can still exceed those limits; a failed turn must not be presented as completed merely because some draft copies were saved.
+
 ## Provider configuration details
 
 ```dotenv

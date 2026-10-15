@@ -71,6 +71,7 @@ impl Fixture {
     }
     fn scope(&self, request: &'static str, write: bool) -> ToolScope<'_> {
         ToolScope {
+            file_bindings: &[],
             state: &self.state,
             workspace: &self.workspace,
             selected: &self.selected,

@@ -10,7 +10,7 @@ import re
 import tempfile
 from uuid import uuid4
 
-from .common import DocumentError, bounded, digest, fail, validation
+from .common import DocumentError, bounded, digest, fail, validation, verify_source_snapshot
 from .ooxml import Word, Spreadsheet
 
 MAX_BYTES = 25_000_000
@@ -168,9 +168,14 @@ def _execute(request):
         detail = document.inspect()
         if operation == "validate":
             detail["validation"] = {**detail.get("validation", validation()), "source_hash": "pass", "content_changes": "not_checked"}
+        if expected is not None:
+            verify_source_snapshot(workspace, source, sha, MAX_BYTES)
         return {**base, **detail}
     if operation == "read":
-        return {**base, **document.read(args)}
+        detail = document.read(args)
+        if expected is not None:
+            verify_source_snapshot(workspace, source, sha, MAX_BYTES)
+        return {**base, **detail}
     patches = _patches(args)
     output, changes, report = document.patch(patches)
     if len(output) > 50_000_000:

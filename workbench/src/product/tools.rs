@@ -162,6 +162,7 @@ pub struct ToolScope<'a> {
     pub state: &'a ProductState,
     pub workspace: &'a WorkspaceContext,
     pub selected: &'a [String],
+    pub file_bindings: &'a [super::controlled_sources::FileBinding],
     pub user_request: &'a str,
     pub write: bool,
     pub cancel: &'a CancellationToken,
@@ -340,11 +341,7 @@ impl SourceEvidence {
             let request = json!({"version":1,"call_id":uuid::Uuid::new_v4().to_string(),"operation":"verify",
                 "workspace":scope.workspace.root(),"sources":[source],"references":refs});
             let token = scope.cancel.child();
-            let mut operation = Box::pin(scope.state.worker.call(
-                "packing_assistant.retrieval.worker",
-                &request,
-                &token,
-            ));
+            let mut operation = Box::pin(scope.retrieval(request, &token));
             let outcome = tokio::select! {
                 result = &mut operation => result,
                 _ = tokio::time::sleep_until(deadline) => {
@@ -441,6 +438,58 @@ impl SourceEvidence {
     }
 }
 impl ToolScope<'_> {
+    fn verify_bound(&self, sources: &[String]) -> Result<(), String> {
+        if sources.iter().any(|s| !self.selected.contains(s)) {
+            return Err("Source was not selected for this task".into());
+        }
+        let bindings: Vec<_> = self
+            .file_bindings
+            .iter()
+            .filter(|b| sources.contains(&b.path))
+            .cloned()
+            .collect();
+        super::controlled_sources::validate_selection(
+            self.state,
+            self.workspace,
+            sources,
+            &bindings,
+        )
+    }
+    async fn retrieval(
+        &self,
+        mut request: Value,
+        cancel: &CancellationToken,
+    ) -> Result<Value, String> {
+        let sources: Vec<String> = serde_json::from_value(request["sources"].clone())
+            .map_err(|_| "Invalid selected retrieval sources")?;
+        self.verify_bound(&sources)?;
+        request["expected_versions"] =
+            super::controlled_sources::expected_versions(self.file_bindings, &sources);
+        let report = self
+            .state
+            .worker
+            .call("packing_assistant.retrieval.worker", &request, cancel)
+            .await?;
+        self.verify_bound(&sources)?;
+        if report["ok"] == true {
+            for b in self
+                .file_bindings
+                .iter()
+                .filter(|b| sources.contains(&b.path))
+            {
+                if !report["result"]["sources"].as_array().is_some_and(|rows| {
+                    rows.iter().any(|r| {
+                        r["source"] == b.path && r["source_sha256"] == b.origin.registered_sha256
+                    })
+                }) {
+                    return Err(
+                        "Imported source worker hash differs from its selected revision".into(),
+                    );
+                }
+            }
+        }
+        Ok(report)
+    }
     async fn patch_evidence(&self, args: &Value) -> Result<Value, String> {
         if args.get("evidence").is_some() || args.get("references").is_some() {
             return Err("引用不能放在顶层evidence/references；请在每个patches[i].evidence数组内附完整search_sources hit（source/source_sha256/locator/quote）".into());
@@ -455,14 +504,20 @@ impl ToolScope<'_> {
             if let Some(evidence) = patch.get("evidence") {
                 let evidence = evidence.as_array().filter(|items| items.len() <= 50)
                     .ok_or_else(|| format!("patches[{index}].evidence必须为最多50项的引用数组，不是对象或字符串；示例 evidence:[{{source,source_sha256,locator,quote}}]"))?;
-                if references.len()+evidence.len() > 100 {
+                if references.len() + evidence.len() > 100 {
                     return Err("单次预览/保存的全部patch.evidence累计最多100项引用；请拆成更小的预览，每个patch最多50项".into());
                 }
                 for (reference_index, reference) in evidence.iter().enumerate() {
-                    if !reference["source"].as_str().is_some_and(|s| !s.trim().is_empty())
-                        || !reference["source_sha256"].as_str().is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+                    if !reference["source"]
+                        .as_str()
+                        .is_some_and(|s| !s.trim().is_empty())
+                        || !reference["source_sha256"].as_str().is_some_and(|s| {
+                            s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+                        })
                         || !reference["locator"].is_object()
-                        || !reference["quote"].as_str().is_some_and(|s| !s.trim().is_empty())
+                        || !reference["quote"]
+                            .as_str()
+                            .is_some_and(|s| !s.trim().is_empty())
                     {
                         return Err(format!("patches[{index}].evidence[{reference_index}]缺少有效source/source_sha256/locator/quote；请逐字复制search_sources的完整hit，不能只传验证状态或索引"));
                     }
@@ -473,7 +528,7 @@ impl ToolScope<'_> {
         let verified = if references.is_empty() {
             None
         } else {
-            let report=self.state.worker.call("packing_assistant.retrieval.worker",&json!({"version":1,"call_id":uuid::Uuid::new_v4().to_string(),
+            let report=self.retrieval(json!({"version":1,"call_id":uuid::Uuid::new_v4().to_string(),
                 "operation":"verify","workspace":self.workspace.root(),"sources":self.selected,"references":references}),self.cancel).await?;
             if report["ok"] != true || report["result"]["valid"] != true {
                 return Err("补丁引用未通过当前原文件的hash、定位、逐字引文核验".into());
@@ -505,6 +560,7 @@ impl ToolScope<'_> {
         for batch in prose.chunks(200) {
             let verdict = self.state.worker.call("packing_assistant.review_worker",
                 &json!({"version":1,"call_id":uuid::Uuid::new_v4().to_string(),"operation":"verdicts","workspace":self.workspace.root(),"texts":batch}), self.cancel).await?;
+            self.verify_bound(self.selected)?;
             let results = verdict["result"]["results"].as_array();
             if verdict["ok"] != true || !results.is_some_and(|items| items.len() == batch.len()) {
                 return Err("工程结论检查未能执行，未发布修改".into());
@@ -531,6 +587,13 @@ impl ToolScope<'_> {
         self.workspace
             .resolve_read(source)
             .map_err(|e| e.to_string())?;
+        super::controlled_sources::verify_one(
+            self.state,
+            self.workspace,
+            self.selected,
+            self.file_bindings,
+            source,
+        )?;
         Ok(source)
     }
     pub async fn execute(&self, name: &str, args: Value) -> Result<Value, String> {
@@ -547,8 +610,9 @@ impl ToolScope<'_> {
         self.cancel.check().map_err(|e| e.to_string())?;
         match name {
             "list_files" => {
-                let report = super::file_listing::list_files(self.workspace, super::file_listing::FileListPurpose::Agent)?;
-                let mut value = serde_json::to_value(report).map_err(|_| "File listing could not be encoded")?;
+                let report = super::controlled_sources::inventory(self.state, self.workspace)?;
+                let mut value = serde_json::to_value(report)
+                    .map_err(|_| "File listing could not be encoded")?;
                 value["selected"] = json!(self.selected);
                 Ok(value)
             }
@@ -597,14 +661,26 @@ impl ToolScope<'_> {
             }
             "read_file" => {
                 let source = self.source(&args)?;
-                let extension = Path::new(source).extension().and_then(|x| x.to_str())
-                    .unwrap_or("").to_lowercase();
+                let expected = self
+                    .file_bindings
+                    .iter()
+                    .find(|b| b.path == source)
+                    .map(|b| b.origin.registered_sha256.as_str());
+                let extension = Path::new(source)
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
                 if matches!(extension.as_str(), "pdf" | "xlsx" | "docx") {
                     let arguments = args.get("arguments").cloned().unwrap_or(json!({}));
                     if !arguments.is_object() {
-                        return Err("read_file.arguments必须是对象；XLSX使用arguments:{sheet,range}".into());
+                        return Err(
+                            "read_file.arguments必须是对象；XLSX使用arguments:{sheet,range}".into(),
+                        );
                     }
-                    if extension == "xlsx" && (args.get("sheet").is_some() || args.get("range").is_some()) {
+                    if extension == "xlsx"
+                        && (args.get("sheet").is_some() || args.get("range").is_some())
+                    {
                         return Err("XLSX的sheet和range必须放在read_file.arguments内；先operation=inspect获取准确sheet名称和used_range".into());
                     }
                     let operation = args["operation"].as_str().unwrap_or_else(|| {
@@ -617,22 +693,35 @@ impl ToolScope<'_> {
                     if !matches!(operation, "read" | "inspect") {
                         return Err("only read and inspect allowed".into());
                     }
-                    if extension == "xlsx" && operation == "read"
-                        && !arguments["sheet"].as_str().is_some_and(|s| !s.trim().is_empty())
+                    if extension == "xlsx"
+                        && operation == "read"
+                        && !arguments["sheet"]
+                            .as_str()
+                            .is_some_and(|s| !s.trim().is_empty())
                     {
                         return Err("XLSX read需要arguments.sheet；先operation=inspect获取准确sheet名称与used_range，再通过arguments.sheet和arguments.range读取所需小范围，不要猜测Sheet1；示例arguments:{\"sheet\":\"实际工作表名\",\"range\":\"A1:D3\"}".into());
                     }
-                    self.state
+                    let response = self
+                        .state
                         .worker
                         .document(
                             self.workspace,
                             operation,
                             source,
-                            None,
+                            expected,
                             arguments,
                             self.cancel,
                         )
-                        .await
+                        .await?;
+                    self.source(&args)?;
+                    if response["ok"] == true
+                        && expected.is_some_and(|s| response["result"]["source_sha256"] != s)
+                    {
+                        return Err(
+                            "Imported source worker hash differs from its selected revision".into(),
+                        );
+                    }
+                    Ok(response)
                 } else {
                     let file = std::fs::File::open(
                         self.workspace
@@ -653,6 +742,10 @@ impl ToolScope<'_> {
                     }
                     let text =
                         String::from_utf8(bytes.clone()).map_err(|_| "text must be UTF-8")?;
+                    if expected.is_some_and(|s| sha256(&bytes) != s) {
+                        return Err("Imported source changed while reading".into());
+                    }
+                    self.source(&args)?;
                     Ok(
                         json!({"ok":true,"result":{"source":source,"source_sha256":sha256(&bytes),"lines":text.lines().enumerate().map(|(i,s)|json!({"line":i+1,"text":s})).collect::<Vec<_>>(),"trust":"source_text"}}),
                     )
@@ -666,7 +759,19 @@ impl ToolScope<'_> {
                 let expected = args["expected_sha256"]
                     .as_str()
                     .ok_or("expected_sha256 required")?;
+                let origin = self
+                    .file_bindings
+                    .iter()
+                    .find(|b| b.path == source)
+                    .map(|b| b.origin.clone());
+                if origin
+                    .as_ref()
+                    .is_some_and(|o| o.registered_sha256 != expected)
+                {
+                    return Err("Preview hash differs from its selected imported revision".into());
+                }
                 let evidence = self.patch_evidence(&args).await?;
+                self.verify_bound(self.selected)?;
                 let fresh = uuid::Uuid::new_v4().to_string();
                 let call_id = call_id
                     .filter(|_| name == "apply_document")
@@ -688,8 +793,23 @@ impl ToolScope<'_> {
                         self.cancel,
                     )
                     .await?;
+                self.verify_bound(self.selected)?;
+                self.source(&args)?;
+                if response["ok"] == true
+                    && origin
+                        .as_ref()
+                        .is_some_and(|o| response["result"]["source_sha256"] != o.registered_sha256)
+                {
+                    return Err(
+                        "Imported source worker hash differs from its selected revision".into(),
+                    );
+                }
                 if response["ok"] == true {
                     response["result"]["evidence_validation"] = evidence;
+                    if let Some(origin) = origin {
+                        response["result"]["source_origin"] =
+                            serde_json::to_value(origin).map_err(|e| e.to_string())?;
+                    }
                 }
                 Ok(response)
             }
@@ -706,10 +826,7 @@ impl ToolScope<'_> {
                     request["operation"] = json!("verify");
                     request["references"] = args["references"].clone();
                 }
-                self.state
-                    .worker
-                    .call("packing_assistant.retrieval.worker", &request, self.cancel)
-                    .await
+                self.retrieval(request, self.cancel).await
             }
             _ => Err("tool is not registered for this role".into()),
         }

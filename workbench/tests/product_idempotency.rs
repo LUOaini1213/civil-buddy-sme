@@ -221,6 +221,7 @@ impl Job {
     }
     fn scope(&self) -> ToolScope<'_> {
         ToolScope {
+            file_bindings: &[],
             state: &self.state,
             workspace: &self.workspace,
             selected: &self.selected,

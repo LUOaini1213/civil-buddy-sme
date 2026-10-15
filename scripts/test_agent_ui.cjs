@@ -25,6 +25,11 @@ const fileReport = (files, workspace = "workspace-1", extra = {}) => ({ schema_v
   files: files.map(file => ({ name: file.path.split("/").at(-1), size: 0, ...file })), returned_count: files.length,
   complete: true, limits: { max_files: 500, max_directory_depth: 5, max_scanned_entries: 10000 },
   file_limit_reached: false, depth_limit_reached: false, scan_limit_reached: false, incomplete_reasons: [], ...extra });
+const receivedSource = (revision = 1, hash = "a".repeat(64)) => ({
+  path: `.civil-buddy/out/handoffs/${"b".repeat(32)}/${"d".repeat(32)}.md`, name: "工程原文<img src=x onerror=bad()>.md", size: 23,
+  origin: { kind: "project_handoff", import_id: "b".repeat(32), document_id: "d".repeat(32), revision, registered_sha256: hash }
+});
+const partialInventory = (files) => fileReport(files, "workspace-1", { complete: false, depth_limit_reached: true, incomplete_reasons: ["depth_limit"] });
 const storage = () => { const values = new Map(); return { getItem: (key) => values.get(key) || null, setItem: (key, value) => values.set(key, String(value)), values }; };
 function installLanguage(h, locale = "zh-CN") {
   h.win.localStorage.setItem("cb_locale_v1", locale);
@@ -2012,4 +2017,119 @@ test("File discovery: delayed partial refresh cannot retain sources in a differe
   release(); await loading;
   assert.deepEqual([...h.app.state.selected], ["new.json"]); assert.equal(h.$("agentPackingSource").value, "new.json");
   assert.doesNotMatch(h.$("agentFiles").textContent, /old.json/); assert.equal(server.stats.posts, 0);
+});
+
+test("Received material: explicit selection pins exact registered origin, preserves literal names and translates its label", async (t) => {
+  const file = receivedSource(); const server = submissionServer({ loseFirst: false });
+  const h = harness((url, init) => url.startsWith("/api/agent/files?") ? response(fileReport([file, { path: "ordinary.md" }])) : server.route(url, init));
+  t.after(h.close); installLanguage(h); await h.ready();
+  assert.equal(h.app.state.selected.size, 0); assert.equal(h.app.state.selectedBindings.size, 0); assert.equal(server.stats.posts, 0);
+  assert.match(h.$("agentFiles").textContent, /接收的项目资料 · 版本 1/); assert.match(h.$("agentFiles").textContent, /工程原文<img/);
+  assert.equal(h.$("agentFiles").querySelector("img"), null);
+  h.selectFirst(); const binding = { path: file.path, origin: file.origin };
+  assert.deepEqual(JSON.parse(h.saved.getItem("cb_agent_workspaces_v1")).workspaces["workspace-1"].file_bindings, [binding]);
+  h.$("agentMessage").value = "Keep this draft"; selectValue(h, "agentSandbox", "workspace-write"); h.$("agentRiskConfirmation").value = riskPhrase;
+  h.win.CBI18n.setLocale("en");
+  assert.match(h.$("agentFiles").textContent, /Received project material · revision 1/);
+  assert.equal(h.$("agentMessage").value, "Keep this draft"); assert.equal(h.$("agentRiskConfirmation").value, riskPhrase);
+  assert.equal(h.$("agentSandbox").value, "workspace-write"); assert.deepEqual([...h.app.state.selectedBindings], [[file.path, file.origin]]);
+  await h.app.send(); const sent = h.calls.find(call => call.url === "/api/agent/turns" && call.init).body;
+  assert.deepEqual(sent.files, [file.path]); assert.deepEqual(sent.file_bindings, [binding]); assert.equal(sent.sandbox, "workspace-write");
+});
+
+test("Received material: malformed or partial refresh retains the original binding without silently adopting new revision", async (t) => {
+  const first = receivedSource(), second = receivedSource(2, "e".repeat(64)); let listing = fileReport([first]);
+  const server = submissionServer({ loseFirst: false });
+  const h = harness((url, init) => url.startsWith("/api/agent/files?") ? response(listing) : server.route(url, init));
+  t.after(h.close); installLanguage(h); await h.ready(); h.selectFirst();
+  for (const next of [partialInventory([]), partialInventory([second]), { ...fileReport([second]), returned_count: 99 }]) {
+    listing = next; await h.app.loadFiles();
+    assert.deepEqual([...h.app.state.selected], [first.path]); assert.deepEqual(h.app.state.selectedBindings.get(first.path), first.origin);
+    assert.deepEqual(JSON.parse(h.saved.getItem("cb_agent_workspaces_v1")).workspaces["workspace-1"].file_bindings, [{ path: first.path, origin: first.origin }]);
+  }
+  h.$("agentMessage").value = "Use the originally selected version"; await h.app.send();
+  assert.deepEqual(h.calls.find(call => call.url === "/api/agent/turns" && call.init).body.file_bindings, [{ path: first.path, origin: first.origin }]);
+  assert.match(h.$("agentFiles").textContent, /已保留原先选择的版本 1/);
+  h.win.CBI18n.setLocale("en"); assert.match(h.$("agentFiles").textContent, /previously selected revision 1 is retained/);
+});
+
+test("Received material: complete revision or registration change deselects until explicit reselection and uses a new retry ID", async (t) => {
+  const first = receivedSource(); let listing = fileReport([first]);
+  const server = submissionServer();
+  const h = harness((url, init) => url.startsWith("/api/agent/files?") ? response(listing) : server.route(url, init));
+  t.after(h.close); installLanguage(h); await h.ready(); h.selectFirst(); h.$("agentMessage").value = "Read received material";
+  await h.app.send(); const old = h.calls.filter(call => call.url === "/api/agent/turns" && call.init)[0].body;
+  assert.equal(server.stats.tasks, 1);
+  const second = receivedSource(2, "e".repeat(64)); listing = fileReport([second]); await h.app.loadFiles();
+  assert.equal(h.app.state.selected.size, 0); assert.equal(h.app.state.selectedBindings.size, 0);
+  assert.match(h.$("agentFilesStatus").textContent, /登记版本已变化/); assert.equal(server.stats.posts, 1);
+  h.win.CBI18n.setLocale("en"); assert.match(h.$("agentFilesStatus").textContent, /select them again/);
+  h.win.CBI18n.setLocale("zh-CN"); h.selectFirst(); await h.app.send();
+  const sent = h.calls.filter(call => call.url === "/api/agent/turns" && call.init).at(-1).body;
+  assert.notEqual(sent.idempotency_key, old.idempotency_key); assert.deepEqual(sent.file_bindings, [{ path: second.path, origin: second.origin }]); assert.equal(server.stats.tasks, 2);
+  const { file_bindings: oldBinding, idempotency_key: oldKey, ...oldOther } = old;
+  const { file_bindings: newBinding, idempotency_key: newKey, ...newOther } = sent;
+  assert.deepEqual(newOther, oldOther, "only the explicitly reselected binding changes this request fingerprint");
+  const third = { ...second, origin: { ...second.origin, registered_sha256: "f".repeat(64) } }; listing = fileReport([third]); await h.app.loadFiles();
+  assert.equal(h.app.state.selected.size, 0); assert.equal(h.app.state.selectedBindings.size, 0);
+});
+
+test("Received material: retry and reload preserve the pinned binding but never restore write permission", async (t) => {
+  const file = receivedSource(), saved = storage(), server = submissionServer();
+  const route = (url, init) => url.startsWith("/api/agent/files?") ? response(fileReport([file])) : server.route(url, init);
+  const first = harness(route, saved); t.after(first.close); await first.ready(); first.selectFirst();
+  selectValue(first, "agentSandbox", "workspace-write"); first.$("agentMessage").value = "Read received material"; await first.app.send();
+  const a = first.calls.find(call => call.url === "/api/agent/turns" && call.init).body;
+  await first.app.send(); const b = first.calls.filter(call => call.url === "/api/agent/turns" && call.init).at(-1).body;
+  assert.equal(a.idempotency_key, b.idempotency_key); assert.deepEqual(a.file_bindings, b.file_bindings); assert.equal(server.stats.tasks, 1);
+  const reloaded = harness(route, saved); t.after(reloaded.close); await reloaded.ready();
+  assert.deepEqual([...reloaded.app.state.selectedBindings], [[file.path, file.origin]]); assert.deepEqual([...reloaded.app.state.selected], [file.path]);
+  assert.equal(reloaded.$("agentSandbox").value, "read-only"); assert.equal(reloaded.$("agentRiskConfirmation").value, "");
+});
+
+test("Received material: forged origins and generic hidden paths cannot enter the inventory or change existing selection", async (t) => {
+  const valid = receivedSource(), variants = [];
+  for (const patch of [{ kind: "other" }, { import_id: "e".repeat(32) }, { document_id: "../private" }, { document_id: "f".repeat(32) }, { revision: 0 }, { revision: 257 },
+    { revision: 1.5 }, { registered_sha256: "A".repeat(64) }, { document_id: ["d".repeat(32)] }, { registered_sha256: ["a".repeat(64)] },
+    { extra: true }]) variants.push({ ...valid, origin: { ...valid.origin, ...patch } });
+  variants.push({ ...valid, origin: null }, { ...valid, origin: undefined }, { ...valid, path: "ordinary.md" },
+    { ...valid, path: valid.path.replace(".md", ".MD") }, { ...valid, path: valid.path.replace("handoffs/", "other/") },
+    { ...valid, path: `.civil-buddy/out/handoffs/${"b".repeat(32)}/../secret.md` }, { ...valid, path: ".civil-buddy/config.json" });
+  for (const [index, invalid] of variants.entries()) await t.test(`forged-${index}`, async (t) => {
+    let listing = fileReport([valid]); const server = submissionServer({ loseFirst: false });
+    const h = harness((url, init) => url.startsWith("/api/agent/files?") ? response(listing) : server.route(url, init));
+    t.after(h.close); await h.ready(); h.selectFirst(); const saved = h.saved.getItem("cb_agent_workspaces_v1");
+    listing = fileReport([invalid]); await h.app.loadFiles();
+    assert.equal(h.app.state.fileListingError, true); assert.deepEqual([...h.app.state.selectedBindings], [[valid.path, valid.origin]]);
+    assert.equal(h.saved.getItem("cb_agent_workspaces_v1"), saved); assert.equal(server.stats.posts, 0);
+  });
+  const checker = require("../demo/static/modules/file-listing.js");
+  const project = { ...fileReport([valid]), purpose: "project_control" };
+  assert.throws(() => checker.validate(project, "workspace-1", "project_control"), /响应无法核对/);
+  assert.equal(checker.safePath(valid.path), false, "the generic hidden-path ban remains unchanged");
+});
+
+test("Received material: unbound legacy hidden choices are not restored or upgraded from new inventory metadata", async (t) => {
+  const file = receivedSource(), saved = storage();
+  saved.setItem("cb_agent_workspaces_v1", JSON.stringify({ lastRoot: "C:/engineering", workspaces: { "workspace-1": {
+    sessions: [{ id: "old-session", turn: "" }], files: [file.path, "ordinary.md", ".civil-buddy/config.json"]
+  } } }));
+  const h = harness(url => url.startsWith("/api/agent/files?") ? response(fileReport([file, { path: "ordinary.md" }])) : undefined, saved); t.after(h.close); await h.ready();
+  assert.deepEqual([...h.app.state.selected], ["ordinary.md"]); assert.equal(h.app.state.selectedBindings.size, 0);
+  assert.equal(h.doc.querySelectorAll("#agentFiles input:checked").length, 1);
+});
+
+test("Received material: a delayed inventory cannot attach old bindings after workspace changes", async (t) => {
+  const file = receivedSource(); let delayed = false, release;
+  const server = submissionServer({ loseFirst: false });
+  const h = harness((url, init) => {
+    if (url.startsWith("/api/agent/files?")) {
+      const workspace = new URL(url, "http://localhost").searchParams.get("workspace");
+      if (workspace === "workspace-1" && delayed) return new Promise(resolve => { release = () => resolve(response(partialInventory([receivedSource(2)]))); });
+      return response(fileReport(workspace === "workspace-1" ? [file] : [{ path: "new.md" }], workspace));
+    }
+    return server.route(url, init);
+  }); t.after(h.close); await h.ready(); h.selectFirst(); delayed = true;
+  const old = h.app.loadFiles(); await waitFor(() => typeof release === "function"); await h.app.openWorkspace("C:/second"); h.selectFirst(); release(); await old;
+  assert.deepEqual([...h.app.state.selected], ["new.md"]); assert.equal(h.app.state.selectedBindings.size, 0); assert.doesNotMatch(h.$("agentFiles").textContent, /Received|接收/);
 });

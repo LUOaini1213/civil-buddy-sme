@@ -5,12 +5,14 @@ from copy import deepcopy
 from contextlib import closing
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -85,6 +87,73 @@ class SourceRetrievalTests(unittest.TestCase):
         self.good(self.request("index"))
         again = self.good(self.request("index"))
         self.assertEqual((again["index"]["updated"], again["index"]["unchanged"]), (0, 1))
+
+    def test_received_source_expected_version_covers_search_and_quote_verification(self):
+        source = ".civil-buddy/out/handoffs/" + "a" * 32 + "/" + "b" * 32 + ".md"
+        path = self.root / source
+        path.parent.mkdir(parents=True)
+        original = "设计变更要求：钢梁数量为 12 根。".encode("utf-8")
+        path.write_bytes(original)
+        expected = {source: sha256(original).hexdigest()}
+        result = self.good(self.request(sources=[source], expected_versions=expected))
+        self.assertEqual(result["sources"], [{"source": source, "source_sha256": expected[source]}])
+        self.assertTrue(result["hits"])
+        hit = result["hits"][0]
+        self.assertTrue(self.good(self.request("verify", [source], expected_versions=expected, references=[hit]))["valid"])
+        changed = original.replace(b"12", b"99")
+        self.assertEqual(len(changed), len(original))
+        path.write_bytes(changed)
+        self.error(self.request(sources=[source], expected_versions=expected), "conflict")
+        self.error(self.request("verify", [source], expected_versions=expected, references=[hit]), "conflict")
+
+    def test_source_changed_during_search_or_verification_never_returns_old_evidence(self):
+        import packing_assistant.retrieval.service as service
+        source = "requirements.txt"
+        path = self.root / source
+        original = path.read_bytes()
+        hit = self.good(self.request())["hits"][0]
+        expected = {source: sha256(original).hexdigest()}
+        changed = original.replace(b"12", b"99")
+        self.assertEqual(len(changed), len(original))
+        for operation, name in (("search", "_search"), ("verify", "_verify")):
+            path.write_bytes(original)
+            method = getattr(service, name)
+
+            def replace_after_retrieval(*arguments):
+                result = method(*arguments)
+                path.write_bytes(changed)
+                return result
+
+            request = self.request(operation, expected_versions=expected, references=[hit])
+            with self.subTest(operation=operation), patch.object(service, name, new=replace_after_retrieval):
+                response = handle(request)
+            self.assertFalse(response["ok"], response)
+            self.assertEqual(response["error"]["code"], "conflict")
+            self.assertIsNone(response["result"])
+
+    @unittest.skipIf(os.name == "nt", "Actual Unix symlink substitution; Windows reparse metadata is checked by the same policy")
+    def test_source_replaced_by_equal_bytes_symlink_during_retrieval_is_denied(self):
+        import packing_assistant.retrieval.service as service
+        source = "requirements.txt"
+        path = self.root / source
+        original = path.read_bytes()
+        expected = {source: sha256(original).hexdigest()}
+        method = service._search
+        with tempfile.TemporaryDirectory(prefix="civil-retrieval-outside-") as outside:
+            target = Path(outside) / "same-bytes.md"
+            target.write_bytes(original)
+
+            def replace_by_symlink(*arguments):
+                result = method(*arguments)
+                path.unlink()
+                path.symlink_to(target)
+                return result
+
+            with patch.object(service, "_search", new=replace_by_symlink):
+                response = handle(self.request(expected_versions=expected))
+            self.assertFalse(response["ok"], response)
+            self.assertEqual(response["error"]["code"], "path_denied")
+            self.assertIsNone(response["result"])
 
     def test_quote_locator_and_chunk_id_cannot_be_fabricated(self):
         hit = self.good(self.request())["hits"][0]
