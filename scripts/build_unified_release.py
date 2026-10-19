@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -46,6 +47,7 @@ EXTRA = (
     "workbench/scripts/run_tender_extract.py", "workbench/scripts/run_packing_sidecar.py",
     "scripts/docker_smoke.sh",
     "scripts/build_workbench_release.py", "scripts/build_unified_release.py",
+    "scripts/verify_unified_delivery.py",
     "docs/civil-buddy/architecture/implementation.md",
     "docs/civil-buddy/acceptance/2026-09-21.json",
     "docs/civil-buddy/architecture/civil-buddy-rust-architecture.md",
@@ -80,7 +82,7 @@ def safe_name(name: str) -> None:
     path = PurePosixPath(name)
     if (not name or path.is_absolute() or name != path.as_posix()
             or any(p in {"", ".", ".."} for p in path.parts)
-            or "\\" in name or ":" in name or "\x00" in name):
+            or "\\" in name or ":" in name or any(ord(char) < 32 for char in name)):
         raise ValueError(f"Unsafe release member: {name}")
     folded = name.casefold()
     if (folded.startswith(FORBIDDEN_ROOTS)
@@ -92,39 +94,77 @@ def safe_name(name: str) -> None:
         raise ValueError(f"Private or runtime file cannot be released: {name}")
 
 
-def committed_inputs(root: Path) -> tuple[dict[str, Path], str]:
-    """Reuse the existing allowlist; discovered files must also exist in HEAD."""
-    root = root.resolve()
-    top = Path(os.fsdecode(git(root, "rev-parse", "--show-toplevel")).strip()).resolve()
-    if top != root:
-        raise ValueError("Source root must be the Git repository root")
-    commit = git(root, "rev-parse", "HEAD").decode("ascii").strip()
-    tracked = set(git(root, "ls-tree", "-r", "--name-only", "-z", "HEAD").decode("utf-8").rstrip("\0").split("\0"))
-    candidates = legacy.release_inputs(root)
+def source_paths(root: Path, commit: str) -> dict[str, str]:
+    """Select release paths from the commit, independent of checkout/index contents."""
+    tree = {}
+    for row in git(root, "ls-tree", "-r", "-z", commit).split(b"\0"):
+        if row:
+            meta, name = row.split(b"\t", 1)
+            tree[name.decode("utf-8")] = meta.split()[0]
+    tracked = set(tree)
     required = {*legacy.EXPLICIT, *("demo/static/" + item for item in legacy.STATIC),
                 "scripts/start-workbench.bat", *EXTRA,
                 "workbench/src/main.rs", "workbench/src/lib.rs"}
     missing = required - tracked
     if missing:
         raise ValueError("Required source inputs must be committed before packaging: " + ", ".join(sorted(missing)))
-    inputs = {name: path for name, path in candidates.items()
-              if path.relative_to(root).as_posix() in tracked}
-    additions = set(EXTRA) | {name for name in tracked if name.startswith("workbench/src/") and name.endswith(".rs")}
-    for name in additions:
-        inputs[name] = legacy.checked_path(root, name)
+    names = required | {name for name in tracked if (
+        legacy.asset_allowed(name)
+        or (name.startswith("packing_assistant/") and name.endswith(".py")
+            and not {"tests", "__pycache__"} & set(PurePosixPath(name).parts))
+        or (name.startswith("demo/") and name.endswith(".py") and name.count("/") == 1)
+        or (name.startswith("workbench/src/") and name.endswith(".rs")))}
+    inputs = {name: name for name in names}
+    inputs["start-workbench.bat"] = inputs.pop("scripts/start-workbench.bat")
     folded = set()
     for name, path in inputs.items():
         safe_name(name)
         if name.casefold() in folded:
             raise ValueError("Release paths collide on Windows: " + name)
         folded.add(name.casefold())
-        if not path.is_file():
-            raise FileNotFoundError("Committed input is missing from checkout: " + name)
+        if tree[path] not in {b"100644", b"100755"}:
+            raise ValueError("Release source must be a regular Git blob: " + path)
     skills = [name for name in inputs if name.startswith(".agents/skills/") and name != ".agents/skills/civil-buddy/SKILL.md"]
     if len(skills) != 66:
         raise ValueError(f"Expected 66 committed expert skills, found {len(skills)}")
+    return dict(sorted(inputs.items()))
+
+
+def committed_inputs(root: Path) -> tuple[dict[str, Path], str]:
+    root = root.resolve()
+    top = Path(os.fsdecode(git(root, "rev-parse", "--show-toplevel")).strip()).resolve()
+    if top != root:
+        raise ValueError("Source root must be the Git repository root")
+    commit = git(root, "rev-parse", "HEAD").decode("ascii").strip()
+    inputs = {name: legacy.checked_path(root, source) for name, source in source_paths(root, commit).items()}
+    for name, path in inputs.items():
+        if not path.is_file():
+            raise FileNotFoundError("Committed input is missing from checkout: " + name)
     assert_clean(root, inputs, commit)
-    return dict(sorted(inputs.items())), commit
+    return inputs, commit
+
+
+def source_blobs(root: Path, commit: str, paths: dict[str, str]) -> dict[str, bytes]:
+    # One batch avoids thousands of processes on Windows. Read Git bytes, not
+    # checkout bytes transformed by core.autocrlf or a local clean/smudge filter.
+    request = "".join(f"{commit}:{path}\n" for path in paths.values()).encode("utf-8")
+    process = subprocess.run(["git", "cat-file", "--batch"], cwd=root, input=request,
+                             check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    data = io.BytesIO(process.stdout)
+    result = {}
+    total = 0
+    for name in paths:
+        header = data.readline().split()
+        if len(header) != 3 or header[1] != b"blob":
+            raise ValueError("Missing committed source blob: " + name)
+        size = int(header[2])
+        total += size
+        if size > MAX_FILE or total > MAX_ARCHIVE_CONTENT:
+            raise ValueError("Committed source exceeds release size limits")
+        result[name] = data.read(size)
+        if len(result[name]) != size or data.read(1) != b"\n":
+            raise ValueError("Incomplete committed source blob: " + name)
+    return result
 
 
 def assert_clean(root: Path, inputs: dict[str, Path], commit: str) -> None:
@@ -230,6 +270,15 @@ Java/JVM、Office 或 OCR 引擎均不随包提供。
 python scripts/build_unified_release.py --verify <压缩包路径>
 ```
 
+交付前还须在固定提交的源码仓库运行下面的离线门禁。它逐文件对照 Git 原始内容，
+并从新解压目录实际读取带封面的多工作表箱单，拒绝歧义，不调用模型或启动 exe：
+
+```powershell
+python scripts/verify_unified_delivery.py --archive <压缩包路径> --source-root <源码仓库> --expected-commit {commit}
+```
+
+该检查使用所选 Python 的已安装依赖；不代替新电脑安装、GUI 或真实项目验收。
+
 架构及已实现边界见 [统一工作台](docs/civil-buddy/unified-workbench.md)、
 [实现与验收](docs/civil-buddy/architecture/implementation.md)、
 [Rust 架构](docs/civil-buddy/architecture/civil-buddy-rust-architecture.md)、
@@ -288,11 +337,33 @@ def verify_archive(archive: Path, expected_manifest: dict | None = None) -> dict
     return manifest
 
 
+def verify_source(archive: Path, root: Path, expected_commit: str) -> dict:
+    """Verify against a caller-selected commit, not the manifest's own claim.
+
+    This gate attests source bytes only. The binary still requires its separate
+    build/test record; a self-consistent manifest is not a source attestation.
+    """
+    commit = git(root, "rev-parse", "--verify", expected_commit + "^{commit}").decode("ascii").strip()
+    manifest = verify_archive(archive)
+    if manifest["source_commit"] != commit:
+        raise ValueError("Release source commit differs from selected commit")
+    expected = source_blobs(root, commit, source_paths(root, commit))
+    expected["README.md"] = release_readme(manifest["version"], manifest["binary"]["architecture"], commit).encode("utf-8")
+    if {entry["path"] for entry in manifest["files"]} != set(expected) | {BINARY_NAME}:
+        raise ValueError("Release source members differ from selected commit allowlist")
+    with zipfile.ZipFile(archive) as package:
+        for name, content in expected.items():
+            if package.read(name) != content:
+                raise ValueError("Release source differs from selected commit: " + name)
+    return manifest
+
+
 def build_release(root: Path, version: str, binary: Path, output_dir: Path,
                   staging_dir: Path | None = None) -> tuple[Path, Path, dict]:
     legacy.validate_version(version)  # Validate before any write.
     root = root.resolve()
     inputs, commit = committed_inputs(root)
+    blobs = source_blobs(root, commit, {name: path.relative_to(root).as_posix() for name, path in inputs.items()})
     info = binary_info(binary)
     output_dir = output_dir.resolve()
     staging_dir = (staging_dir or root / "work" / "release-staging").resolve()
@@ -303,7 +374,10 @@ def build_release(root: Path, version: str, binary: Path, output_dir: Path,
     for name, source in {**inputs, BINARY_NAME: binary}.items():
         target = legacy.checked_path(stage, name)
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        if name == BINARY_NAME:
+            shutil.copy2(source, target)
+        else:
+            target.write_bytes(blobs[name])
         if target.stat().st_size > MAX_FILE:
             raise ValueError("Oversized release input: " + name)
         entries.append({"path": name, "bytes": target.stat().st_size, "sha256": digest(target)})
@@ -314,7 +388,7 @@ def build_release(root: Path, version: str, binary: Path, output_dir: Path,
     entries.append({"path": "README.md", "bytes": readme.stat().st_size, "sha256": digest(readme)})
     manifest = {"schema_version": 1, "product": "civil-buddy-unified-workbench", "version": version,
                 "runtime": "rust-host+fixed-python-workers", "python_min": "3.11", "expert_skills": 66,
-                "source_commit": commit, "source_policy": "committed allowlist; selected working tree files clean",
+                "source_commit": commit, "source_policy": "exact Git blobs from committed allowlist; selected working tree files clean",
                 "binary": info, "files": sorted(entries, key=lambda entry: entry["path"])}
     manifest_bytes = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     (stage / MANIFEST_NAME).write_bytes(manifest_bytes)
@@ -328,6 +402,7 @@ def build_release(root: Path, version: str, binary: Path, output_dir: Path,
             for name in sorted([*(entry["path"] for entry in entries), MANIFEST_NAME]):
                 package.write(legacy.checked_path(stage, name), name)
         verify_archive(Path(temporary), manifest)
+        verify_source(Path(temporary), root, commit)
         assert_clean(root, inputs, commit)
         os.replace(temporary, archive)
     finally:

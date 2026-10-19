@@ -85,3 +85,20 @@ npm run check:full
 普通测试使用离线脚本模型，不访问真实收费模型。提示注入集是合成开发集；通过不能宣称能抵御所有恶意文档或所有模型行为。执行结果以本次测试日志为准。
 
 第二台电脑与真实资料验收可填写[验收记录模板](acceptance/sme-preview-checklist.md)。空项不算通过，填写后的私人业务记录不要回传公共仓库。
+
+## 候选包交付门禁
+
+源码修复并不会更新旧 ZIP。打包前先选定并提交源码，在该干净提交构建 Rust exe，保留构建命令、工具链、退出码及 exe SHA-256。`build_unified_release.py` 现在直接读取该提交的 Git blob，避免 Windows 行尾转换改变分发内容；它仍不代替 exe 构建证明。
+
+```powershell
+git rev-parse HEAD
+cargo build --release --locked --offline --manifest-path workbench/Cargo.toml --bin civil-workbench
+python scripts/build_unified_release.py --version <新的候选版本> --binary workbench/target/release/civil-workbench.exe --output-dir output/release-candidate
+python scripts/verify_unified_delivery.py --archive <候选ZIP> --source-root . --expected-commit <事先选定的完整提交号> --extract-dir output/fresh-candidate
+# 使用解压包里的脚本和 exe，Python 解释器需已安装 README 中的依赖。
+python output/fresh-candidate/scripts/test_unified_runtime_http.py --binary output/fresh-candidate/bin/civil-workbench.exe
+```
+
+交付门禁先比对选定提交与 manifest，再核对完整白名单、每个源码文件的 Git 原始字节、生成说明及启动器路径映射。它随后在隔离 Python 子进程中仅从新解压目录导入材料读取器，检查“封面后数据页”、多候选拒绝、显式 `materials` 页兼容及原件未改；检查数据是合成样例，不使用模型。仅重算 manifest 哈希不能绕过源码检查。
+
+验收记录必须同时绑定源码提交、exe 和 ZIP 的 SHA-256，并区分包内读取、真实 HTTP、依赖安装和第二台电脑。`--verify` 仍可在没有 Git 的电脑做包内完整性校验；它本身不能证明源码新旧或 exe 来源。不能运行的检查应明确留空，既有冻结成绩、tag、Latest 和历史资产不得因新候选包而改写。

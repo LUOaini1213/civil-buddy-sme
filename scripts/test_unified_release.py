@@ -17,6 +17,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts import build_unified_release as release
+from scripts import verify_unified_delivery as delivery
 
 
 class UnifiedReleaseTests(unittest.TestCase):
@@ -114,7 +115,7 @@ class UnifiedReleaseTests(unittest.TestCase):
             self.assertFalse((set(private) | set(untracked)) & set(package.namelist()))
             self.assertIn(".env.example", package.namelist())
 
-    def test_extracted_package_reads_original_tender_without_a_checkout(self):
+    def real_runtime(self):
         # Use real runtime sources for this package, then execute only its
         # extracted script in an isolated interpreter. A PE stub stays unrun.
         sources = list((ROOT / "packing_assistant").rglob("*.py")) + [
@@ -136,6 +137,9 @@ class UnifiedReleaseTests(unittest.TestCase):
         self.git("add", ".")
         self.git("-c", "commit.gpgsign=false", "-c", "core.hooksPath=" + str(self.folder / "no-hooks"),
                  "commit", "-qm", "real synthetic reader fixture")
+
+    def test_extracted_package_reads_original_tender_without_a_checkout(self):
+        self.real_runtime()
         archive, _, _ = self.build()
         extracted = self.folder / "extracted"
         with zipfile.ZipFile(archive) as package:
@@ -162,6 +166,61 @@ class UnifiedReleaseTests(unittest.TestCase):
         self.assertIn("89日历天", result["extract_table_markdown"])
         self.assertTrue(result["submit_blocked"])
         self.assertEqual(before, hashlib.sha256(original.read_bytes()).hexdigest())
+
+    def test_delivery_reads_covered_and_ambiguous_sheets_from_extracted_package(self):
+        self.real_runtime()
+        archive, _, manifest = self.build()
+        extracted = self.folder / "fresh-delivery"
+        result = delivery.verify_delivery(archive, self.root, manifest["source_commit"], extracted)
+        self.assertTrue(result["passed"])
+        self.assertTrue(all(result["reader"]["checks"].values()))
+        self.assertTrue(Path(result["reader"]["module"]).is_relative_to(extracted))
+        with self.assertRaises(FileExistsError):
+            delivery.verify_delivery(archive, self.root, manifest["source_commit"], extracted)
+
+    def test_source_gate_rejects_self_consistent_tampering_and_wrong_commit(self):
+        archive, _, manifest = self.build()
+        commit = manifest["source_commit"]
+        self.assertEqual(release.verify_source(archive, self.root, commit), manifest)
+        with zipfile.ZipFile(archive) as package:
+            original = {name: package.read(name) for name in package.namelist()}
+        for name in ("packing_assistant/civil.py", "start-workbench.bat", "README.md"):
+            content = dict(original)
+            content[name] = b"self-consistent but not the selected source\n"
+            altered = json.loads(content[release.MANIFEST_NAME])
+            entry = next(item for item in altered["files"] if item["path"] == name)
+            entry.update(bytes=len(content[name]), sha256=hashlib.sha256(content[name]).hexdigest())
+            content[release.MANIFEST_NAME] = json.dumps(altered).encode()
+            bad = self.folder / "self-consistent.zip"
+            with zipfile.ZipFile(bad, "w") as package:
+                for member, data in content.items():
+                    package.writestr(member, data)
+            # Negative control: the previous hash-only gate accepts this ZIP.
+            self.assertEqual(release.verify_archive(bad), altered)
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "differs from selected commit"):
+                release.verify_source(bad, self.root, commit)
+        self.write("packing_assistant/civil.py", "new committed reader\n")
+        self.git("add", ".")
+        self.git("-c", "commit.gpgsign=false", "-c", "core.hooksPath=" + str(self.folder / "no-hooks"),
+                 "commit", "-qm", "new source")
+        with self.assertRaisesRegex(ValueError, "source commit differs"):
+            release.verify_source(archive, self.root, "HEAD")
+        # A later checkout must not change validation of an explicitly selected old commit.
+        self.assertEqual(release.verify_source(archive, self.root, commit), manifest)
+
+    def test_package_uses_git_bytes_despite_clean_checkout_line_endings(self):
+        source = self.root / "packing_assistant/civil.py"
+        source.write_bytes(b"committed LF source\n")
+        self.git("add", ".")
+        self.git("-c", "commit.gpgsign=false", "-c", "core.hooksPath=" + str(self.folder / "no-hooks"),
+                 "commit", "-qm", "LF source")
+        self.git("config", "core.autocrlf", "true")
+        source.write_bytes(b"committed LF source\r\n")
+        self.assertEqual(self.git("diff", "--name-only", "HEAD"), b"")
+        archive, _, manifest = self.build()
+        with zipfile.ZipFile(archive) as package:
+            self.assertEqual(package.read("packing_assistant/civil.py"), b"committed LF source\n")
+        release.verify_source(archive, self.root, manifest["source_commit"])
 
     def test_dirty_selected_source_or_missing_required_source_fails_before_output(self):
         self.write("packing_assistant/civil.py", "uncommitted runtime edit\n")
