@@ -28,6 +28,132 @@ fn emit(lease: &TurnLease, kind: &str, data: Value) -> Result<(), String> {
 
 const WORKER_MODEL_LIMITATIONS: &str = "固定worker的完整隔离诊断保留在工具事件中，模型工具消息省略重复诊断；工具成功不证明内核读取或网络隔离，读取仍受应用路径检查限制。";
 
+const REVIEW_READINESS_TEXT: &str = "Civil Buddy fixed review runtime readiness check.";
+
+/// Review errors are service receipts, never evidence that the draft contained
+/// an unsafe conclusion. Retain only typed, bounded bootstrap diagnostics; raw
+/// worker errors may contain paths or other source/environment information.
+fn review_failure_receipt(phase: &str, code: &str, details: Option<&Value>) -> Value {
+    let mut receipt = json!({"phase":phase,"status":"unavailable","code":code});
+    let Some(details) = details.and_then(Value::as_object) else {
+        return receipt;
+    };
+    let mut safe = serde_json::Map::new();
+    for (key, allowed) in [
+        (
+            "phase",
+            &[
+                "root_validation",
+                "write_root_preparation",
+                "kernel_confinement",
+                "selftest",
+            ][..],
+        ),
+        (
+            "category",
+            &[
+                "permission_denied",
+                "os_error",
+                "initialization_failed",
+                "selftest_failed",
+            ][..],
+        ),
+    ] {
+        if let Some(value) = details.get(key).and_then(Value::as_str) {
+            if allowed.contains(&value) {
+                safe.insert(key.into(), json!(value));
+            }
+        }
+    }
+    if let Some(code) = details.get("os_error_code").and_then(Value::as_u64) {
+        if (1..=2_147_483_647).contains(&code) {
+            safe.insert("os_error_code".into(), json!(code));
+        }
+    }
+    if let Some(checks) = details.get("selftest").and_then(Value::as_object) {
+        let mut values = serde_json::Map::new();
+        for key in [
+            "write_inside_state",
+            "write_job_folder",
+            "write_home",
+            "write_system_temp",
+            "spawn_process",
+            "inet_socket",
+        ] {
+            if let Some(value) = checks.get(key).and_then(Value::as_str) {
+                if matches!(value, "allowed" | "denied" | "unavailable") {
+                    values.insert(key.into(), json!(value));
+                }
+            }
+        }
+        if !values.is_empty() {
+            safe.insert("selftest".into(), Value::Object(values));
+        }
+    }
+    if !safe.is_empty() {
+        receipt["details"] = Value::Object(safe);
+    }
+    receipt
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn checked_review(
+    state: &ProductState,
+    ws: &WorkspaceContext,
+    lease: &TurnLease,
+    cancel: &CancellationToken,
+    phase: &str,
+    text: &str,
+    failure: &mut Option<Value>,
+) -> Result<Value, String> {
+    cancel.check().map_err(|e| e.to_string())?;
+    let call_id = uuid::Uuid::new_v4().to_string();
+    let response = state.worker.call(
+        "packing_assistant.review_worker",
+        &json!({"version":1,"call_id":call_id,"workspace":ws.root(),"operation":"verdicts","texts":[text]}),
+        cancel,
+    ).await;
+    // Cancellation is terminal even when it races a transport/protocol error.
+    cancel.check().map_err(|e| e.to_string())?;
+    let receipt = match response {
+        Ok(response) if response["ok"] == false => {
+            let code = match response["error"]["code"].as_str() {
+                Some(
+                    code @ ("sandbox_unavailable"
+                    | "missing_dependency"
+                    | "invalid_request"
+                    | "worker_failed"
+                    | "too_large"),
+                ) => code,
+                _ => "review_worker_unavailable",
+            };
+            review_failure_receipt(phase, code, response["error"].get("details"))
+        }
+        Ok(response) => {
+            if let Some(results) = super::worker::validated_review_results(&response, &call_id, 1) {
+                let result = &results[0];
+                if phase != "worker_readiness"
+                    || (result["text"] == REVIEW_READINESS_TEXT
+                        && result["notice"] == ""
+                        && result["found"].as_array().is_some_and(Vec::is_empty))
+                {
+                    return Ok(result.clone());
+                }
+            }
+            review_failure_receipt(phase, "malformed_review_response", None)
+        }
+        Err(_) => review_failure_receipt(phase, "worker_transport_unavailable", None),
+    };
+    *failure = Some(receipt.clone());
+    emit(lease, "review_failed", receipt)?;
+    Err(if phase == "worker_readiness" {
+        "固定检查服务不可用，本轮未完成；尚未调用模型".into()
+    } else {
+        "最终回复检查服务不可用，本轮未完成；未发布未经检查的回复，已保存产物可在工具记录中查看"
+            .into()
+    })
+}
+
 /// The full fixed-worker protocol remains in tool events. A model only needs
 /// its business result, not a fresh copy of transport/sandbox self-tests at
 /// every call. Recognize both dispatch and envelope; never recurse into data.
@@ -301,7 +427,8 @@ fn runtime_text<'a>(locale: &str, text: &'a str) -> &'a str {
         "任务达到300秒时限，已停止；已保存文件仍可查看" => "The task reached its 300-second limit and stopped. Saved files remain available.",
         "模型输出达到单次上限，任务未作为成功交付" => "The model reached the output limit. This task is not marked as a successful delivery.",
         "模型未返回内容或工具请求" => "The model returned neither content nor a tool request.",
-        "最终回复未通过工程结论检查，任务结果可在工具记录中查看" => "The final reply did not pass the engineering verdict check. Tool results remain available in the execution record.",
+        "固定检查服务不可用，本轮未完成；尚未调用模型" => "The fixed review service is unavailable. This turn is incomplete; no model request was made.",
+        "最终回复检查服务不可用，本轮未完成；未发布未经检查的回复，已保存产物可在工具记录中查看" => "The final-reply review service is unavailable. This turn is incomplete; the unchecked reply was withheld. Saved artifacts remain available in the execution record.",
         "单次工具调用数量超过8个" => "The response exceeded the limit of 8 tool calls.",
         "已达到主代理12轮调用上限，已保存产物保留" => "The main agent reached its 12-round limit. Saved outputs remain available.",
         "子代理输出达到单次上限，结果不作为已完成" => "The subagent reached its output limit. Its result is not marked complete.",
@@ -446,6 +573,7 @@ pub async fn run(
         }
     };
     let mut artifacts = Vec::new();
+    let mut review_failure = None;
     let result = {
         let mut operation = Box::pin(execute(
             &state,
@@ -454,6 +582,7 @@ pub async fn run(
             &lease,
             &budget,
             &mut artifacts,
+            &mut review_failure,
             model_config.as_ref(),
         ));
         tokio::select! {
@@ -485,10 +614,11 @@ pub async fn run(
                 TurnStatus::Failed
             };
             let _ = emit(&lease, "error", json!({"message":message}));
-            (
-                status,
-                json!({"reply":message,"error":message,"artifacts":artifacts,"partial":true,"usage":budget.snapshot().ok()}),
-            )
+            let mut result = json!({"reply":message,"error":message,"artifacts":artifacts,"partial":true,"usage":budget.snapshot().ok()});
+            if let Some(receipt) = review_failure {
+                result["review_receipt"] = receipt;
+            }
+            (status, result)
         }
     };
     // The transaction's turn.* event is the sole authoritative completion.
@@ -502,6 +632,7 @@ async fn execute(
     lease: &TurnLease,
     budget: &BudgetTree,
     artifacts: &mut Vec<Value>,
+    review_failure: &mut Option<Value>,
     model_config: Option<&crate::config::LlmConfig>,
 ) -> Result<Value, String> {
     let cancel = lease.cancellation();
@@ -635,6 +766,27 @@ async fn execute(
         return Ok(json!({"reply":reply,"findings":findings,"partial":partial,
             "execution_evidence":{"scope":"this_turn_tool_receipts","planning_receipts":planning_step_receipts.reported,"planning_history":planning_step_receipts.history}}));
     }
+    emit(
+        lease,
+        "status",
+        json!({"phase":"worker_readiness","message":if req.locale == "en" { "Checking the fixed review runtime before contacting the model" } else { "正在检查固定回复检查服务，尚未调用模型" }}),
+    )?;
+    checked_review(
+        state,
+        ws,
+        lease,
+        &cancel,
+        "worker_readiness",
+        REVIEW_READINESS_TEXT,
+        review_failure,
+    )
+    .await?;
+    emit(
+        lease,
+        "worker_readiness",
+        json!({"phase":"worker_readiness","status":"ready","scope":"fixed_review_runtime",
+            "limitations":"This fixed review operation succeeded only; it does not prove retrieval, engineering accuracy, kernel read confinement or network confinement."}),
+    )?;
     let session = SessionId::parse(&req.session_id).map_err(|e| e.to_string())?;
     let recent = state
         .runtime
@@ -837,11 +989,16 @@ async fn execute(
                     .inspect_selected_plan(selection, &cancel)
                     .await?;
             }
-            let checked=state.worker.call("packing_assistant.review_worker",&json!({"version":1,"call_id":uuid::Uuid::new_v4().to_string(),"workspace":ws.root(),"operation":"verdicts","texts":[reply]}),&cancel).await?;
-            if checked["ok"] != true {
-                return Err("最终回复未通过工程结论检查，任务结果可在工具记录中查看".into());
-            }
-            let result = &checked["result"]["results"][0];
+            let result = checked_review(
+                state,
+                ws,
+                lease,
+                &cancel,
+                "final_review",
+                reply,
+                review_failure,
+            )
+            .await?;
             let guarded = format!(
                 "{}{}{}",
                 result["text"].as_str().unwrap_or(""),

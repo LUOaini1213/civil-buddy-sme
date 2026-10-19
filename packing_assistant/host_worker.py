@@ -21,11 +21,50 @@ MAX_INPUT = 32 * 1024 * 1024
 MAX_OUTPUT = 12 * 1024 * 1024
 MODULES = {"packing_assistant.documents.worker", "packing_assistant.engineering.worker",
            "packing_assistant.retrieval.worker", "packing_assistant.host_worker", "packing_assistant.review_worker"}
+_SELFTEST_KEYS = ("write_inside_state", "write_job_folder", "write_home", "write_system_temp",
+                  "spawn_process", "inet_socket")
+_MAX_OS_ERROR_CODE = 2_147_483_647
 
 
-def _error(code, message, call_id=None):
-    return {"version": 1, "ok": False, "call_id": call_id, "result": None,
-            "error": {"code": code, "message": message}}
+def _error(code, message, call_id=None, *, details=None):
+    error = {"code": code, "message": message}
+    if details is not None:
+        error["details"] = details
+    return {"version": 1, "ok": False, "call_id": call_id, "result": None, "error": error}
+
+
+def _safe_selftest(checks):
+    if not isinstance(checks, dict):
+        return None
+    return {key: value if value in ("allowed", "denied", "unavailable") else "unavailable"
+            for key in _SELFTEST_KEYS if key in checks for value in (checks[key],)}
+
+
+def _bootstrap_details(phase, exc, checks=None):
+    # Never serialize exception text, filenames, environment values or arbitrary
+    # probe keys. Win32 codes remain typed integers all the way to the host.
+    windows_code = getattr(exc, "winerror", None)
+    code = next((value for value in (windows_code, getattr(exc, "errno", None))
+                 if type(value) is int and 0 < value <= _MAX_OS_ERROR_CODE), None)
+    if phase == "selftest":
+        category = "selftest_failed"
+    elif isinstance(exc, PermissionError) or windows_code == 5 or (windows_code is None and code in (1, 13)):
+        category = "permission_denied"
+    else:
+        category = "os_error" if isinstance(exc, OSError) else "initialization_failed"
+    details = {"phase": phase, "category": category}
+    if code is not None:
+        details["os_error_code"] = code
+    safe_checks = _safe_selftest(checks)
+    if safe_checks is not None:
+        details["selftest"] = safe_checks
+    return details
+
+
+class _BootstrapError(Exception):
+    def __init__(self, details):
+        super().__init__("Worker confinement could not be established")
+        self.details = details
 
 
 def _checked_path(root: Path, value, *, write=False):
@@ -61,47 +100,54 @@ def _checked_path(root: Path, value, *, write=False):
 
 
 def _bootstrap():
-    asked = os.environ.get("CIVIL_HOST_SANDBOX", "os")
-    if asked not in {"app", "os"}:
-        raise ValueError("Unknown sandbox backend")
-    root = Path(os.environ["CIVIL_HOST_WORKSPACE"]).resolve(strict=True)
-    if not root.is_dir():
-        raise ValueError("Workspace is not a directory")
-    output = _checked_path(root, ".civil-buddy/out", write=True)
-    temporary = _checked_path(root, ".civil-buddy/out/.tmp", write=True)
-    real_temp = tempfile.gettempdir()
-    if asked == "os":
-        from packing_assistant.runtime.os_sandbox import prepare
-        prepare(root)
-    else:
-        temporary.mkdir(parents=True, exist_ok=True)
-    # All caches/temp files of trusted libraries stay under the allowed root.
-    for key in ("TEMP", "TMP", "TMPDIR", "MPLCONFIGDIR", "NUMBA_CACHE_DIR", "XDG_CACHE_HOME"):
-        os.environ[key] = str(temporary)
-    tempfile.tempdir = str(temporary)
-    if asked == "app":
-        report = {"asked": "app", "backend": "application-policy", "available": True,
-                  "enforces": {"write": False, "spawn": False, "network": False, "read": False},
-                  "selftest": None}
-    else:
-        # Reuse only kernel primitives and their probes, never the old agent or
-        # model_tool entry points. Confinement is irreversible in this process.
-        from packing_assistant.runtime.os_sandbox.worker import _confine, selftest
-        policy = {"job_root": str(root), "write_roots": [str(output), str(temporary)],
-                  "network": False, "spawn": False, "real_temp": real_temp}
-        report = _confine(policy)
-        checks = selftest(policy)
-        if (checks["write_inside_state"] != "allowed"
-                or any(checks[key] != "denied" for key in ("write_job_folder", "write_home", "spawn_process"))
-                or not report["enforces"].get("write") or not report["enforces"].get("spawn")):
-            raise OSError("OS sandbox self-test did not prove required write and process restrictions")
-        report.update(asked="os", available=True, selftest=checks)
-        report["enforces"]["read"] = False
-    report["pid"] = os.getpid()
-    report["limitations"] = ["Reads are restricted by application path checks, not by the kernel"]
-    if not report["enforces"]["network"]:
-        report["limitations"].append("Network access is not denied by the kernel")
-    return root, report
+    phase, checks = "root_validation", None
+    try:
+        asked = os.environ.get("CIVIL_HOST_SANDBOX", "os")
+        if asked not in {"app", "os"}:
+            raise ValueError("Unknown sandbox backend")
+        root = Path(os.environ["CIVIL_HOST_WORKSPACE"]).resolve(strict=True)
+        if not root.is_dir():
+            raise ValueError("Workspace is not a directory")
+        output = _checked_path(root, ".civil-buddy/out", write=True)
+        temporary = _checked_path(root, ".civil-buddy/out/.tmp", write=True)
+        real_temp = tempfile.gettempdir()
+        phase = "write_root_preparation"
+        if asked == "os":
+            from packing_assistant.runtime.os_sandbox import prepare
+            prepare(root)
+        else:
+            temporary.mkdir(parents=True, exist_ok=True)
+        # All caches/temp files of trusted libraries stay under the allowed root.
+        for key in ("TEMP", "TMP", "TMPDIR", "MPLCONFIGDIR", "NUMBA_CACHE_DIR", "XDG_CACHE_HOME"):
+            os.environ[key] = str(temporary)
+        tempfile.tempdir = str(temporary)
+        if asked == "app":
+            report = {"asked": "app", "backend": "application-policy", "available": True,
+                      "enforces": {"write": False, "spawn": False, "network": False, "read": False},
+                      "selftest": None}
+        else:
+            phase = "kernel_confinement"
+            # Reuse only kernel primitives and their probes, never the old agent or
+            # model_tool entry points. Confinement is irreversible in this process.
+            from packing_assistant.runtime.os_sandbox.worker import _confine, selftest
+            policy = {"job_root": str(root), "write_roots": [str(output), str(temporary)],
+                      "network": False, "spawn": False, "real_temp": real_temp}
+            report = _confine(policy)
+            phase = "selftest"
+            checks = selftest(policy)
+            if (checks["write_inside_state"] != "allowed"
+                    or any(checks[key] != "denied" for key in ("write_job_folder", "write_home", "spawn_process"))
+                    or not report["enforces"].get("write") or not report["enforces"].get("spawn")):
+                raise OSError("OS sandbox self-test did not prove required write and process restrictions")
+            report.update(asked="os", available=True, selftest=_safe_selftest(checks))
+            report["enforces"]["read"] = False
+        report["pid"] = os.getpid()
+        report["limitations"] = ["Reads are restricted by application path checks, not by the kernel"]
+        if not report["enforces"]["network"]:
+            report["limitations"].append("Network access is not denied by the kernel")
+        return root, report
+    except Exception as exc:
+        raise _BootstrapError(_bootstrap_details(phase, exc, checks)) from None
 
 
 def _has(module):
@@ -188,13 +234,16 @@ def dispatch(module, request, root):
 def main():
     protocol = sys.stdout.buffer
     sys.stdout = sys.stderr
-    report = {"asked": os.environ.get("CIVIL_HOST_SANDBOX", "os"), "available": False,
+    asked = os.environ.get("CIVIL_HOST_SANDBOX", "os")
+    report = {"asked": asked if asked in {"app", "os"} else "invalid", "available": False,
               "backend": "unavailable", "enforces": {"write": False, "spawn": False, "network": False, "read": False}}
     call_id = None
     try:
         root, report = _bootstrap()  # before reading or parsing untrusted input
-    except Exception:
-        response = _error("sandbox_unavailable", "Worker confinement could not be established; no operation was executed")
+    except Exception as exc:
+        details = exc.details if isinstance(exc, _BootstrapError) else _bootstrap_details("root_validation", exc)
+        response = _error("sandbox_unavailable", "Worker confinement could not be established; no operation was executed",
+                          details=details)
     else:
         try:
             raw = sys.stdin.buffer.readline(MAX_INPUT + 2)

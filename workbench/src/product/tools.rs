@@ -558,18 +558,17 @@ impl ToolScope<'_> {
         }
         // The review worker accepts at most 200 texts per call.
         for batch in prose.chunks(200) {
+            let call_id = uuid::Uuid::new_v4().to_string();
             let verdict = self.state.worker.call("packing_assistant.review_worker",
-                &json!({"version":1,"call_id":uuid::Uuid::new_v4().to_string(),"operation":"verdicts","workspace":self.workspace.root(),"texts":batch}), self.cancel).await?;
+                &json!({"version":1,"call_id":call_id,"operation":"verdicts","workspace":self.workspace.root(),"texts":batch}), self.cancel).await
+                .map_err(|_| "工程结论检查服务不可用，检查未完成，未发布修改".to_owned())?;
             self.verify_bound(self.selected)?;
-            let results = verdict["result"]["results"].as_array();
-            if verdict["ok"] != true || !results.is_some_and(|items| items.len() == batch.len()) {
-                return Err("工程结论检查未能执行，未发布修改".into());
-            }
-            if results.is_some_and(|items| {
-                items
-                    .iter()
-                    .any(|item| item["found"].as_array().is_some_and(|a| !a.is_empty()))
-            }) {
+            let results = super::worker::validated_review_results(&verdict, &call_id, batch.len())
+                .ok_or("工程结论检查服务不可用或返回格式无效，检查未完成，未发布修改")?;
+            if results
+                .iter()
+                .any(|item| !item["found"].as_array().unwrap().is_empty())
+            {
                 return Err(
                     "补丁含本系统不可签认的工程结论；请改为有来源的事实、待核查项或条件说明".into(),
                 );

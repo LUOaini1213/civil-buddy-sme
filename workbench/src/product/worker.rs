@@ -11,6 +11,37 @@ pub struct WorkerHost {
     pub repo_root: PathBuf,
 }
 
+/// A successful verdict transport is useful only with the complete typed
+/// result for this exact request. Both final replies and document patches use
+/// this gate; a missing `found` field must never be interpreted as "clean".
+pub fn validated_review_results<'a>(
+    response: &'a Value,
+    call_id: &str,
+    expected_count: usize,
+) -> Option<&'a [Value]> {
+    if response["version"] != 1
+        || response["ok"] != true
+        || response["call_id"] != call_id
+        || !response.get("error").is_some_and(Value::is_null)
+    {
+        return None;
+    }
+    let results = response["result"]["results"].as_array()?;
+    if results.len() != expected_count
+        || !results.iter().all(|row| {
+            row.as_object().is_some_and(|row| {
+                row.len() == 3
+                    && row.get("text").is_some_and(Value::is_string)
+                    && row.get("notice").is_some_and(Value::is_string)
+                    && row.get("found").is_some_and(Value::is_array)
+            })
+        })
+    {
+        return None;
+    }
+    Some(results)
+}
+
 impl WorkerHost {
     pub fn detect(repo_root: PathBuf) -> Self {
         let local = repo_root.join(if cfg!(windows) {
@@ -61,10 +92,26 @@ impl WorkerHost {
         let allowed = match module {
             "packing_assistant.documents.worker" => matches!(
                 operation,
-                "capabilities" | "inspect" | "read" | "preview" | "apply" | "validate" | "inspect_readiness" | "inspect_excel_engine_input" | "verify_excel_engine_output"
+                "capabilities"
+                    | "inspect"
+                    | "read"
+                    | "preview"
+                    | "apply"
+                    | "validate"
+                    | "inspect_readiness"
+                    | "inspect_excel_engine_input"
+                    | "verify_excel_engine_output"
             ),
             "packing_assistant.engineering.worker" => {
-                matches!(operation, "frame" | "section" | "ifc_check" | "ifc_diff" | "packing_replan" | "planning_calculate")
+                matches!(
+                    operation,
+                    "frame"
+                        | "section"
+                        | "ifc_check"
+                        | "ifc_diff"
+                        | "packing_replan"
+                        | "planning_calculate"
+                )
             }
             "packing_assistant.retrieval.worker" => {
                 matches!(operation, "index" | "search" | "verify")
@@ -93,7 +140,9 @@ impl WorkerHost {
             }
         }
         if module == "packing_assistant.engineering.worker" && operation == "packing_replan" {
-            let source = request["payload"]["source"].as_str().ok_or("packing source is required")?;
+            let source = request["payload"]["source"]
+                .as_str()
+                .ok_or("packing source is required")?;
             workspace.resolve_read(source).map_err(|e| e.to_string())?;
         }
         workspace
@@ -279,8 +328,10 @@ impl WorkerHost {
         cancel: &CancellationToken,
     ) -> Result<Value, String> {
         let call_id = uuid::Uuid::new_v4().to_string();
-        self.document_as(&call_id, workspace, operation, source, expected, arguments, cancel)
-            .await
+        self.document_as(
+            &call_id, workspace, operation, source, expected, arguments, cancel,
+        )
+        .await
     }
 
     /// `call_id` is the document worker's replay key: an apply delivered again

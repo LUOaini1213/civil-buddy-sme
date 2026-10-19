@@ -46,7 +46,8 @@ impl Fixture {
         .unwrap();
         std::fs::write(root.join("packing_assistant/host_worker.py"), r#"
 import json, pathlib, sys
-r=json.load(sys.stdin); root=pathlib.Path(__file__).resolve().parents[1]
+# Match the real host binary UTF-8 protocol under Python -I on Windows.
+r=json.loads(sys.stdin.buffer.read()); root=pathlib.Path(__file__).resolve().parents[1]
 if r['operation']=='packing_replan':
     counter=root/'calls.txt'; counter.write_text(str(int(counter.read_text())+1) if counter.exists() else '1')
     (root/'request.json').write_text(json.dumps(r),encoding='utf-8')
@@ -58,8 +59,10 @@ elif r['operation']=='verdicts':
     result={'results':[{'text':t,'notice':'','found':[]} for t in r['texts']]}
 else:
     raise ValueError('unexpected fixture operation')
-print(json.dumps({'version':1,'ok':True,'call_id':r['call_id'],'result':result,
-    'sandbox':{'enforces':{'write':True,'spawn':True}}}))
+response={'version':1,'ok':True,'call_id':r['call_id'],'result':result,'error':None,
+    'sandbox':{'enforces':{'write':True,'spawn':True}}}
+sys.stdout.buffer.write((json.dumps(response,ensure_ascii=False)+'\n').encode('utf-8'))
+sys.stdout.buffer.flush()
 "#).unwrap();
         let ws = WorkspaceContext::new(root.join("job")).unwrap();
         let mut selected = vec![PackingSelection {

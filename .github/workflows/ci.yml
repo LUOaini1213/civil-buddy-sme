@@ -102,6 +102,7 @@ jobs:
           python scripts/test_transport_constraints.py
           python scripts/test_model_refusal.py
           python scripts/test_model_mode_link.py
+          python -m unittest discover -s test -p test_host_worker_bootstrap.py -v
           python scripts/eval_model_mode.py --check
       - name: Voice input eval archive matches its README (no model needed)
         run: python eval/asr/run_eval.py --check

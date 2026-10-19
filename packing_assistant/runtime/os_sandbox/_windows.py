@@ -53,8 +53,8 @@ def _dlls():
     return ctypes.WinDLL("advapi32", use_last_error=True), ctypes.WinDLL("kernel32", use_last_error=True)
 
 
-def _fail(what: str) -> OSError:
-    return OSError(f"{what} failed (WinError {ctypes.get_last_error()})")
+def _fail(_what: str) -> OSError:
+    return ctypes.WinError(ctypes.get_last_error())
 
 
 def probe() -> Dict[str, Any]:
@@ -77,7 +77,7 @@ def label_low(path: str) -> None:
                                                    ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
         error = advapi32.SetNamedSecurityInfoW(str(path), _SE_FILE_OBJECT, _LABEL_SECURITY_INFORMATION, None, None, None, sacl)
         if error:
-            raise OSError(f"SetNamedSecurityInfo({path}) failed (error {error})")
+            raise ctypes.WinError(error)
     finally:
         kernel32.LocalFree(descriptor)
 

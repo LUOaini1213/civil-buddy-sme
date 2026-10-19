@@ -12,6 +12,23 @@ A failed preparation leaves the previous successful selection intact. Keep proje
 when upgrading and prepare a new environment in the new package; do not move a virtual environment.
 The package does not include Python, credentials, speech models or a preinstalled environment.
 
+On Windows, a writable installation directory does not by itself prove that the worker can
+establish its sandbox in a job directory. A tested directory under `C:/CivilBuddy` returned
+Windows error 5 during `write_root_preparation`; a new personal Documents directory passed.
+Keep project material in a private directory with the required permissions. For a new local
+installation, the state directory can also be selected explicitly in PowerShell:
+
+```powershell
+$civilStateRoot = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'CivilBuddyState'
+.\start-unified-workbench.bat --state-root "$civilStateRoot"
+```
+
+This selects a new state location. For an existing installation, retain its current state path
+to keep its history; selecting another location does not migrate existing projects or records.
+If prechecking fails, inspect `review_receipt.details` before retrying. A permission failure
+requires a suitable project directory or a permissions review; disabling OS isolation is not
+a recovery step.
+
 For reproducible optional preparation, choose a fixed profile explicitly:
 
 ```powershell
@@ -159,6 +176,20 @@ the model's own “saved” or “Done” statement is not a receipt. This does 
 free-form request was fulfilled, and ordinary explanatory replies do not receive comprehensive numeric
 provenance verification. The legacy Python reply guard is a separate implementation.
 
+Before the first provider request in a `model` turn, Rust asynchronously runs a fixed,
+harmless verdict-review request in the same workspace with the configured worker sandbox
+policy. Cancellation remains available during this `worker_readiness` precheck. Failure or
+an invalid response stops the turn without a model request. `steps` remains model-free and
+skips this precheck. A ready result proves only that the fixed review operation worked at
+that time; it does not prove RAG availability, business correctness or later tool success.
+
+If `final_review` becomes unavailable or returns an invalid result, the turn is incomplete
+and the unchecked model reply is withheld. `result.review_receipt` and the `review_failed`
+event record the failure phase and safe code, with allowlisted bootstrap stages/categories,
+bounded numeric OS error codes and known self-test statuses when available. A service
+failure does not establish that the draft contained a harmful engineering conclusion;
+saved artifact receipts remain available.
+
 - Events persist before the page sees them. Refresh reconnects from the last sequence; restart marks unfinished tasks interrupted and never silently repeats writes.
 - If a start response is lost, an explicit retry of the same complete request uses its original
   submission key. A reload only looks for a uniquely matching server task after the saved history
@@ -169,7 +200,7 @@ provenance verification. The legacy Python reply guard is a separate implementat
 - A task tree shares input/output/call budgets. At most two read-only children run together, four children in total, depth one; cancellation propagates.
 - Context occupancy is a conservative serialized-byte estimate, separately shown from model billed usage and task stages. It never silently removes the current request or half a tool interaction.
 - Fixed Python workers establish the requested OS sandbox before reading their request. The default `CIVIL_WORKER_SANDBOX=os` fails closed. Explicit `app` is a diagnostic/application-policy mode and must never be reported as OS isolation.
-- On Windows, the existing Low Integrity/Job backend restricts writes/spawn. It does not claim kernel read or network confinement; the UI records the actual process probe.
+- On Windows, the Low Integrity/Job backend enforces write restrictions and prevents child process creation after successful setup and self-tests. Reads rely on application path checks, and network refusal is at the application layer; receipts report `enforces.read=false` and `enforces.network=false`, without claiming kernel read or network confinement.
 - RAG uses selected-source SQLite FTS5/BM25 with original hashes and exact locators. Verification re-extracts the current original, not the derived index. This proves quotation identity, not engineering truth.
 - Ordinary model tasks collect source quotes from this turn's actual main/child tool calls. Before completion,
   the host rechecks up to 12 quotes against the selected originals and displays their locator, original/current
