@@ -83,3 +83,24 @@ before any plan. The rule was written against the reviewers' description and the
 **pl03 is now "seen" as well.** Scores (DEV): exact 4 -> 5, safe 5 -> 6, row named 2 -> 3, link ok 5 -> 6,
 wrong plan 1 -> 0. The floors in `score_sealed.py` were raised to these numbers, so a wrong plan now fails the check.
 pl06 (the Cover sheet first) still stops at `no_materials`.
+
+## Sheet discovery (2026-10-19, seen development regression)
+
+On current main `4d6ad08`, the same scorer reproduced exact 5/6, safe 6/6, and no wrong plans:
+pl03 correctly stopped for its stillage row, while pl06 still selected `Cover` and returned `no_materials`.
+The worksheet reader now finds the unique schedule behind a cover page. pl06 produces the expected
+24 pieces / 9,540 kg; subtotals and the grand total are excluded. Current DEV results are exact 6/6,
+safe 6/6, row named 3/3, link ok 6/6, wrong plans 0, covered without a valid plan 0. The current exact
+floor is raised to 6; the original gold files and historical score tables above are unchanged.
+
+Selection preserves an explicit worksheet and the conventional `materials` sheet. Otherwise all worksheet
+headers, including hidden sheets, are inspected within the existing 15-row header window. A candidate needs
+an identity column and a quantity, weight, or size column. Multiple candidates stop with their names instead
+of picking a revision or adding potentially duplicated cargo. Callers can pass `sheet="Panel Schedule"` to
+`parse_table_file` / `parse_table_bytes`; a missing requested sheet fails instead of silently falling back.
+With no recognizable candidate the old active-sheet diagnostics remain. Formula caches, missing values,
+merged headers and transport-equipment rows still pass through their existing validation gates.
+
+`scripts/test_panel_list_reading.py` adds synthetic cover/notes, multiple-revision, hidden-sheet, explicit-choice,
+missing-sheet, formula, incomplete-schedule and merged-header/stillage cases. This fixes a known, already-seen
+example and adds regression coverage; it is not a new held-out score or real-business acceptance.

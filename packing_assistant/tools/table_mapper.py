@@ -21,6 +21,11 @@ PathLike = Union[str, Path]
 class TableCellError(ValueError):
     """A written numeric cell cannot safely be read; never replace it with a default."""
 
+
+class TableSheetError(ValueError):
+    """The requested worksheet is absent, or choosing one could omit cargo."""
+
+
 # 标准字段 → 同义词（小写匹配）
 COLUMN_SYNONYMS: Dict[str, Tuple[str, ...]] = {
     "id": ("id", "编号", "行号", "line_id", "row_id", "line_no", "no", "序号"),
@@ -1213,6 +1218,51 @@ def _xlsx_formula_errors(path: Path, title: str, data: Sequence[Sequence[Any]], 
     return errors
 
 
+def _select_material_sheet(wb: Any, path: Path, sheet: Optional[str]) -> Tuple[Any, str, List[str]]:
+    """Use an explicit sheet or the established materials sheet; otherwise inspect every sheet's header.
+
+    Discovery reads only the header window, not the cargo values: an uncached formula or a missing mass must
+    still reach the normal validation gates. Multiple schedules are ambiguous (they may be revisions or separate
+    lots), so never concatenate them or choose the active one. Hidden schedules are candidates too.
+    """
+    from packing_assistant.runtime.cancel import check as cancel_check
+
+    if sheet is not None:
+        if sheet not in wb.sheetnames:
+            raise TableSheetError(f"worksheet {sheet!r} does not exist; select an existing worksheet explicitly")
+        return wb[sheet], "explicit", [sheet]
+    if "materials" in wb.sheetnames:
+        return wb["materials"], "materials", ["materials"]
+    candidates = []
+    for ws in wb.worksheets:
+        cancel_check()
+        # One extra row is sufficient for a merged two-row header at the end of the usual header window.
+        preview = list(ws.iter_rows(max_row=HEADER_SCAN_ROWS + 1, values_only=True))
+        if not preview:
+            continue
+        h = _choose_header_row(preview)
+        composed = _two_row_header(path, ws.title, preview, h, 1)
+        mapped = set(build_column_map(composed if composed is not None else preview[h]).values())
+        # Identity plus a measured/quantity field distinguishes a schedule from a title/contact page. Keep
+        # incomplete schedules as candidates: rejecting their missing values is the planner's job.
+        cargo_fields = {"quantity", "weight_kg", "total_weight_kg", "length_mm", "width_mm", "height_mm", "__dims__"}
+        has_values = bool(mapped & cargo_fields) or any(field.startswith(PAIR_PREFIX) for field in mapped)
+        if mapped & {"id", "name"} and has_values:
+            candidates.append(ws.title)
+    if len(candidates) > 1:
+        names = ", ".join(repr(name) for name in candidates[:10])
+        if len(candidates) > 10:
+            names += f", and {len(candidates) - 10} more"
+        raise TableSheetError(f"multiple material worksheets found: {names}; select one worksheet explicitly "
+                              "to avoid omitting or double-counting cargo")
+    if candidates:
+        return wb[candidates[0]], "single_candidate", candidates
+    # Retain the existing diagnostics for a single nonstandard sheet, rather than inventing header mappings.
+    if wb.active is None:
+        raise TableSheetError("no active worksheet or recognizable material schedule found")
+    return wb.active, "active_fallback", []
+
+
 def load_xlsx(path: PathLike, sheet: Optional[str] = None) -> List[Dict[str, Any]]:
     import openpyxl
 
@@ -1221,12 +1271,7 @@ def load_xlsx(path: PathLike, sheet: Optional[str] = None) -> List[Dict[str, Any
     from packing_assistant.runtime.cancel import check as cancel_check
 
     try:
-        if sheet and sheet in wb.sheetnames:
-            ws = wb[sheet]
-        elif "materials" in wb.sheetnames:
-            ws = wb["materials"]
-        else:
-            ws = wb.active
+        ws, selection, candidates = _select_material_sheet(wb, path, sheet)
         data = []
         # openpyxl pads the gap before a far row number with empty rows: a run the tool engine timed out stops here
         # (the check does nothing outside a timed-out or cancelled run)
@@ -1264,6 +1309,7 @@ def load_xlsx(path: PathLike, sheet: Optional[str] = None) -> List[Dict[str, Any
         errors.append(formula_errors[k])
     out = rows_to_ir(rows, headers=headers, source="xlsx", source_path=str(path), row_numbers=numbers, cell_errors=errors)
     _update_reading({"sheet": title, "header_row": first_row + h, "header_detected": h > 0,
+                          "sheet_selection": selection, "sheet_candidates": candidates,
                           "header_rows": [first_row + h, first_row + h + 1] if composed is not None else [first_row + h]})
     return out
 
@@ -1391,7 +1437,7 @@ def _no_rows_reason(path: "Path") -> str:
     return "no material rows parsed"
 
 
-def _cell_failure(path: str, exc: TableCellError) -> Dict[str, Any]:
+def _cell_failure(path: str, exc: Union[TableCellError, TableSheetError]) -> Dict[str, Any]:
     _LAST_READING.set({})
     _LAST_CLEAN_STATS.set({})
     return {"ok": False, "path": path, "materials": [], "ir": [], "column_map": {},
@@ -1403,7 +1449,7 @@ def parse_table_file(path: PathLike, **kwargs: Any) -> Dict[str, Any]:
     path = Path(path)
     try:
         ir = load_table(path, **kwargs)
-    except TableCellError as exc:
+    except (TableCellError, TableSheetError) as exc:
         return _cell_failure(str(path), exc)
     mats = ir_to_materials(ir)
     n_est = sum(1 for m in ir if (m.get("meta") or {}).get("dims_estimated"))

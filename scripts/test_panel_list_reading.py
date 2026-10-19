@@ -201,6 +201,127 @@ class Reading(unittest.TestCase):
         self.assertEqual((r["reading"]["header_row"], r["reading"]["rows"]), (3, [4, 5, 6, 7]))
         self.assertEqual(self.dims(r), [(4200.0, 1500.0, 250.0, 450.0, 6)] * 4)
 
+    def multi_sheet(self, name, sheets, *, active=0, hidden=()):
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        for title, rows in sheets:
+            ws = wb.create_sheet(title)
+            for row in rows:
+                ws.append(row)
+            if title in hidden:
+                ws.sheet_state = "hidden"
+        wb.active = active
+        path = self.dir / name
+        wb.save(path)
+        wb.close()
+        return path
+
+    def cargo_schedule(self, mark="P1", quantity=2, weight=100):
+        return [["Mark", "Description", "Qty", "Unit Wt (kg)", "L (mm)", "W (mm)", "H (mm)"],
+                [mark, "Vision panel (SYNTHETIC)", quantity, weight, 1000, 500, 200]]
+
+    def test_cover_and_notes_do_not_hide_the_only_cargo_schedule(self):
+        data = self.cargo_schedule() + [["Subtotal", None, 2, 200],
+                                        ["P2", "Spandrel panel (SYNTHETIC)", 3, 120, 1000, 500, 200],
+                                        ["GRAND TOTAL", None, 5, 560]]
+        for active in (0, 1, 2):
+            with self.subTest(active=active):
+                path = self.multi_sheet("covered.xlsx", [("Cover", [["SYNTHETIC PROJECT", "REV B"]]),
+                                                         ("Notes", [["Read the panel schedule before packing"]]),
+                                                         ("East elevation", data)], active=active)
+                plan = run_plan(file_path=str(path), lang="en")
+                self.assertTrue(plan["ok"], plan)
+                cons = plan["conservation"]
+                self.assertEqual((cons["pieces_in"], cons["pieces_out"], cons["kg_in"], cons["kg_out"]), (5, 5, 560, 560))
+                reading = plan["parse"]["reading"]
+                self.assertEqual((reading["sheet"], reading["rows"]), ("East elevation", [2, 4]))
+
+    def test_multiple_cargo_sheets_require_selection_even_when_one_is_hidden(self):
+        for hidden in ((), ("Revision B",)):
+            with self.subTest(hidden=hidden):
+                path = self.multi_sheet("revisions.xlsx", [("Revision A", self.cargo_schedule("A", 2)),
+                                                           ("Revision B", self.cargo_schedule("B", 4))], hidden=hidden)
+                plan = run_plan(file_path=str(path))
+                self.assertFalse(plan["ok"])
+                self.assertEqual(plan["source"], "unparsed")
+                self.assertIn("Revision A", str(plan["detail"]))
+                self.assertIn("Revision B", str(plan["detail"]))
+                self.assertNotIn("conservation", plan)
+                selected = parse_table_file(path, sheet="Revision B")
+                self.assertEqual([(m["id"], m["quantity"]) for m in selected["materials"]], [("B", 4)])
+                self.assertEqual(selected["reading"]["sheet"], "Revision B")
+
+    def test_materials_sheet_retains_precedence_but_explicit_choice_wins(self):
+        path = self.multi_sheet("canonical.xlsx", [("Other lot", self.cargo_schedule("OTHER", 3)),
+                                                   ("materials", self.cargo_schedule("CANONICAL", 2))])
+        self.assertEqual(parse_table_file(path)["materials"][0]["id"], "CANONICAL")
+        self.assertEqual(parse_table_file(path, sheet="Other lot")["materials"][0]["id"], "OTHER")
+        wrong = parse_table_file(path, sheet="missing revision")
+        self.assertFalse(wrong["ok"])
+        self.assertEqual(wrong["materials"], [])
+        self.assertIn("missing revision", wrong["errors"][0])
+
+    def test_sheet_discovery_does_not_hide_bad_formula_or_missing_weight(self):
+        for weight in ("=100+20", None):
+            with self.subTest(weight=weight):
+                path = self.multi_sheet("unconfirmed.xlsx", [("Cover", [["SYNTHETIC COVER"]]),
+                                                            ("Cargo", self.cargo_schedule(weight=weight))])
+                plan = run_plan(file_path=str(path), lang="en")
+                self.assertFalse(plan["ok"])
+                if weight is None:
+                    self.assertEqual(plan["error"], "missing_weight")
+                    self.assertEqual(plan["needs_human"][0]["sheet_row"], 2)
+                else:
+                    self.assertEqual(plan["source"], "unparsed")
+                    self.assertIn("'Cargo'!D2", str(plan["detail"]))
+        # An incomplete schedule cannot be discarded just because another sheet is fully numeric.
+        path = self.multi_sheet("partial.xlsx", [("Incomplete", [["Mark", "Qty"], ["P2", 3]]),
+                                                ("Complete", self.cargo_schedule())])
+        self.assertIn("multiple material worksheets", parse_table_file(path)["errors"][0])
+
+    def test_discovered_sheet_keeps_merged_header_and_stillage_gate(self):
+        path = self.sheet("merged_after_cover.xlsx", [["SYNTHETIC SCHEDULE"],
+                          ["Mark", "Description", "Qty", "Dimensions (mm)", None, None, "Weight (kg)", None],
+                          [None, None, None, "L", "W", "D", "Unit", "Total"],
+                          ["RACK-1", "A-frame stillage", 2, 1000, 500, 200, 100, 200]],
+                          merge=["A2:A3", "B2:B3", "C2:C3", "D2:F2", "G2:H2"])
+        wb = openpyxl.load_workbook(path)
+        wb.create_sheet("Cover", 0).append(["SYNTHETIC COVER"])
+        wb.active = 0
+        wb.save(path)
+        wb.close()
+        plan = run_plan(file_path=str(path), lang="en")
+        self.assertEqual((plan["ok"], plan["error"]), (False, "packaging_not_cargo"))
+        self.assertEqual(plan["needs_human"][0]["sheet_row"], 4)
+        self.assertEqual(plan["parse"]["reading"]["header_rows"], [2, 3])
+
+    def test_sheet_discovery_cancellation_stops_before_the_next_sheet(self):
+        from threading import Event
+        from unittest.mock import patch
+        from packing_assistant.runtime import cancel
+        from packing_assistant.tools import table_mapper
+
+        path = self.multi_sheet("cancel_scan.xlsx", [("Cover", [["SYNTHETIC COVER"]]),
+                                                    ("Notes", [["Shipping notes"]]),
+                                                    ("Cargo", self.cargo_schedule())])
+        stop = Event()
+        original = table_mapper._choose_header_row
+        scanned = []
+
+        def cancel_after_first_header(data):
+            scanned.append(data[0][0])
+            stop.set()
+            return original(data)
+
+        with cancel.scope(event=stop), patch.object(table_mapper, "_choose_header_row", cancel_after_first_header):
+            with self.assertRaises(cancel.RunCancelled):
+                parse_table_file(path)
+        self.assertEqual(scanned, ["SYNTHETIC COVER"])
+        # A later independent parse still works; the cancelled scan does not leak worksheet evidence.
+        recovered = parse_table_file(path)
+        self.assertTrue(recovered["ok"], recovered)
+        self.assertEqual(recovered["reading"]["sheet"], "Cargo")
+
     # rows ---------------------------------------------------------------------------------------------------
     def test_total_and_subtotal_rows_are_skipped_and_recorded(self):
         head = ["Mark", "Description", "Qty", "Length (mm)", "Width (mm)", "Depth (mm)", "Unit Wt (kg)", "Total Wt (kg)"]

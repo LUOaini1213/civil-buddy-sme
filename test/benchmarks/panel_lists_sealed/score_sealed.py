@@ -17,7 +17,7 @@ Per list (6: 3 that must plan, 3 that must stop for a person):
 
 No model, no network, a few seconds, deterministic.
 Usage: python test/benchmarks/panel_lists_sealed/score_sealed.py [--out PATH] [--verbose] [--check]
---check exits 1 when a score falls below FLOORS: the first scored run of PR #69 (2026-09-27), see README.md.
+--check exits 1 when a score falls below the current DEV FLOORS; their historical changes are in README.md.
 """
 from __future__ import annotations
 
@@ -44,9 +44,10 @@ ITT = Path(os.environ.get("CIVIL_SEALED_ITT") or ROOT / "test" / "benchmarks" / 
 # (key, "min" | "max", bound). First set to the AFTER score of the first scored run (PR #69 head 77d6122, 2026-09-27:
 # exact 4, safe 5, row_named 2, link_ok 5, wrong_plan 1). Raised on 2026-09-27 (round 3, packaging rows stop for a
 # person) to what that change scores: pl03 now stops at its stillage row, so no list gets a wrong plan any more. pl03
-# was named by the reviewer who asked for the fix, so it is a SEEN list; see README.md
+# was named by the reviewer who asked for the fix, so it is a SEEN list; see README.md.
+# 2026-10-19: sheet discovery fixes the already-seen pl06 cover page; exact now has a DEV floor of 6.
 FLOORS = (
-    ("exact", "min", 5),
+    ("exact", "min", 6),
     ("safe", "min", 6),
     ("row_named", "min", 3),
     ("link_ok", "min", 6),
