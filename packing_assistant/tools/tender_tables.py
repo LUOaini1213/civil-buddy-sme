@@ -221,6 +221,127 @@ def _parse_rows(facts: Optional[Facts], topic: str, label: str, always: bool, ad
     return rows
 
 
+def extract_table_en(parsed: Optional[Mapping[str, Any]], *, project_name: str = "Unnamed tender") -> str:
+    """English presentation of the same extracted facts; never translate source quotations."""
+    p = parsed or {}
+    ho = p.get("handoff") or {}
+    facts = p.get("facts") or ho.get("facts") or {}
+    project = next((m["value"] for m in _mentions(facts, "project") if m.get("value")), "") or project_name
+    labels = {"project": "Project", "owner": "Employer", "tender_no": "Tender reference",
+              "scope": "Scope of works", "area": "Floor area", "structure": "Structural form",
+              "deadline_bid": "Submission deadline", "deadline_open": "Tender opening",
+              "deadline_query": "Clarification deadline", "deadline_visit": "Site visit",
+              "qualification": "Qualifications", "track_record": "Relevant experience",
+              "pm": "Project manager", "tech_lead": "Technical lead", "registration": "Registration / workhead",
+              "duration": "Contract duration", "delivery": "Delivery period", "quality": "Quality standard",
+              "validity": "Tender validity", "warranty": "Warranty / defects liability",
+              "eval_method": "Evaluation method", "price_cap": "Price cap", "bond": "Tender security",
+              "bond_validity": "Security validity"}
+
+    def scoped_label(label: str, item: Mapping[str, Any]) -> str:
+        if item.get("lot"):
+            label += f" ({item['lot']})"
+        if item.get("role"):
+            label += f" / {item['role']}"
+        return label
+
+    names = ("Project and notice", "Timeline", "Eligibility and experience", "Substantive requirements",
+             "Evaluation and scores", "Price schedule and cap", "Named special works", "Tender security")
+    header = ("Item", "Source value / quotation", "Source location", "Extraction status", "Human follow-up")
+    lines = [f"# {project} · Tender requirements", "",
+             "> AI draft for internal review. Values and quotations are copied from the supplied material. "
+             "Missing facts are not invented; all qualifications, prices and submission decisions require human review.", ""]
+    document = ho.get("document") or {}
+    if document.get("cut"):
+        lines += ["> INCOMPLETE SOURCE: the document exceeded the reading limit. Unread content is not assessed.", ""]
+    if document.get("ocr"):
+        lines += ["> OCR SOURCE: verify every extracted value against the original page before use.", ""]
+    placed = set()
+    for number, ((_, topics), title) in enumerate(zip(_PARSE_SECTIONS, names), 1):
+        rows = []
+        for topic, _, always, _ in topics:
+            placed.add(topic)
+            mentions = [m for m in _mentions(facts, topic) if m.get("side") != "ours"]
+            for m in mentions:
+                value = str(m.get("value") or "")
+                label = scoped_label(labels.get(topic, topic.replace("_", " ").title()), m)
+                rows.append([label, value or str(m.get("note") or "UNSPECIFIED"),
+                             _source(m), "Not stated (reported)" if m.get("not_given") else "Extracted; unverified" if value else "No value extracted",
+                             "SOURCE CONFLICT: verify notice / front-table precedence and seek clarification."
+                             if "不一致" in str(m.get("origin") or "") else
+                             "Verify source precedence and any addenda; no compliance conclusion."])
+            if always and not mentions:
+                rows.append([labels.get(topic, topic), "Not detected in supplied text", "—", "Not detected", "Check the complete tender source."])
+        if number == 5:
+            rows += [[scoped_label(str(s.get("name") or "Score"), s), str(s.get("score") or "UNSPECIFIED"), _source(s),
+                      "Extracted; unverified", "Verify the evaluation criteria."] for s in facts.get("scores") or []]
+        if number == 4:
+            rows += [["Submission envelope", str(item.get("text") or "UNSPECIFIED"),
+                      str(item.get("locator") or "—"), "Extracted; unverified",
+                      "Verify the original submission and sealing requirements; no compliance conclusion."]
+                     for item in ho.get("envelope_sources") or []]
+        if number == 1:
+            rows.append(["Jurisdiction", _zone(facts), "—", "Unspecified" if _zone(facts) == "UNSPECIFIED" else "Extracted; unverified",
+                         "Verify the applicable jurisdiction."])
+            rows += [["Lot", str(lot), "—", "Extracted; unverified", "Keep each lot's requirements separate."]
+                     for lot in facts.get("lots") or []]
+            rows += [[f"Scope ({lot})", str(scope), "—", "Extracted; unverified", "Verify the original lot scope."]
+                     for lot, scope in (facts.get("lot_scopes") or {}).items()]
+        if number == 7:
+            rows += [[scoped_label(str(s.get("name") or "Special works"), s), str(s.get("detail") or s.get("note") or "UNSPECIFIED"),
+                      _source(s), "Not stated (reported)" if s.get("not_given") else "Extracted; unverified",
+                      "A named scope is not an approved method statement."] for s in facts.get("specials") or []]
+        lines += [f"## {number} {title}", ""]
+        lines += _table(header, rows) or ["Not detected in supplied text.", ""]
+    extra = [[scoped_label(labels.get(str(m.get("topic")), str(m.get("topic") or "Other").replace("_", " ").title()), m),
+              str(m.get("value") or m.get("note") or "UNSPECIFIED"), _source(m), "Extracted; unverified", "Verify the original source."]
+             for m in facts.get("mentions") or [] if m.get("topic") not in placed and m.get("side") != "ours"]
+    # Keep every extracted clause, including starred and rejection clauses, with its original locator.
+    extra += [[str(r.get("category") or "Requirement").replace("_", " ").title(),
+               _clip(str(r.get("exact_text") or "UNSPECIFIED"), 600), str(r.get("locator") or r.get("requirement_ref") or "—"),
+               "Extracted; unverified", "Source excerpt; consult the original. Mandatory / rejection items require human confirmation."] for r in p.get("requirements") or []]
+    lines += ["## 9 Additional clauses and human hand-off", ""]
+    lines += _table(header, extra)
+    workheads = ", ".join(ho.get("workheads") or [])
+    missing = "Not detected in supplied text"
+    lines += [f"- workhead: {workheads or missing} · envelope: {ho.get('envelope') or missing} · eval_method: {ho.get('eval_method') or missing}", ""]
+    ours = [m for m in facts.get("mentions") or [] if m.get("side") == "ours"]
+    if ours:
+        lines += ["### Bidder statements (not tender requirements)", ""]
+        lines += _table(("Item", "Bidder's source statement", "Source location"),
+                        [[scoped_label(labels.get(str(m.get("topic")), str(m.get("topic"))), m),
+                          str(m.get("value") or m.get("note") or "UNSPECIFIED"), _source(m)] for m in ours])
+    if document:
+        records = []
+        records += [[str(r.get("group") or "Preliminary review") + " / " + str(r.get("factor") or ""),
+                     str(r.get("standard") or "UNSPECIFIED"), _source(r), "Human review required",
+                     "Check this criterion individually; no eligibility conclusion."] for r in document.get("review") or []]
+        records += [["Unclassified front-table row / " + str(r.get("name") or "Unnamed"),
+                     str(r.get("text") or "UNSPECIFIED"), _source(r), "Unclassified",
+                     "Not classified does not mean no requirement."] for r in document.get("remainder") or []]
+        records += [["Potential rejection clause", str(r.get("text") or "UNSPECIFIED"), _source(r),
+                     "Human review required", "Weak signal only; verify the complete clause."]
+                    for r in document.get("candidates") or []]
+        records += [["Required submission document", str(r.get("name") or "UNSPECIFIED"), _source(r),
+                     "Extracted; unverified", "Verify the complete submission checklist and prescribed format."]
+                    for r in document.get("forms") or []]
+        lines += ["## 10 Document review records and submission checklist", ""]
+        lines += _table(header, records) or ["Not detected in supplied text; check the complete document.", ""]
+    if facts.get("unplaced"):
+        lines += ["### Unclassified source statements (not assessed)", ""]
+        lines += _table(("Source statement",), [[str(value)] for value in facts["unplaced"]])
+    for item in _unread(ho):
+        lines += [f"> UNREAD FILE: {table_cell(str(item.get('title') or 'Unknown'))}. "
+                  f"{table_cell(str(item.get('reason') or ''))} "
+                  "No conclusion can be drawn about facts in this file.", ""]
+    for item in facts.get("addenda_unread") or []:
+        lines += [f"> UNREAD ADDENDUM CHANGE: {table_cell(str(item.get('text') or 'UNSPECIFIED'))} "
+                  f"({_source(item)}). This change has not been incorporated; consult the original addendum.", ""]
+    lines += ["P0 eligibility, rejection and starred requirements remain subject to human confirmation. "
+              "This draft does not authorize bidding. submit_blocked=true.", ""]
+    return "\n".join(lines)
+
+
 def extract_table(parsed: Optional[Mapping[str, Any]], *, project_name: str = "未命名招标") -> str:
     p = parsed or {}
     ho = p.get("handoff") or {}
@@ -491,9 +612,31 @@ def _zone(facts: Optional[Facts]) -> str:
 
 def _unplaced(facts: Optional[Facts]) -> List[str]:
     left = [str(c) for c in (facts or {}).get("unplaced") or [] if str(c).strip()]
-    if not left:
+    records = [r for r in (facts or {}).get("unplaced_records") or [] if isinstance(r, Mapping)
+               and (r.get("values") or r.get("claim_only"))]
+    if not left and not records:
         return []
-    return ["", "原话里带数字、但没有对应栏位的句子（原样列出，未丢弃）：", ""] + [f"- {_clip(c, 60)}" for c in left]
+    lines = ["", "### 字段未明确的资料摘录", "",
+             "以下只保留字面值，不填入工期、有效期等已知响应栏，也不据此认定已响应。请确认每个值的字段及适用范围。",
+             "输入 L# 按整理输入的非空行计数（包括标题），不是原件页码；完整原文在表后。", ""]
+    rows = []
+    labels = {"ours": "我方响应摘录（字段未明确）", "tender": "招标摘录（字段未明确）", "unspecified": "资料侧未明确"}
+    for index, record in enumerate(records, 1):
+        source = f"U{index:03d} · 输入 L{record.get('line', '?')}"
+        for value in record.get("values") or ["（无数值，见完整原文）"]:
+            rows.append([labels.get(str(record.get("side")), labels["unspecified"]), str(value), "UNSPECIFIED",
+                         source, str(record.get("lot") or "未指定标段")])
+    if rows:
+        lines += _table(("资料侧", "字面摘录值", "待确认字段", "输入来源位置", "适用标段"), rows) + [""]
+    for index, record in enumerate(records, 1):
+        lines += [f"U{index:03d} 完整输入原文：", "", "> " + table_cell(str(record.get("quote") or record.get("note") or "")), ""]
+    covered = {str(r.get("note") or "") for r in records}
+    for quote in left:
+        if quote not in covered:
+            # Older handoffs carry only raw strings. Do not truncate them, and
+            # do not reconstruct a side or an original page number from a guess.
+            lines += ["未分类原文（字段及来源位置待确认）：", "", "> " + table_cell(quote), ""]
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +653,21 @@ def tech_outline(handoff: Optional[Mapping[str, Any]], *, project_name: str = "�
     evidence = [m for m in _mentions(facts, "evidence") if m.get("value")]
     specials = [s for s in facts.get("specials") or [] if not s.get("not_given")]
     doc_specials = list(ho.get("specials") or [])
+    technical = [r for r in ho.get("technical_response") or [] if isinstance(r, Mapping)]
+    organized = [r for r in technical if r.get("status") == "source_draft"]
+
+    def response_body(section: str) -> List[str]:
+        body = [r for r in organized if r.get("section") == section]
+        if not body:
+            return [f"{TBD}：未提供明确的我方响应措施，本节不把招标要求改写成已作出的承诺。", ""]
+        out = ["以下按用户提供的响应草稿整理，尚未核验现场条件、人员能力或证据；不是已批准的实施措施。", ""]
+        for record in body:
+            scope = f"（{record['lot']}）" if record.get("lot") else "（未指定标段，不自动套用于各标段）"
+            out += [f"响应草稿{scope}：", "",
+                    "\n".join("> " + table_cell(line) for line in str(record.get("value") or "").splitlines()), "",
+                    f"来源：{table_cell(str(record.get('source') or ''))} {table_cell(str(record.get('ref') or ''))}", ""]
+        out += ["待核对：上述措施与评分细则、正式图纸及商务承诺是否一致；未给的数量、频率和责任人不补造。", ""]
+        return out
 
     # ---- chapters: one per scoring point, then one per named special
     chapters: List[Dict[str, Any]] = []
@@ -559,7 +717,7 @@ def tech_outline(handoff: Optional[Mapping[str, Any]], *, project_name: str = "�
         if s.get("not_given"):
             special_rows.append([_with_lot("点名专项", str(s.get("lot") or "")), NOT_WRITTEN, _source(s), f"用户称招标未点名：{_clip(s.get('note'), 22)}"])
 
-    md = [f"# {project} · 技术标目录草稿", "",
+    md = [f"# {project} · 技术标目录与响应草稿" if organized else f"# {project} · 技术标目录草稿", "",
           "> AI 草稿 · 内部讨论。按评分点排目录，分数未核验则标未核实。不承诺得分或中标；专项只列目录，不是已论证方案。", ""]
     unread = _unread(ho)
     md += _unread_warning(unread)
@@ -574,18 +732,21 @@ def tech_outline(handoff: Optional[Mapping[str, Any]], *, project_name: str = "�
         ("structure", "结构形式", None, True), ("owner", "招标人", None, False), ("tender_no", "招标编号", None, False)),
         extra=[["辖区", _zone(facts), "—"]] + [[_with_lot("标段内容", lot), _clip(scope), "—"]
                                               for lot, scope in (facts.get("lot_scopes") or {}).items()]))
-    md += ["## 3 部署工艺", "", f"{TBD}：待按评分点、图纸和现场条件扩写；本稿不写未给的工艺参数。", ""]
+    md += ["## 3 部署工艺", ""] + response_body("deployment")
     md += ["## 4 工期资源", ""]
     md += _table(("项目", "内容", "来源"), _kv_rows(facts, (
         ("duration", "招标工期", "tender", True), ("duration", "工期承诺（我方）", "ours", False),
         ("delivery", "交货期", "tender", False))))
+    md += response_body("schedule")
     md += ["## 5 质量", ""]
     md += _table(("项目", "内容", "来源"), _kv_rows(facts, (("quality", "质量标准/目标", None, True), ("warranty", "缺陷责任期/质保期", None, False))))
-    md += ["## 6 安全环保", "", f"{TBD}：待按评分点与现场条件扩写。", ""]
+    md += response_body("quality")
+    md += ["## 6 安全环保", ""] + response_body("hse")
     md += ["## 7 点名专项", ""]
     md += _table(("专项名称", "参数原文", "来源", "接口"), special_rows) or [f"{MISSING}点名专项。", ""]
     md += ["## 8 组织机构", ""]
     md += _table(("岗位", "姓名或要求", "来源"), _people_rows(facts))
+    md += response_body("organization")
     md += ["## 9 缺项与自检", ""]
     check_rows = [["已有证据", _clip(m.get("value")), _source(m)] for m in evidence]
     if not evidence:
@@ -593,6 +754,9 @@ def tech_outline(handoff: Optional[Mapping[str, Any]], *, project_name: str = "�
     track = [m for m in _mentions(facts, "track_record", "tender") if m.get("value")]
     check_rows += [["类似业绩（招标要求）", _clip(m.get("value")), _source(m)] for m in track]
     check_rows += [["未读出的文件" + (f" {n}" if len(unread) > 1 else ""), _unread_cell(u), "—"] for n, u in enumerate(unread, 1)]
+    check_rows += [["技术响应待复核", str(r.get("reason") or "未组织正文"),
+                    str(r.get("source") or "") + " " + str(r.get("ref") or "")]
+                   for r in technical if r.get("status") != "source_draft"]
     md += _table(("事项", "内容", "来源"), check_rows)
     n_points = len(score_rows)
     md.append(f"- 自检：评分点 {n_points} 个，均已对应章节；点名专项 {len([r for r in special_rows if r[1] != NOT_WRITTEN])} 个，均已单列章节。"
@@ -613,6 +777,8 @@ def tech_outline(handoff: Optional[Mapping[str, Any]], *, project_name: str = "�
         "n_chapters": len(chapters),
         "from_extracted_scores": from_scores,
         "chapters": chapters,
+        "technical_response_count": len(organized),
+        "body_status": "source_organized" if organized else "outline_only",
         "markdown": "\n".join(md),
     }
 
@@ -689,7 +855,10 @@ _LABELS = {"poa": "授权委托书", "seal": "签章", "qualification": "资质"
            "quality": "质量标准", "validity": "投标有效期", "warranty": "缺陷责任期/质保期", "price_cap": "最高限价 / 我方报价"}
 #: what to say the numbers mean when both sides gave one, in the words the response matcher compares on
 _COMPARE = {"duration": "工期", "delivery": "交货期", "validity": "投标有效期", "warranty": "质保期", "bond": "保证金"}
-_PENDING = re.compile(r"还没|尚未|没拿到|没定|没盖|没开|没交|没办|没编|未盖|未开|未交|未办|待补|后补|明天补|还差|只转")
+_PENDING = re.compile(
+    r"还没|尚未|没拿到|没定|没盖|没开|没交|没办|没编|未盖|未开|未交|未办|待补|后补|明天补|还差|只转"
+    r"|\bnot\s+(?:yet\s+)?(?:been\s+)?(?:yet\s+)?(?:issued|signed|sealed|submitted|provided|paid|obtained|prepared|received|attached)\b"
+    r"|\b(?:will|shall)\s+be\s+(?:issued|signed|sealed|submitted|provided|paid|obtained|prepared|received|attached)\b", re.I)
 
 
 def _owner_for(facts: Optional[Facts], lot: str) -> str:
@@ -817,7 +986,8 @@ def compliance_gaps(handoff: Optional[Mapping[str, Any]], matrix: Optional[Mappi
     project = next((m["value"] for m in _mentions(tender, "project") + _mentions(ours, "project") if m.get("value")), "")
     number = next((m["value"] for m in _mentions(tender, "tender_no") + _mentions(ours, "tender_no") if m.get("value")), "")
     has_response = any(m.get("side") == "ours" for m in ours.get("mentions") or []) or any(
-        r.get("response_evidence") for r in comparison or [])
+        r.get("response_evidence") for r in comparison or []) or any(
+        r.get("side") == "ours" for r in ours.get("unplaced_records") or [] if isinstance(r, Mapping))
 
     md = ["# 废标检查岗 · 响应缺口对照", ""]
     if disclaimer:

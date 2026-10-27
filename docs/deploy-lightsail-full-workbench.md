@@ -1,4 +1,17 @@
-# Lightsail: run the full workbench and the packing engine behind one HTTPS site
+# Lightsail: historical split-service workbench setup
+
+> **Historical guide, not the current unified deployment procedure.** The split
+> routing below makes the Python workbench the main entry; it does not provide
+> the Rust Agent host at `/api/agent/*`. Do not use it to deploy the current
+> unified-workbench fixes. See [the unified launcher](civil-buddy/unified-workbench.md)
+> and [identity/state handoff](civil-buddy/release-handoff.md). The current launcher
+> owns a Rust host and its fixed Python domain service together; any HTTPS proxy
+> must target that host, not independently expose the Python sidecar.
+>
+> The instance-health statements below are historical observations, not a fresh
+> inspection of a running cloud server. The current local acceptance does not
+> certify Linux/Lightsail deployment. Confirm the chosen source version, service
+> layout, identity, state directories and rollback before switching an existing site.
 
 Runbook for a Lightsail instance that already serves the Rust workbench behind Caddy (HTTPS, access token).
 It adds the two Python services that carry the rest of the product, both on loopback only, and puts them behind
@@ -12,7 +25,7 @@ its virtualenv at `/opt/civil-buddy/app/.venv`, and the service user `ubuntu`; a
 > ③ 用 Caddy 对外只开 443，把主入口指向 Python 工作台。所有服务只监听本机，口令与模型密钥只放在服务器上的 0600 文件里。
 > 注意：Rust 桥接不带口令，网关设了 `CIVIL_TOKEN` 后它的装箱请求会被 401（健康检查仍显示 packing=true），见第 1 节末尾。
 
-## Why
+## Why (historical observations)
 
 `GET /api/health` on the current instance reports:
 
@@ -99,9 +112,13 @@ runs the packing engine in its own process and is not affected.
 
 ## 2. Python workbench on 127.0.0.1:8765
 
-The typed link request reads the files it names from the job folder (`CIVIL_JOB_ROOT`), not from files uploaded
-into the chat. Seed a job folder inside the checkout's `output/` (already a sandbox root) with the SYNTHETIC files
-only, as the Docker kit does:
+The historical version read typed link inputs only from `CIVIL_JOB_ROOT`.
+Current source also accepts explicitly selected chat attachments: it copies their
+original bytes into a unique run-owned input folder under their displayed names
+and records their hashes. Only the selected attachments enter that folder; duplicate
+filenames require selecting one version. Uploading a file without selecting it does
+not authorize its use. If deliberately using the legacy job-folder fallback, seed
+only SYNTHETIC files inside the checkout's `output/` as the Docker kit does:
 
 ```bash
 cd /opt/civil-buddy/app
@@ -204,8 +221,10 @@ curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOKEN" $H/ap
 curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOKEN" $H/demo           # 200
 ```
 
-In a browser: open `$H/?token=<token>` once (the token becomes an HttpOnly cookie). The two SYNTHETIC files are already
-in the job folder from step 2 (uploading them into the chat is not enough: the link reads the job folder). Send:
+For this historical split-service layout: open `$H/?token=<token>` once (the token
+becomes an HttpOnly cookie). The two SYNTHETIC files are in the legacy job folder
+from step 2. Current source can instead use both explicitly selected uploads with
+the names given in the request. Send:
 
 > Link the tender facade_itt_doc.md and the panel list facade_panels.xlsx and draft the logistics response
 

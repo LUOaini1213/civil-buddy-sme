@@ -840,9 +840,35 @@ pub fn audit_session(paths: &Paths, session: &str) -> Value {
     }
     let runs_dir = paths.out_root.join(session).join("runs");
     let mut rows: Vec<(std::time::SystemTime, Value)> = Vec::new();
+    let audit_scope = crate::runtime_core::WorkspaceContext::new(&paths.out_root).ok();
     if let Ok(rd) = fs::read_dir(&runs_dir) {
         for entry in rd.flatten() {
+            // Current specialist turns persist workbench.json; old Rust harness
+            // turns use trace.json. Both live in this owner's same session root.
+            // Read receipts only through the normal no-link containment guard.
+            let workbench = entry.path().join("workbench.json");
+            let bounded = audit_scope.as_ref().and_then(|scope| {
+                workbench.strip_prefix(&paths.out_root).ok().and_then(|relative| scope.resolve_read(relative).ok())
+            });
+            if let Some(path) = bounded {
+                if let Some(run) = fs::read_to_string(path).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok()) {
+                    if run["schema"] == "civil.workbench.run.v1"
+                        && run["run_id"].as_str() == entry.file_name().to_str() {
+                        let mut run = run;
+                        run["n_nodes"] = json!(run["nodes"].as_array().map_or(0, Vec::len));
+                        let mtime = run["mtime"].as_str()
+                            .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+                            .map(std::time::SystemTime::from)
+                            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                        rows.push((mtime, run));
+                        continue;
+                    }
+                }
+            }
             let p = entry.path().join("trace.json");
+            let Some(p) = audit_scope.as_ref().and_then(|scope| {
+                p.strip_prefix(&paths.out_root).ok().and_then(|relative| scope.resolve_read(relative).ok())
+            }) else { continue; };
             let Ok(text) = fs::read_to_string(&p) else {
                 continue;
             };
@@ -950,6 +976,20 @@ pub fn audit_session(paths: &Paths, session: &str) -> Value {
     let runs: Vec<Value> = rows.into_iter().map(|(_, v)| v).collect();
     let mut counts = json!({"runs": runs.len(), "tools": 0, "decisions": 0, "errors": 0, "writes": 0});
     for r in &runs {
+        if r["schema"] == "civil.workbench.run.v1" {
+            // Artifact receipts count saved copies; a confirmation is not an
+            // engineering approval. Do not fabricate write nodes from prose.
+            counts["writes"] = json!(counts["writes"].as_u64().unwrap_or(0)
+                + r["deliverables"].as_array().map_or(0, Vec::len) as u64);
+            counts["errors"] = json!(counts["errors"].as_u64().unwrap_or(0) + u64::from(r["ok"] == false));
+            for n in r["nodes"].as_array().into_iter().flatten() {
+                let key = match n["kind"].as_str() {
+                    Some("decision") => "decisions", Some("tool") => "tools", _ => continue,
+                };
+                counts[key] = json!(counts[key].as_u64().unwrap_or(0) + 1);
+            }
+            continue;
+        }
         for n in r.get("nodes").and_then(|v| v.as_array()).unwrap_or(&Vec::new()) {
             let k = n.get("kind").and_then(|v| v.as_str()).unwrap_or("");
             let key = match k {
@@ -984,7 +1024,7 @@ pub fn audit_session(paths: &Paths, session: &str) -> Value {
         "counts": counts,
         "decisions": decisions,
         "runs": runs,
-        "note": "只读聚合 demo/out/<session>/runs/*/trace.json；决策以 Run.hitl 为准",
+        "note": "只读聚合本会话 trace.json 和 workbench.json 的实际运行记录；签认确认不等于专业批准。",
     })
 }
 

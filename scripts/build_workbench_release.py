@@ -20,6 +20,7 @@ STATIC = (
     "manifest.webmanifest", "posts.js", "studio.js", "styles.css", "tickets.js", "voice.js",
     "sw.js", "modules/auth.js", "modules/toast.js", "modules/drafts.js", "modules/uploads.js",
     "modules/turn-stream.js", "modules/deliverables.js", "modules/session-watch.js", "modules/session-nav.js",
+    "modules/entry-availability.js",
     "agent.html", "agent.css", "agent.js", "theme.css", "theme.js", "workbench-shell.css",
     "i18n.js", "i18n-agent.js", "i18n-home.js", "i18n-engineering.js", "i18n-logistics.js",
     "icons/cb-icon-192.png", "icons/cb-icon-512.png", "icons/cb-icon.svg",
@@ -37,7 +38,7 @@ STATIC = (
     "vendor/three/OrbitControls.js", "vendor/three/LICENSE.txt", "vendor/three/manifest.json",
 )
 EXPLICIT = (
-    "gateway/__init__.py", "gateway/app.py", "frontend/index.html", "frontend/workbench.html",
+    "gateway/__init__.py", "gateway/app.py", "gateway/idempotency.py", "frontend/index.html", "frontend/workbench.html",
     "gateway/web_link.py", "gateway/pages/access.html", "gateway/pages/demo.html",
     "frontend/manifest.webmanifest", "frontend/icons/cb-icon.svg",
     "frontend/icons/cb-icon-192.png", "frontend/icons/cb-icon-512.png",
@@ -58,6 +59,7 @@ EXPLICIT = (
     # 语音输入：页面加载 voice.js；本机识别需要术语表，装依赖的说明在 requirements-asr.txt 里
     "demo/asr_lexicon.txt", "requirements-asr.txt", "docs/voice-input.md",
     "requirements-cad.txt", "docs/civil-buddy/cad-to-3d.md",
+    "requirements-cad-step.txt", "examples/cad-to-3d/synthetic-section-config.json",
     "requirements-analysis.txt", "requirements-engineering.txt", "docs/civil-buddy/engineering-workbench.md",
     "requirements-planning.txt", "docs/civil-buddy/planning-workbench.md",
     "requirements-logistics.txt", "requirements-logistics-ocr.txt",

@@ -5,8 +5,6 @@ import html
 import re
 from dataclasses import dataclass
 
-from packing_assistant.jurisdiction import infer_jurisdiction
-
 UNKNOWN = "UNSPECIFIED"
 DISCLAIMER = "内部讨论 AI 草稿。已填内容仅为用户提供的输入，未核验；本稿未做设计计算、审批或签认。缺数不补造，不作为施工、投标、审图或验收依据。"
 
@@ -107,6 +105,14 @@ PROFILES = {
 }
 
 _COMMON = ("辖区", "适用依据|规范名称", "依据版本|年份", "CN依据", "SG依据", "EU依据", "CN版本", "SG版本", "EU版本", "CN接口", "SG接口", "EU接口")
+_EXTRA = {
+    "port": ("码头名称|对象|泊位|码头", "地质资料|地勘|地勘报告|地质报告", "港口功能|货种|用途", "水位基准", "陆域接口", "疏浚资料", "地质来源"),
+    "municipal": ("道路名称|路名|道路名|路段", "道路等级|等级", "起止桩号|桩号|起讫桩号", "规划横断面|横断", "排水出路|雨水出路", "现状地面标高|地面标高", "地质资料|地勘|地勘报告", "管线来源"),
+    "bridge": ("桥梁名称|桥梁|桥涵", "桥宽|桥面宽|桥面全宽", "荷载等级|荷载|活载", "截面型式|上部|上部结构", "地质资料|地勘|地勘报告|地质报告", "荷载来源", "通航净空|通航净高"),
+    "tunnel": ("隧道名称|隧道|区间", "隧道长度|区间长度|全长", "管片资料|管片", "监测对象|监测|监控量测", "围岩分级|围岩", "围岩来源", "支护来源", "监测阈值来源", "隧道总体名称"),
+    "traffic": ("研究名称|评价节点|节点|交叉口", "方向车型|方向|转向|进口|流向", "现状信号周期|信号周期", "调查来源", "用户车型|车型", "实验目的"),
+    "design-coord": ("问题编号|会议编号|会议或问题编号|纪要编号", "文件名称|文件名|提资文件", "对象图号|图纸编号", "状态证据", "变更来源", "决议证据"),
+}
 _EMPTY = re.compile(r"(?:\[A\d+\]\s*)?(?:待填|待核|未知|未提供|UNSPECIFIED|TBD|N/A)", re.I)
 
 
@@ -119,130 +125,16 @@ def _table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:
                       *("| " + " | ".join(_cell(v) for v in row) + " |" for row in rows)]) + "\n"
 
 
-def _records(profile: Profile, text: str) -> list[dict[str, str]]:
-    fields = (*_COMMON, *(name for section in profile.sections for name in section.fields))
-    aliases = {alias: name.split("|", 1)[0] for name in fields for alias in name.split("|")}
-    pattern = re.compile(r"(?<![\w])(" + "|".join(re.escape(s) for s in sorted(aliases, key=len, reverse=True)) + r")\s*[:：=]\s*")
-    identity = profile.identity.split("|", 1)[0]
-    records: list[dict[str, str]] = []
-    current: dict[str, str] = {}
-    common: dict[str, str] = {}
-    started = False
-    preamble: list[str] = []
-    headers: list[str] = []
-    common_keys = {name.split("|", 1)[0] for name in _COMMON} | {"项目名称", "图纸清单"}
-
-    def value(raw: str, *, table_cell: bool = False) -> str:
-        if table_cell:
-            clean = html.unescape(raw.strip())
-        else:
-            clean = raw.strip(" \t，,；。")
-            while clean.endswith(";") and not re.search(r"&(?:#[0-9]+|#x[0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);$", clean):
-                clean = clean[:-1].rstrip(" \t，,；。")
-        return UNKNOWN if not clean or _EMPTY.fullmatch(clean) else clean
-
-    def flush():
-        nonlocal current
-        if current:
-            records.append(current)
-            current = {}
-
-    def assign(pairs: list[tuple[str, str]]) -> None:
-        for key, val in pairs:
-            if key in current and val != current[key]:
-                current[key] = "多值待确认：" + current[key] + "；" + val
-            else:
-                current[key] = val
-
-    for raw in text.splitlines():
-        line = raw.strip()
-        table_pairs = None
-        if line.startswith("|"):
-            # Remove the two border pipes only; an adjacent pipe is an empty cell.
-            interior = line[1:]
-            if interior.endswith("|"):
-                interior = interior[:-1]
-            cells = [c.strip() for c in interior.split("|")]
-            if cells and all(re.fullmatch(r":?-{3,}:?", c) for c in cells):
-                continue
-            if headers:
-                records.append({aliases[label]: value(cell, table_cell=True) for label, cell in zip(headers, cells) if label in aliases})
-                started = True
-                continue
-            if sum(c in aliases for c in cells) >= 2:
-                flush()
-                headers = cells
-                continue
-            if len(cells) >= 2 and cells[0] in aliases:
-                table_pairs = [(aliases[cells[0]], value(cells[1], table_cell=True))]
-            else:
-                continue
-        else:
-            headers = []
-        matches = list(pattern.finditer(line))
-        pairs = table_pairs if table_pairs is not None else [
-            (aliases[m.group(1)], value(line[m.end():matches[i + 1].start() if i + 1 < len(matches) else len(line)]))
-            for i, m in enumerate(matches)]
-        # Only explicit metadata before the first object is shared. A later
-        # object's jurisdiction and inputs remain local to that object.
-        if not started:
-            if table_pairs is None:
-                first_id = next((match.start() for match in matches if aliases[match.group(1)] == identity), len(line))
-                preamble.append(line[:first_id])
-                preamble_zone = infer_jurisdiction("\n".join(preamble))
-                if "辖区" not in common and preamble_zone != UNKNOWN:
-                    common["辖区"] = preamble_zone
-            local = []
-            for key, val in pairs:
-                if key == identity:
-                    started = True
-                if not started and key in common_keys:
-                    common[key] = val
-                else:
-                    local.append((key, val))
-            pairs = local
-        positions = [index for index, (key, _) in enumerate(pairs) if key == identity]
-        if not positions:
-            assign(pairs)
-            continue
-        started = True
-        if identity in current:
-            flush()
-        if len(positions) == 1:
-            chunks = [pairs]  # One identifier may be first, middle or last.
-        elif positions[0] == 0:
-            ends = positions[1:] + [len(pairs)]
-            chunks = [pairs[start:end] for start, end in zip(positions, ends)]
-        else:
-            # Repeated suffix records: fields ... ID; fields ... ID.
-            starts = [0] + [position + 1 for position in positions[:-1]]
-            chunks = [pairs[start:end + 1] for start, end in zip(starts, positions)]
-            chunks[-1].extend(pairs[positions[-1] + 1:])
-        for index, chunk in enumerate(chunks):
-            if index:
-                flush()
-            assign(chunk)
-    flush()
-    merged = []
-    common_zone = infer_jurisdiction(common.get("辖区", ""))
-    for record in records or [{}]:
-        inherited = dict(common)
-        local_zone = infer_jurisdiction(record.get("辖区", ""))
-        if "辖区" in record and local_zone != common_zone:
-            # An explicitly different/unknown jurisdiction cannot acquire an
-            # unscoped standard merely because it appeared in a CN/SG preamble.
-            inherited.pop("适用依据", None)
-            inherited.pop("依据版本", None)
-        merged.append({**inherited, **record})
-    return merged
+def _records(profile: Profile, text: str) -> list[dict]:
+    from packing_assistant.post_drafts.design_infrastructure_observations import parse
+    post = next(post for post, item in PROFILES.items() if item is profile)
+    return parse(post, text)
 
 
 def _scope_table(row: dict[str, str], text: str) -> str:
-    # Full-request inference would borrow another object's CN/SG/EU signals.
-    local_text = "\n".join(f"{key}：{value}" for key, value in row.items())
-    zone = infer_jurisdiction(row.get("辖区", "") or local_text)
+    zone = row.get("辖区", row.get("_project_zone", UNKNOWN))
     if zone == "DUAL":
-        codes = [code for code in ("CN", "SG", "EU") if re.search(r"(?<![A-Za-z])" + code + r"(?![A-Za-z])", local_text, re.I)]
+        codes = [code for code in ("CN", "SG", "EU") if any(row.get(code+k) not in {None, UNKNOWN} for k in ("依据", "版本", "接口"))]
         codes = codes if len(codes) >= 2 else ["辖区A待指定", "辖区B待指定"]
     else:
         codes = [zone]
@@ -254,16 +146,76 @@ def _scope_table(row: dict[str, str], text: str) -> str:
     table = _table(("辖区", "用户指定依据", "版本待核", "条款", "审查接口待核", "状态"), rows)
     if zone == "DUAL" and row.get("适用依据"):
         table += "未分配辖区的用户依据：" + _cell(row["适用依据"]) + "；须明确归属后分别核对。\n"
-    return f"- 辖区：{zone}\n\n" + table
+    return f"- 辖区：{zone}\n- 对象辖区：{row.get('辖区', UNKNOWN)}；总体资料范围不代填对象空栏\n- submit_blocked=true；未签认\n\n" + table
+
+
+def _source(row, key, explicit="资料来源"):
+    return row.get(explicit) or row.get("资料来源") or row.get("_sources", {}).get(key) or UNKNOWN
+
+
+def _professional(post, row):
+    identity = PROFILES[post].identity.split("|", 1)[0]
+    out = []
+    if post == "municipal":
+        title, columns = "道路区段专业核对", ("道路名称", "起止桩号", "红线宽", "现状地面标高", "设计高程", "设计速度", "面层", "现状管线", "管线权属单位", "待核记录")
+    elif post == "bridge":
+        title, columns = "桥梁比选与输入来源", ("桥梁名称", "跨径组合", "桥宽", "候选桥型", "截面型式", "荷载等级", "荷载来源", "基础型式", "地质资料", "待核记录")
+    elif post == "port":
+        title, columns = "港工对象与资料接口", ("码头名称", "港口功能", "设计船型", "设计高水位", "设计低水位", "波浪要素", "水位基准", "地质资料", "地质来源", "陆域接口", "待核记录")
+    elif post == "tunnel":
+        title, columns = "区间支护与来源待核", ("隧道名称", "隧道总体名称", "围岩分级", "围岩来源", "埋深", "工法", "初期支护资料", "超前支护资料", "监测对象", "监测来源", "监测阈值来源", "待核记录")
+    elif post == "traffic":
+        title, columns = "交通调查与实验待核", ("研究名称", "研究类型", "调查日期", "调查时段", "方向车型", "用户车型", "交通量", "流量文件", "现状信号周期", "模型文件", "待核记录")
+    else:
+        title, columns = "会审行动与证据归属", ("问题编号", "问题位置", "图号", "对象图号", "图纸版本", "问题描述", "责任专业", "责任人", "完成时限", "截止日期", "用户状态", "状态证据", "决议证据", "待核记录")
+    children = row.get("_traffic_rows", []) if post == "traffic" else row.get("_pipe_rows", []) if post == "municipal" else []
+    if children:
+        from packing_assistant.post_drafts.design_infrastructure_observations import FLOW_FIELDS, PIPE_FIELDS
+        child_keys = FLOW_FIELDS if post == "traffic" else PIPE_FIELDS
+        professional_rows = [{**{k: v for k, v in row.items() if k not in child_keys}, **child} for child in children]
+    else:
+        child_keys, professional_rows = set(), [row]
+    out += ["## "+title, "", _table(columns+("资料核对状态", "签认"), [
+        tuple(record.get(key, UNKNOWN) for key in columns)+("用户输入未核验；接口待责任专业复核；本轮未计算或审批", "")
+        for record in professional_rows]), ""]
+    if post == "municipal" and children:
+        pipe_columns = ("道路名称", "起止桩号", "管线名称", "现状管线", "拟建管线", "管径", "交叉位置", "管线权属单位", "管线来源")
+        out += ["## 管线接口逐项归属", "", _table(pipe_columns+("探测及复核状态", "签认"), [
+            tuple(record.get(key, UNKNOWN) for key in pipe_columns)+("未探测或核验；待权属单位确认", "")
+            for record in professional_rows]), ""]
+    # Additional typed input fields are not discarded merely because the old
+    # outline did not have a matching column. Each keeps its own source.
+    facts = [(row.get(identity, UNKNOWN), key, value, _source(row, key), row.get("_sources", {}).get(key, UNKNOWN), "未核验；待责任专业签认")
+             for key, value in row.items() if not key.startswith("_") and key not in child_keys and value != UNKNOWN]
+    for child in children:
+        object_name = "；".join(row.get(k, UNKNOWN) for k in (identity,)) + "；" + "；".join(
+            child.get(k, UNKNOWN) for k in (("调查时段", "方向车型") if post == "traffic" else ("管线名称", "现状管线", "拟建管线")))
+        facts.extend((object_name, key, value, _source(child, key), child.get("_sources", {}).get(key, UNKNOWN), "未核验；待责任专业签认")
+                     for key, value in child.items() if not key.startswith("_") and value != UNKNOWN)
+    out += ["## 对象参数与来源逐项登记", "", _table(("专业对象", "参数栏目", "用户给定值（未核）", "资料来源", "输入位置（非原件页码）", "核对状态"), facts or [(UNKNOWN,)*5+("未核验",)]), ""]
+    context = row.get("_context_data", {})
+    out += ["## 项目与文件资料归属", "", _table(("项目", "总体辖区（不代填对象）", "设计阶段", "输入文件", "资料状态"), [
+        (context.get("项目名称", UNKNOWN), context.get("总体辖区", UNKNOWN), context.get("设计阶段", UNKNOWN), row.get("_origin") or UNKNOWN, "未核验")]), ""]
+    return out
 
 
 def _render(profile: Profile, row: dict[str, str], text: str, post: str) -> str:
     rows = dict(row)
     if post == "design-coord":
         decision = rows.get("已议定事项", "")
-        if re.search(r"建议|拟|待定|待批|未决定|未通过|尚未|是否", decision):
+        evidence = rows.get("决议证据", UNKNOWN)
+        if decision not in {"", UNKNOWN} and (evidence == UNKNOWN or re.search(r"建议|拟|待定|待批|未决定|未通过|尚未|是否|口头|答应|承诺|计划|讨论|预计|待签|未签", decision)):
             rows["待定事项"] = "；".join(v for v in (rows.get("待定事项"), decision) if v)
             rows["已议定事项"] = UNKNOWN
+    if post in {"traffic", "municipal"}:
+        from packing_assistant.post_drafts.design_infrastructure_observations import FLOW_FIELDS, PIPE_FIELDS
+        children = rows.get("_traffic_rows" if post == "traffic" else "_pipe_rows", [])
+        keys = FLOW_FIELDS if post == "traffic" else PIPE_FIELDS
+        if len(children) > 1:
+            for key in keys:
+                supplied = {child.get(key, UNKNOWN) for child in children}
+                if len(supplied) > 1:
+                    rows[key] = UNKNOWN
     out = [f"# {profile.title}（AI 草稿）", "", DISCLAIMER, "", _scope_table(rows, text)]
     if post == "traffic":
         kind = rows.get("研究类型", "")
@@ -281,7 +233,7 @@ def _render(profile: Profile, row: dict[str, str], text: str, post: str) -> str:
             out += [note, ""]
     out += ["## 计算与审批结果待填", "", _table(("结果项", "工具输出", "状态"), [(label, UNKNOWN, "未计算或未核验") for label in profile.outputs]),
             "", _table(("编制核对", "专业复核", "签认"), [("", "", "")]), ""]
-    return "\n".join(out)
+    return "\n".join(out+_professional(post, rows))
 
 
 def build_draft(expert_id: str, tool_name: str, text: str) -> str | None:

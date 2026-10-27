@@ -102,6 +102,9 @@ summary { cursor: pointer; min-height: 28px; }
 .artifact { min-width: 0; padding: 14px; border: 1px solid var(--cb-line); border-radius: var(--cb-radius-md); background: var(--cb-panel-soft); }
 .artifact a { font-weight: 600; overflow-wrap: anywhere; }
 .artifact p { font-size: var(--cb-fs-xs); }
+.source-versions .section-title { flex-wrap: wrap; }
+#agentSources { padding-inline-start: 18px; }
+#agentSources li { margin-block: 12px; overflow-wrap: anywhere; }
 .artifact details { margin-top: 8px; font-size: var(--cb-fs-xs); }
 .events { margin: 12px 0 0; padding-left: 23px; }
 .events li { padding: 8px 0 10px 8px; border-bottom: 1px solid var(--cb-line-soft); }

@@ -29,6 +29,7 @@ pub struct ProductState {
     pub auth: Arc<super::auth::InstanceAuth>,
     index: Mutex<Connection>,
     _owner: std::fs::File,
+    source_checks: Arc<tokio::sync::Semaphore>,
 }
 type HttpError = (StatusCode, Json<Value>);
 fn error(code: StatusCode, message: impl ToString) -> HttpError {
@@ -70,6 +71,7 @@ impl ProductState {
             index: Mutex::new(index),
             auth,
             _owner: owner,
+            source_checks: Arc::new(tokio::sync::Semaphore::new(1)),
         }))
     }
     pub fn register(&self, path: &str) -> Result<Value, String> {
@@ -149,6 +151,7 @@ pub fn router(state: Arc<ProductState>) -> Router {
         .route("/api/agent/turns", post(start).get(turns))
         .route("/api/agent/turns/{turn}", get(turn))
         .route("/api/agent/turns/{turn}/events", get(events))
+        .route("/api/agent/turns/{turn}/source-status", get(source_status))
         .route("/api/agent/turns/{turn}/cancel", post(cancel))
         .route("/api/agent/artifacts/{id}", get(artifact))
         .layer(DefaultBodyLimit::max(256 * 1024))
@@ -161,8 +164,9 @@ async fn capabilities(State(st): State<Arc<ProductState>>) -> Json<Value> {
         json!({"available":true,"models":{"configured":!cfg.api_key.is_empty(),"model":cfg.model},
         "modes":["steps","model"],"sandbox":["read-only","workspace-write"],
         "sandbox_controls":{"policy":true,"os_enforced":null,"network_confined":null,"reads_confined":null,"probe":"workspace_required"},
-        "features":{"context":true,"subagents":true,"cancel":true,"documents":true,"retrieval":true,"voice":false},
-        "identity":st.auth.capabilities(),"unavailability_reason":null}),
+        "features":{"context":true,"subagents":true,"cancel":true,"documents":true,"retrieval":true,"voice":false,"source_versions":true},
+        "identity":st.auth.capabilities(),"unavailability_reason":null,
+        "write_confirmation":super::request_policy::capabilities()}),
     )
 }
 #[derive(Deserialize)]
@@ -378,6 +382,7 @@ async fn start(
     stored_request["actor_id"] = json!(st.auth.owner());
     stored_request["identity_mode"] = st.auth.capabilities()["mode"].clone();
     stored_request["risk_confirmation_present"] = json!(agent::current_turn_confirmation(&req));
+    stored_request["confirmation_source"] = json!(if agent::current_turn_confirmation(&req) {"risk_confirmation"} else {"none"});
     let begun = match &key {
         Some(key) => st
             .runtime
@@ -406,6 +411,7 @@ async fn start(
     };
     lease.emit("authorization", json!({"actor_id":st.auth.owner(),"sandbox":req.sandbox,
         "risk_confirmation_present":agent::current_turn_confirmation(&req),"confirmation_scope":"current_turn",
+        "confirmation_source":if agent::current_turn_confirmation(&req) {"risk_confirmation"} else {"none"},
         "professional_signoff":false})).map_err(bad)?;
     let response = json!({"turn_id":lease.turn_id(),"session_id":session});
     tokio::spawn(agent::run(st, ws, req, lease));
@@ -462,6 +468,39 @@ async fn events(
     Ok(Json(
         json!({"events":events,"turn":st.runtime.turn(&ws,&session,&id).map_err(bad)?}),
     ))
+}
+async fn source_status(
+    State(st): State<Arc<ProductState>>,
+    Path(id): Path<String>,
+    Query(q): Query<Scope>,
+) -> Result<Json<Value>, HttpError> {
+    let ws = st.workspace(&q.workspace).map_err(bad)?;
+    let session = q.session()?;
+    let id = TurnId::parse(id).map_err(bad)?;
+    let record = st.runtime.turn(&ws, &session, &id).map_err(bad)?;
+    if !record.status.is_terminal() {
+        return Err(error(StatusCode::CONFLICT, "Wait for this turn to stop before checking source versions"));
+    }
+    let permit = st.source_checks.clone().try_acquire_owned()
+        .map_err(|_| error(StatusCode::TOO_MANY_REQUESTS, "A source-version check is already running"))?;
+    let task = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        // Hold the permit until the actual reader ends, including after a client timeout.
+        let _permit = permit;
+        let mut events = Vec::new();
+        let mut after = 0;
+        for _ in 0..4 {
+            let page = st.runtime.replay(&ws, &session, &id, after, 1000).map_err(|e| e.to_string())?;
+            let Some(last) = page.last() else { break; };
+            after = last.seq;
+            events.extend(page);
+            if after >= record.last_seq { break; }
+        }
+        Ok(super::source_versions::check(&ws, &record, &events, after >= record.last_seq))
+    });
+    let result = tokio::time::timeout(std::time::Duration::from_secs(15), task).await
+        .map_err(|_| error(StatusCode::GATEWAY_TIMEOUT, "Source-version check did not finish; no unchanged status is confirmed"))?
+        .map_err(bad)?.map_err(bad)?;
+    Ok(Json(result))
 }
 async fn cancel(
     State(st): State<Arc<ProductState>>,

@@ -27,6 +27,7 @@ for _key in [k for k in os.environ if k.endswith("_API_KEY")]:
     os.environ.pop(_key)
 
 from packing_assistant import expert_turn  # noqa: E402
+from packing_assistant.office_job import tables_from_md  # noqa: E402
 from packing_assistant.runtime import agent_loop  # noqa: E402
 
 FORBIDDEN = ("可以投标", "不会废标", "资格审查通过", "符合投标资格", "建议投标", "确保中标", "可得满分", "可以开工", "废标成立")
@@ -249,15 +250,19 @@ class EnglishAndStaff(Posts):
         md = self.run_post("bid-parse", "Tender for Jurong East MRT Station Upgrading. Employer: Land Transport Authority. Tender No. LTA/2026/C123.\n"
                                          "Contract Period: 24 months. The tender validity period shall be 120 days. Tender Deposit: S$500,000.\n"
                                          "Tender closing date: 30 October 2026, 4.00 pm. Tenderer must be registered with BCA under workhead CW01 grade A1.")
-        self.assertEqual(cell(md, "项目名称", "要求原文"), "Jurong East MRT Station Upgrading")
-        self.assertEqual(cell(md, "招标人", "要求原文"), "Land Transport Authority")
-        self.assertEqual(cell(md, "招标编号", "要求原文"), "LTA/2026/C123")
-        self.assertEqual(cell(md, "辖区", "要求原文"), "SG")
-        self.assertEqual(cell(md, "工期", "要求原文"), "24 months")
-        self.assertEqual(cell(md, "投标有效期", "要求原文"), "120 days")
-        self.assertEqual(cell(md, "投标保证金", "要求原文"), "S$500,000")
-        self.assertEqual(cell(md, "投标截止", "要求原文"), "30 October 2026, 4.00 pm")
-        self.assertEqual(cell(md, "注册资格/工作类别", "要求原文"), "CW01 grade A1")
+        # English requests now get English presentation, with identical source values.
+        table_rows = [row for _, table in tables_from_md(md) for row in table[1:]]
+        values = {row[0]: row[1] for row in table_rows if len(row) == 5}
+        self.assertEqual(values["Project"], "Jurong East MRT Station Upgrading")
+        self.assertEqual(values["Employer"], "Land Transport Authority")
+        self.assertEqual(values["Tender reference"], "LTA/2026/C123")
+        self.assertEqual(values["Jurisdiction"], "SG")
+        self.assertEqual(values["Contract duration"], "24 months")
+        self.assertEqual(values["Tender validity"], "120 days")
+        self.assertEqual(values["Tender security"], "S$500,000")
+        self.assertEqual(values["Submission deadline"], "30 October 2026, 4.00 pm")
+        self.assertEqual(values["Registration / workhead"], "CW01 grade A1")
+        self.assertIn("- workhead: CW01 · envelope:", md)
 
     def test_our_english_offer_against_their_english_requirement(self) -> None:
         md = self.run_post("bid-compliance", "The Works shall be completed within 24 months. Tender validity period: 120 days. "

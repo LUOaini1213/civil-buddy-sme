@@ -42,7 +42,7 @@ _EXPECTED_ABSENCE = frozenset({("read_link_record", "no_link_record")})
 # A handler that answers with one of these judged the call, not the tool: bad arguments, a policy or sandbox
 # refusal, or a cancel. They say nothing about whether the tool works, so they neither add to nor clear the fault
 # streak. A handler that raises is a crash and still counts (its result keeps the historical invalid_args label).
-_VERDICTS = frozenset({ERR_INVALID, ERR_DENIED, ERR_CANCELLED})
+_VERDICTS = frozenset({ERR_INVALID, ERR_DENIED, ERR_CANCELLED, "wrong_post"})
 
 
 def _write_path(args: Dict[str, Any]) -> Optional[str]:

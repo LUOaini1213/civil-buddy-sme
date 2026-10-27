@@ -68,6 +68,23 @@ class DailyReportContentTests(unittest.TestCase):
         self.assertNotIn("17人", text)
         self.assertNotIn("SG：BCA", text)
 
+    def test_short_daily_command_keeps_literal_weather_and_attendance(self) -> None:
+        for command in ("写一份项目日报", "帮我写一份日报", "@项目日报 写一份项目日报"):
+            with self.subTest(command=command):
+                text, _ = self._draft("pm-daily__log", command+" 临边 晴 木工12人")
+                self.assertIn("用户口述：晴。", self._chapter(text, "2 天气"))
+                self.assertIn("木工12人", self._chapter(text, "5 出勤"))
+
+    def test_short_daily_command_cannot_turn_forecasts_into_current_observations(self) -> None:
+        text, _ = self._draft("pm-daily__log", "写一份项目日报 明天临边 晴 木工12人")
+        self.assertIn("| 天气 | 天气待填 |", text)
+        self.assertIn("| 出勤 | 出勤待填 |", text)
+
+    def test_short_daily_command_does_not_interpret_rainwater_pipes_as_weather(self) -> None:
+        text, _ = self._draft("pm-daily__log", "写一份项目日报 临边 雨水管 木工12人")
+        self.assertIn("| 天气 | 天气待填 |", text)
+        self.assertIn("木工12人", self._chapter(text, "5 出勤"))
+
     def test_pipe_names_and_trade_names_do_not_invent_weather_or_people(self) -> None:
         text, _ = self._draft("pm-daily__log", "写一份项目日报；部位：地下室；雨水管安装；防雪措施；钢筋工；出勤待填")
         self.assertIn("| 天气 | 天气待填 |", text)
@@ -134,6 +151,111 @@ class DailyReportContentTests(unittest.TestCase):
         self.assertNotIn("整理整改证据", safety)
         self.assertIn("整理整改证据", tomorrow)
 
+    def test_narrative_weather_resources_and_next_day_reach_body_fields(self) -> None:
+        text, _ = self._draft("pm-daily__log", "10月8日阴转小雨，试验楼2#楼七层剪力墙钢筋绑扎完成到C轴，"
+                             "木工班13人、钢筋班17人，泵车一台停在南门院内，"
+                             "下午监理查出七层西侧临边防护缺一段，已要求当天整改，"
+                             "明天准备支七层顶板模板，帮我出今天的日报")
+        body = text.split("## 日报字段", 1)[1]
+        for label, value in (("日期", "10月8日"), ("天气", "阴转小雨"), ("部位", "2#楼七层剪力墙"),
+                             ("出勤", "13人"), ("出勤", "17人"), ("机械材料", "泵车"),
+                             ("安全质量记事", "临边防护缺一段"), ("明日计划", "支七层顶板模板")):
+            self.assertTrue(any(label in line and value in line for line in body.splitlines()), (label, value))
+        self.assertNotIn("支七层顶板模板", self._chapter(text, "4 形象进度"))
+        self.assertNotIn("隐患已消除", body)
+
+    def test_multiple_actual_work_locations_have_separate_literal_rows(self) -> None:
+        text, result = self._draft("pm-daily__log", "今天两头忙，帮我记个日报：6#楼九层柱子浇了，"
+                                  "来了9车商砼，泥工班到了19个人；西侧3#楼那边地下室还在挖，"
+                                  "挖机两台早上坏了一台修到中午，人数班长没报上来，晚上下了阵雨停了一阵子")
+        body = text.split("## 当日口述记录", 1)[1]
+        self.assertIn("| 形象进度 | 6#楼九层柱子浇了 | 6#楼九层 |", body)
+        self.assertIn("| 形象进度 | 西侧3#楼那边地下室还在挖 | 西侧3#楼 |", body)
+        self.assertIn("| 出勤 | 泥工班到了19个人 | 未说明 |", body)
+        self.assertIn("| 机械材料 | 来了9车商砼 | 未说明 |", body)
+        self.assertIn("| 天气 | 阵雨 | 未说明 |", body)
+        # The second building cannot inherit the first building's headcount.
+        self.assertFalse(any("19" in line and "西侧3#楼" in line for line in body.splitlines()))
+        import openpyxl
+        path = next(Path(row["path"]) for row in result["files"] if row["path"].endswith(".xlsx"))
+        workbook = openpyxl.load_workbook(path, data_only=True)
+        try:
+            rows = [row for sheet in workbook for row in sheet.values]
+            self.assertIn(("形象进度", "西侧3#楼那边地下室还在挖", "西侧3#楼"), rows)
+        finally:
+            workbook.close()
+
+    def test_future_clause_context_does_not_leak_to_actual_resources_or_attendance(self) -> None:
+        text, _ = self._draft("pm-daily__log", "写一份日报；明天准备安装北立面，安排木工23人，"
+                             "泵车两台进场，预报晴；今天东立面幕墙安装完成，钢筋工4人")
+        self.assertIn("| 出勤 | 钢筋工4人 |", text)
+        self.assertIn("| 机械材料 | 待填 |", text)
+        self.assertIn("| 天气 | 天气待填 |", text)
+        self.assertNotIn("23人", self._chapter(text, "5 出勤"))
+
+    def test_summary_table_is_not_grouped_under_original_input_heading(self) -> None:
+        from scripts.eval_post_content import split_echo
+        text, _ = self._draft("pm-daily__log", "写一份日报；日期：2026-10-08；形象进度：顶板完成两个流水段")
+        body, echo = split_echo(text)
+        self.assertIn("| 日期 | 2026-10-08 |", body)
+        self.assertNotIn("| 日期 |", echo)
+
+    def test_explicit_future_context_survives_commas_newlines_and_semicolons(self) -> None:
+        from packing_assistant.tools.daily_observations import extract
+        for text in (
+            "明日计划：安装北立面，木工23人，泵车两台进场",
+            "明天准备安装北立面；木工23人\n泵车两台进场",
+            "明日安排：安装北立面，木工23人；预计泵车两台进场",
+        ):
+            with self.subTest(text=text):
+                records = extract(text + "；今天东立面幕墙安装完成，钢筋工4人")
+                self.assertFalse(any("23" in row.text or "泵车" in row.text for row in records if row.field != "tomorrow"))
+                self.assertTrue(any(row.field == "labor" and row.text == "钢筋工4人" for row in records))
+
+    def test_resource_requests_and_weather_assets_are_not_actual_observations(self) -> None:
+        from packing_assistant.tools.daily_observations import extract
+        records = extract("请出日报；泵车两台需进场；今天雨水管安装完成，防雪措施待填；"
+                          "人数尚未记录；明天预报晴，泥工班28人")
+        self.assertFalse(any(row.field in {"resources", "weather", "labor"} for row in records), records)
+
+    def test_absent_and_hypothetical_workers_are_not_counted_as_attending(self) -> None:
+        from packing_assistant.tools.daily_observations import extract
+        for text in ("木工12人请假", "缺勤5人", "钢筋班14人未到场", "例如泥工班18人", "出勤上限30人"):
+            with self.subTest(text=text):
+                self.assertFalse(any(row.field == "labor" for row in extract(text)))
+
+    def test_narrative_counts_are_whole_literal_values_not_suffixes_or_visitors(self) -> None:
+        from packing_assistant.tools.daily_observations import extract
+        for text in ("工人12.5人", "监理来访6人", "会议室容量30人", "请写成木工13人，钢筋班8人"):
+            with self.subTest(text=text):
+                self.assertFalse(any(row.field == "labor" for row in extract(text)))
+        source = "今日普工1,200人，木工班16人"
+        records = extract(source)
+        self.assertEqual([row.text for row in records if row.field == "labor"], ["普工1,200人", "木工班16人"])
+        self.assertTrue(all(row.text in source and (not row.location or row.location in source) for row in records))
+
+    def test_english_presentation_keeps_the_same_literal_chinese_observations(self) -> None:
+        text, _ = self._draft("pm-daily__log", "输出语言：English；10月8日阴转小雨；"
+                             "6#楼九层柱子浇了，泥工班到了19个人；西侧3#楼那边地下室还在挖")
+        self.assertIn("# Daily report draft", text)
+        self.assertIn("| Date | 10月8日 |", text)
+        self.assertIn("| Weather | 阴转小雨 |", text)
+        self.assertIn("| Workers | 泥工班到了19个人 |", text)
+        self.assertIn("| Work completed | 西侧3#楼那边地下室还在挖 | 西侧3#楼 |", text)
+        self.assertIn("| Workers | 泥工班到了19个人 | Not provided |", text)
+
+    def test_labelled_next_day_counts_require_an_actual_scope_reset(self) -> None:
+        text, _ = self._draft("pm-daily__log", "写一份日报；明日计划：安装北立面；出勤：23人；"
+                             "机械材料：泵车两台进场；今日出勤：钢筋工4人")
+        self.assertIn("| 出勤 | 钢筋工4人 |", text)
+        self.assertIn("| 机械材料 | 待填 |", text)
+        self.assertIn("出勤：23人", self._chapter(text, "8 明日拟安排"))
+        self.assertNotIn("23人", self._chapter(text, "5 出勤"))
+        en = expert_turn._pm_daily_md("Generate a daily report. Tomorrow: install north facade. "
+                                      "Workers: 23. Materials: two pumps expected. Actual workers: 4.")
+        self.assertIn("| Workers | 4 |", en)
+        self.assertIn("Workers：23", en.split("## Tomorrow", 1)[1])
+
     def test_unprovided_jurisdiction_is_unknown_in_other_written_drafts(self) -> None:
         for tool, request in (
             ("survey__record", "写一份测量记录"),
@@ -143,7 +265,14 @@ class DailyReportContentTests(unittest.TestCase):
         ):
             with self.subTest(tool=tool):
                 text, _ = self._draft(tool, request)
-                self.assertIn("辖区：UNSPECIFIED", text)
+                if tool == "survey__record":
+                    from packing_assistant.office_job import tables_from_md
+                    regions = [row[header.index("辖区")] for _, table in tables_from_md(text)
+                               if table and "辖区" in (header := table[0]) for row in table[1:]]
+                    self.assertTrue(regions)
+                    self.assertEqual({"UNSPECIFIED"}, set(regions))
+                else:
+                    self.assertIn("辖区：UNSPECIFIED", text)
                 self.assertNotIn("辖区：SG", text)
 
 

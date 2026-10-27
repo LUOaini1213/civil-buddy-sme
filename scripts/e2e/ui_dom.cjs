@@ -88,10 +88,18 @@ after(async () => {
 /* The page's fetch is Node's fetch; the streaming bodies are wrapped so a test can cut the
    cord the way a phone's OS does — the reader sees a network error, not an abort. */
 const liveStreams = new Set();
+const entryMetadataRequests = new Set();
 function makeFetch(win) {
   return async function pageFetch(input, init) {
     const url = new URL(typeof input === "string" ? input : input.url, base).href;
     const options = { ...(init || {}) };
+    if (["/api/agent/capabilities", "/packing/api/health", "/api/logistics/capabilities"].includes(new URL(url).pathname)) {
+      assert.equal(options.method, "GET");
+      assert.equal(options.credentials, "same-origin");
+      assert.equal(options.redirect, "error");
+      assert.equal(options.body, undefined);
+      entryMetadataRequests.add(new URL(url).pathname);
+    }
     if (options.body && typeof options.body === "object" && typeof options.body.entries === "function" && !(options.body instanceof globalThis.FormData)) {
       // jsdom FormData (from a fetch fallback) → Node FormData
       const fd = new globalThis.FormData();
@@ -102,6 +110,15 @@ function makeFetch(win) {
       options.body = fd;
     }
     const res = await globalThis.fetch(url, options);
+    if (new URL(url).pathname === "/api/health" && res.ok) {
+      // Reproduce an older aggregate health contract without optional route flags.
+      // The entry-specific metadata still comes from the actual backend endpoints.
+      const health = await res.json();
+      for (const key of ["agent_workbench", "packing_workbench", "logistics"]) delete health.capabilities[key];
+      return new globalThis.Response(JSON.stringify(health), {
+        status: res.status, headers: { "content-type": "application/json" },
+      });
+    }
     if (!res.body || !(res.headers.get("content-type") || "").includes("text/event-stream")) return res;
     let cut = null;
     const reader = res.body.getReader();
@@ -186,13 +203,24 @@ async function send(text) {
   $("form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
 }
 
-test("boot: the real page reaches the real backend and applies its capabilities", async () => {
+test("boot: the real page probes actual entry endpoints despite legacy aggregate health metadata", async () => {
   await loadPage();
+  await until(() => ["agent_workbench", "packing_workbench", "logistics"].every(
+    (name) => typeof cb().cbCapability(name) === "boolean") && entryMetadataRequests.size === 3
+      && cb().cbCapability("logistics") === true,
+    { what: "read-only entry metadata probes" });
   assert.ok(state().session, "a local session id exists after boot");
   assert.equal(cb().cbCapability("event_log"), true);
   assert.equal(cb().cbCapability("file_ref"), true);
   assert.equal($("send").disabled, true, "send is disabled while the composer is empty");
   assert.equal($("stop").hidden, true);
+  assert.equal($("cbAgentEntry").hasAttribute("href"), false);
+  assert.equal($("cbPackingEntry").hasAttribute("href"), false);
+  assert.equal($("cbLogisticsEntry").getAttribute("href"), "/logistics");
+  assert.match($("cbEntryAvailability").textContent, /Agent/);
+  assert.equal(cb().cbCapability("agent_workbench"), false);
+  assert.equal(cb().cbCapability("packing_workbench"), false);
+  assert.equal(cb().cbCapability("logistics"), true);
 });
 
 test("send: tokens stream into the bubble and the turn ends with 回答完毕", async () => {

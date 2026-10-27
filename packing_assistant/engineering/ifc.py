@@ -28,6 +28,16 @@ def _source(value: dict, suffix: str, limit: int) -> tuple[bytes, dict]:
     return raw, {"name": name, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
 
 
+def validate_sources(action: str, payload: dict) -> None:
+    """Validate bounded file envelopes without importing any native IFC engine."""
+    fields = {"check": (("ifc", ".ifc", MAX_IFC_BYTES), ("ids", ".ids", MAX_IDS_BYTES)),
+              "diff": (("old", ".ifc", MAX_IFC_BYTES), ("new", ".ifc", MAX_IFC_BYTES))}.get(action)
+    if fields is None or not isinstance(payload, dict) or set(payload) != {name for name, _, _ in fields}:
+        raise ValueError("IFC 输入只接受本操作要求的文件内容对象。")
+    for name, suffix, limit in fields:
+        _source(payload[name], suffix, limit)
+
+
 def _model(value):
     import ifcopenshell
     raw, source = _source(value, ".ifc", MAX_IFC_BYTES)
@@ -67,6 +77,7 @@ def _compared_ids(model):
 
 
 def check_model(payload: dict) -> dict:
+    validate_sources("check", payload)
     from ifctester import ids, reporter
     from defusedxml.ElementTree import fromstring
     if not isinstance(payload, dict) or set(payload) != {"ifc", "ids"}:
@@ -96,6 +107,7 @@ def check_model(payload: dict) -> dict:
 
 
 def compare_models(payload: dict) -> dict:
+    validate_sources("diff", payload)
     from ifcdiff import IfcDiff
     if not isinstance(payload, dict) or set(payload) != {"old", "new"}:
         raise ValueError("版本对比只接受原版与新版 IFC。")

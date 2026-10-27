@@ -40,6 +40,7 @@ jobs:
         run: |
           cargo build --locked --manifest-path workbench/Cargo.toml --bin civil-workbench
           python scripts/test_unified_runtime_http.py --binary workbench/target/debug/civil-workbench
+          python scripts/native_engineering_runtime.py --binary workbench/target/debug/civil-workbench
 
   smoke:
     runs-on: ubuntu-latest
@@ -66,6 +67,10 @@ jobs:
         env:
           PYTHON_DOTENV_DISABLED: "1"
         run: python -m pytest demo/tests -q --basetemp=output/pytest-ci
+      - name: Native engineering acceptance (real libraries, synthetic inputs, zero skips)
+        env:
+          PYTHON_DOTENV_DISABLED: "1"
+        run: python scripts/native_engineering_acceptance.py
       - name: Voice input eval archive matches its README (no model needed)
         run: python eval/asr/run_eval.py --check
       - name: Import package

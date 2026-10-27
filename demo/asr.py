@@ -109,6 +109,17 @@ _probe_lock = threading.Lock()
 _probe_error: str | None = None
 
 
+def cached_engine_probe() -> dict:
+    """Nonblocking health snapshot; unknown must not advertise a working engine.
+
+    Actual native imports stay in engine_error(), called by the speech status
+    and preparation routes. Core workbench startup must not load optional ASR.
+    """
+    error = _probe_error
+    return {"available": error == "",
+            "state": "not_probed" if error is None else "available" if error == "" else "unavailable"}
+
+
 def engine_error() -> str:
     """Empty when the engine imports; otherwise a short reason. Imported once, then cached.
 

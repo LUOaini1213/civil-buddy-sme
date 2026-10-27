@@ -8,6 +8,7 @@ from collections.abc import Sequence
 
 from packing_assistant.jurisdiction import infer_jurisdiction
 from packing_assistant.office_job import tables_from_md
+from packing_assistant.post_drafts.design_observations import literal_parameter, parse_narrative
 
 MISSING = "[A001] / UNSPECIFIED"
 _TOOLS = {"plumbing": "plumbing__memo", "hvac": "hvac__memo", "electrical": "electrical__memo",
@@ -17,8 +18,8 @@ _TITLES = {"plumbing": "给排水专业设计说明", "hvac": "暖通专业设�
 _COMMON = {
     "project": ("项目名称", "工程名称", "项目"), "unit": ("单体名称", "单体", "作业部位", "部位"),
     "jurisdiction": ("辖区", "适用辖区"), "system": ("系统名称", "系统"),
-    "component": ("构件编号", "构件名称", "构件"), "scope": ("系统范围", "设计范围", "范围"),
-    "source": ("资料来源", "来源"), "basis": ("设计依据", "依据文件", "依据"),
+    "component": ("构件编号", "构件名称", "构件"), "scope": ("系统范围", "设计范围", "服务空间", "范围"),
+    "source": ("资料来源", "提资人", "来源"), "basis": ("设计依据", "依据文件", "依据"),
     "drawings": ("图号清单", "图纸清单", "图号", "用户图号"), "calculations": ("计算书名称", "计算书", "计算资料"),
     "interface": ("专业接口", "接口要求", "接口"), "function": ("建筑功能", "使用功能", "功能"),
     "height": ("建筑高度", "高度"), "floors": ("建筑层数", "层数"), "zone": ("系统分区", "分区"),
@@ -38,17 +39,18 @@ for _zone in ("CN", "SG", "EU"):
 _POST_FIELDS = {
     "plumbing": {
         "water_source": ("水源",), "connection": ("市政接驳位置", "接管位置", "接驳位置"),
-        "mains_pipe": ("市政管径", "接管管径"), "pressure": ("市政水压", "供水压力", "水压"),
+        "mains_pipe": ("市政管径", "接管管径"), "pressure": ("市政水压", "市政压力", "供水压力", "水压", "压力"),
         "water_meter": ("水表井",), "fixtures": ("卫生器具当量", "器具当量"),
         "tank": ("水箱方案", "水箱"), "pump": ("既有泵型", "用户泵型", "泵型"),
-        "floor_level": ("室内地面标高", "室内标高"), "outlet_level": ("出户标高", "排水出户标高"),
-        "municipal_level": ("市政井标高",), "riser": ("立管编号", "立管"),
+        "floor_level": ("室内地面标高", "室内标高"), "outlet_level": ("出户标高", "排水出户标高", "出户"),
+        "municipal_level": ("市政井标高", "井底"), "municipal_well": ("市政井编号", "市政井"),
+        "riser": ("立管编号", "立管"),
         "drain_route": ("排水路径", "排水布置"), "catchment": ("汇水范围", "汇水面积"),
         "rainfall": ("降雨资料", "暴雨参数"), "overflow": ("溢流措施", "溢流"),
         "reuse": ("雨水回用", "中水方案", "回用方案"), "pump_room": ("消防泵房", "泵房资料"),
         "pit": ("集水坑", "集水井"), "lift_drain": ("消防电梯井底排水",),
         "grease": ("隔油设施", "隔油"), "septic": ("化粪设施", "化粪池"),
-        "pressure_control": ("超压控制",),
+        "pressure_control": ("超压控制",), "zone": ("供水分区", "系统分区", "分区"),
     },
     "hvac": {
         "indoor": ("室内计算参数", "室内参数"), "outdoor": ("室外计算参数", "室外参数"),
@@ -66,7 +68,7 @@ _POST_FIELDS = {
     "electrical": {
         "circuits": ("市政回路数", "回路数"), "voltage": ("供电电压", "电压"),
         "backup": ("自备电源", "备用电源"), "capacity": ("设备容量", "装机容量"),
-        "factor": ("需要系数", "利用系数"), "active": ("计算有功", "有功功率"),
+        "factor": ("需要系数", "利用系数", "系数"), "active": ("计算有功", "有功功率"),
         "reactive": ("计算无功", "无功功率"), "apparent": ("计算视在", "视在功率"),
         "transformer": ("用户变压器容量", "变压器容量"), "transformer_count": ("变压器台数",),
         "distribution": ("低压配电", "配电原则"), "lighting": ("一般照明", "照明"),
@@ -91,13 +93,13 @@ _POST_FIELDS = {
     },
     "steel": {
         "structure": ("结构体系", "体系"), "span": ("跨度",),
-        "roof_load": ("屋面活荷载", "屋面荷载"), "crane": ("吊车资料", "吊车荷载"),
+        "roof_load": ("屋面活荷载", "屋面恒载", "屋面荷载"), "crane": ("吊车资料", "吊车荷载"),
         "wind": ("风荷载", "风压"), "seismic": ("地震资料", "抗震参数"), "temperature": ("温度作用", "温度荷载"),
         "material_source": ("材料来源", "钢材来源"), "connection": ("连接方式", "连接"),
         "bolt": ("用户螺栓规格", "螺栓规格"), "weld": ("用户焊缝尺寸", "焊缝尺寸"),
         "node": ("节点图号", "节点详图"), "atlas": ("用户指定图集", "图集"),
         "bracing": ("柱间支撑", "支撑"), "tie": ("系杆",), "knee": ("隅撑",),
-        "derust": ("除锈等级",), "coating": ("防腐体系", "防腐涂装"),
+        "derust": ("除锈等级",), "coating": ("防腐体系", "防腐涂装", "防腐"),
         "coating_thickness": ("防腐涂层厚度", "涂层厚度"), "fireproof": ("防火保护", "防火做法"),
         "fireproof_thickness": ("防火涂料厚度",), "fire_source": ("耐火极限来源", "防火依据"),
         "fabrication": ("加工资料",), "transport": ("运输资料",), "erection": ("安装资料",),
@@ -108,9 +110,9 @@ _POST_FIELDS = {
 _UNKNOWN = re.compile(r"(?:\[A\d+\]\s*)?(?:待填|待补|未知|未提供|未说明|UNSPECIFIED|TBD)?", re.I)
 
 
-def _clean(value: str) -> str:
+def _clean(value: str, key: str = "") -> str:
     value = value.strip()
-    return MISSING if _UNKNOWN.fullmatch(value) else value
+    return MISSING if _UNKNOWN.fullmatch(value) else literal_parameter(key, value)
 
 
 def _input_table(lines: list[str]) -> str:
@@ -177,8 +179,26 @@ class _Facts:
 
         lines = self.text.splitlines()
         index = 0
+        narrative_checked_until = 0
+        after_table = False
         while index < len(lines):
             line = lines[index]
+            if not line.lstrip().startswith("|") and index >= narrative_checked_until:
+                end = index + 1
+                while end < len(lines) and not lines[end].lstrip().startswith("|"):
+                    end += 1
+                narrative_checked_until = end
+                context = {key: value for key, value in self.context.items() if not after_table or key != "unit"}
+                parsed = parse_narrative(post, "\n".join(lines[index:end]), self.aliases, context,
+                                         self.records if after_table else None)
+                if parsed is not None:
+                    flush()
+                    self.records.extend(parsed.records)
+                    self.context = parsed.context
+                    top_level_text.extend(parsed.top_level)
+                    object_seen = object_seen or any(set(record) & object_keys for record in parsed.records)
+                    index = end
+                    continue
             if line.lstrip().startswith("|"):
                 end = index + 1
                 while end < len(lines) and lines[end].lstrip().startswith("|"):
@@ -188,12 +208,14 @@ class _Facts:
                     if sum(key is not None for key in headers) >= 2:
                         for cells in rows[1:]:
                             if len(cells) == len(headers):
-                                add([(key, _clean(value)) for key, value in zip(headers, cells) if key], row=True)
+                                add([(key, _clean(value, key)) for key, value in zip(headers, cells) if key], row=True)
                     else:
                         for cells in rows[1:]:
                             if len(cells) >= 2 and cells[1] and not any(cells[2:]) and cells[0].casefold() in self.aliases:
-                                add([(self.aliases[cells[0].casefold()], _clean(cells[1]))])
+                                key = self.aliases[cells[0].casefold()]
+                                add([(key, _clean(cells[1], key))])
                 index = end
+                after_table = True
                 continue
             matches = list(pattern.finditer(line))
             entries = []
@@ -202,7 +224,8 @@ class _Facts:
                 value = line[match.end():end].strip()
                 if field_index + 1 < len(matches) and not re.search(r"&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]+);$", value, re.I):
                     value = re.sub(r"[；;,，]\s*$", "", value)
-                entries.append((self.aliases[match.group(1).casefold()], _clean(value)))
+                key = self.aliases[match.group(1).casefold()]
+                entries.append((key, _clean(value, key)))
             if not object_seen and not any(key in object_keys for key, _ in entries):
                 top_level_text.append(line)
             add(entries)
@@ -261,6 +284,11 @@ def _header(facts: _Facts) -> str:
         "- 缺失数值保持 [A001] / UNSPECIFIED；图号和依据仅登记用户提供的名称，未核原文与适用性。\n\n"
         + _table("工程与资料登记", ("项目", "单体/部位", "用户图号清单", "用户计算书"),
                  [(facts.all("project"), facts.all("unit"), facts.all("drawings"), facts.all("calculations"))])
+        + _table("用户资料来源与归属", ("单体/部位", "系统/构件", "资料来源", "归属状态"), [
+            (record.get("unit", MISSING), record.get("component" if facts.post == "steel" else "system", MISSING),
+             record["source"], "仅登记原文；未明确归属的资料待用户分配")
+            for record in facts.all_records if record.get("source", MISSING) != MISSING
+        ] or [(MISSING, MISSING, MISSING, "待用户提供")])
     )
 
 
@@ -299,7 +327,7 @@ def _plumbing(f: _Facts) -> str:
     out += "生活给水、直饮水、热水、污废水、雨水、中水及消防给水是否纳入，以用户范围为准；未列系统不自动设置。\n\n"
     out += f.table("水源与市政接驳", (("水源", "water_source"), ("接管位置", "connection"), ("用户市政管径", "mains_pipe"), ("用户水压", "pressure"), ("水表井", "water_meter")))
     out += f.table("生活给水与分区", (("分区", "zone"), ("器具当量记录", "fixtures"), ("水箱方案", "tank"), ("用户既有泵型", "pump"), ("计量", "metering")), pending=("本稿选泵结果",))
-    out += f.table("排水与标高衔接", (("室内地面标高", "floor_level"), ("出户标高", "outlet_level"), ("市政井标高", "municipal_level"), ("用户流量", "water_flow"), ("用户管径", "pipe"), ("立管编号", "riser"), ("排水路径", "drain_route")), pending=("本稿管径计算结果",))
+    out += f.table("排水与标高衔接", (("室内地面标高", "floor_level"), ("出户标高", "outlet_level"), ("市政井标高", "municipal_level"), ("市政井编号", "municipal_well"), ("用户流量", "water_flow"), ("用户管径", "pipe"), ("立管编号", "riser"), ("排水路径", "drain_route")), pending=("本稿管径计算结果",))
     out += "待核室内地面、出户与市政井标高的衔接，立管编号与系统/平面资料一致；缺标高、流量或水压不定管径、泵型。排水布置另核卧室及起居、用餐空间的避让。\n\n"
     out += f.table("雨水、溢流与回用", (("汇水资料", "catchment"), ("降雨资料", "rainfall"), ("溢流措施", "overflow"), ("回用方案", "reuse")))
     out += f.table("消防水量与泵房资料", (("用户消防系统", "fire_system"), ("用户消防水量", "fire_flow"), ("用户消防水压", "fire_pressure"), ("泵房资料", "pump_room"), ("计算书", "calculations")), pending=("本稿消防水量计算结果",))

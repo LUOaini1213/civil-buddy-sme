@@ -8,6 +8,7 @@ import { createTurnStream } from "./modules/turn-stream.js";
 import { createDeliverables } from "./modules/deliverables.js";
 import { createSessionWatch } from "./modules/session-watch.js";
 import { createSessionNav, sessionId, cadProjectFromUrl } from "./modules/session-nav.js";
+import { applyEntryAvailability, probeEntryCapabilities } from "./modules/entry-availability.js";
 
 const cbHomeText = (source, values = {}) => window.CBI18n?.t(source, values) ?? String(source || "").replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
 // Only app-owned empty/loading messages have a translation binding. Loaded memory is source text.
@@ -384,11 +385,15 @@ function cbCapability(name) {
   return state.health.capabilities && state.health.capabilities[name];
 }
 
-function cbApplyHealth(health) {
+let cbEntryProbeGeneration = 0;
+function cbApplyHealth(health, { resetEntries = false } = {}) {
+  if (resetEntries) ++cbEntryProbeGeneration; // New boot/login scope, not a locale or model-badge repaint.
   const capabilities = health && health.capabilities;
   state.health = {
     ...state.health, ...health,
-    capabilities: { ...state.health.capabilities, ...(capabilities && typeof capabilities === "object" ? capabilities : {}) },
+    capabilities: { ...state.health.capabilities,
+      ...(resetEntries ? { agent_workbench: false, packing_workbench: false, logistics: false } : {}),
+      ...(capabilities && typeof capabilities === "object" ? capabilities : {}) },
   };
   const configured = !!(state.health.has_key || state.health.deepseek);
   const offline = state.health.mode === "offline" && cbCapability("chat") === true;
@@ -423,8 +428,18 @@ function cbApplyHealth(health) {
   // Other hosts share this HTML without exposing the optional CAD routes.
   const cadEntry = $("cbCadEntry");
   if (cadEntry) cadEntry.hidden = cbCapability("cad") !== true;
+  applyEntryAvailability({ doc: document, capabilities: state.health.capabilities, t: cbHomeText });
   if (health.model) state.modelName = health.model;
   cbSyncSend();
+}
+
+async function cbRefreshEntryCapabilities() {
+  const generation = cbEntryProbeGeneration;
+  const capabilities = await probeEntryCapabilities({ fetcher: auth.metadataFetch });
+  if (generation !== cbEntryProbeGeneration) return false;
+  state.health.capabilities = { ...state.health.capabilities, ...capabilities };
+  applyEntryAvailability({ doc: document, capabilities: state.health.capabilities, t: cbHomeText });
+  return true;
 }
 
 /* 访问口令（modules/auth.js）：cookie 里的 CIVIL_TOKEN，首个 401 问一次并重试那一次请求。 */
@@ -444,7 +459,8 @@ async function boot() {
     if (health && health.capabilities && health.capabilities.auth && !hasToken()) {
       await askToken(cbHomeText("这个工作台开了访问口令"));
     }
-    cbApplyHealth(health);
+    cbApplyHealth(health, { resetEntries: true });
+    void cbRefreshEntryCapabilities(); // Separate services may share this origin; do not delay chat startup.
     if (health.context) state.context = { ...state.context, ...health.context };
     CB_PACK_TRIAL = cbPackTrialFrom(health);
     paintContext(estimateLocalContext());

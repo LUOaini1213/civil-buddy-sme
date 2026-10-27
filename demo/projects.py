@@ -117,17 +117,23 @@ def _resolved_path(path: Path) -> Path:
 
 
 def _bounded_path(out_root: Path, *parts: str) -> Path:
+    from packing_assistant.filesystem import native_path
+
+    extended = os.name == "nt" and str(out_root).startswith("\\\\?\\")
     root = _resolved_path(Path(out_root))
     path = root
     for part in parts:
         path = path / part
-        if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+        checked = native_path(path) if extended else path
+        if checked.is_symlink() or getattr(checked, "is_junction", lambda: False)():
             raise ValueError("项目或会话存储路径不能是链接")
     try:
         _resolved_path(path).relative_to(root)
     except ValueError:
         raise ValueError("项目或会话存储路径超出根目录") from None
-    return path
+    # Compare ordinary canonical paths above, but retain an explicitly supplied
+    # extended spelling for actual I/O in a deep private named-instance store.
+    return native_path(path) if extended else path
 
 
 def _index_dir(out_root: Path) -> Path:

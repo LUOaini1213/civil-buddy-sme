@@ -944,8 +944,9 @@ def main() -> int:
         session_id="t040-hr-cn",
     )
     hrc = Path(hr_cn["files"][0]["path"]).read_text(encoding="utf-8")
-    assert "辖区：CN" in hrc
-    assert "劳动合同法" in hrc
+    # A ministry name is not an explicit project jurisdiction.
+    assert "辖区：UNSPECIFIED" in hrc
+    assert "劳动合同法" not in hrc
     assert "Fair Consideration" not in hrc
     assert "MyCareersFuture" not in hrc
     assert "FCF" not in hrc

@@ -35,7 +35,12 @@ EXTRA = (
     "deploy/lightsail/Caddyfile", "deploy/lightsail/compose.override.yml",
     "deploy/lightsail/user-data.sh", "deploy/lightsail/civil-admin.sh", "deploy/lightsail/test-local.sh",
     "docs/civil-buddy/acceptance/sme-preview-checklist.md",
-    "scripts/unified_acceptance.py", "scripts/test_unified_runtime_http.py",
+    "scripts/unified_acceptance.py", "scripts/test_unified_runtime_http.py", "scripts/test_linked_runtime_http.py",
+    "scripts/native_engineering_acceptance.py", "scripts/test_frame_analysis.py",
+    "scripts/native_engineering_runtime.py",
+    "scripts/test_engineering_section.py", "scripts/test_engineering_ifc.py",
+    "scripts/test_engineering_api.py", "scripts/test_cad_api.py",
+    "scripts/test_cad_step.py",
     "examples/facade-demo/README.md", "examples/facade-demo/facade_itt_doc.md",
     "examples/facade-demo/facade_panels.xlsx", "examples/facade-demo/facade_panels_rev_b.xlsx",
     "examples/facade-demo/facade_panels_zh.xlsx", "examples/facade-demo/daily_report_input.txt",
@@ -214,6 +219,7 @@ py -3.11 -m venv .venv
 旧启动器可能按原流程准备本地 `.venv`；统一入口不调用该安装流程。两种入口不要使用同一个端口同时运行。
 CAD、工程计算、排程、语音依赖分别见 `requirements-cad.txt`、`requirements-engineering.txt`、
 `requirements-planning.txt`、`requirements-asr.txt`，请只在同一虚拟环境内按需安装。
+STEP 实体导出另需 `requirements-cad-step.txt`（本包包含安装清单，不包含 CadQuery/OCP 内核）。
 Java/JVM、Office 或 OCR 引擎均不随包提供。
 
 文档副本只是待核查草稿；PDF 正文改写/OCR、Office 排版渲染与 Excel 公式重算尚未提供。
@@ -237,6 +243,36 @@ python scripts/build_unified_release.py --verify <压缩包路径>
 [文档技能](docs/civil-buddy/architecture/civil-buddy-document-skills.md)。
 Rust 开发可用 `cargo build --release --manifest-path workbench/Cargo.toml`；需要自行安装 Rust 工具链。
 完整测试和研究资料仍以完整源码仓库为准。
+
+## 本机离线回归
+
+已安装上述 Python 依赖后，下面两项使用本包 exe、合成资料、临时具名账号和
+本机脚本模型，不连接线上实例或真实模型服务，也不证明跨电脑或真实工程验收。
+测试会在本目录 `output/` 生成报告与临时状态；请勿把它们再打入分发包。
+
+```powershell
+$env:PYTHON_DOTENV_DISABLED='1'
+& ".\\.venv\\Scripts\\python.exe" scripts/test_unified_runtime_http.py --binary bin/civil-workbench.exe
+& ".\\.venv\\Scripts\\python.exe" scripts/test_linked_runtime_http.py --binary bin/civil-workbench.exe
+```
+
+版本名含 `local` / `debug` 的包仅供本地测试；不表示已经发布、部署，或取代参赛 `v0.7.0`。
+
+已安装 CAD 和工程依赖后，可运行真实本地求解器的严格专项验收：
+
+```powershell
+& ".\\.venv\\Scripts\\python.exe" scripts/native_engineering_acceptance.py
+& ".\\.venv\\Scripts\\python.exe" scripts/native_engineering_runtime.py --binary bin/civil-workbench.exe
+```
+
+此入口使用合成资料，要求固定求解器版本及零跳过；缺依赖、skip、预期失败或测试减少
+均返回失败。它生成新的 JSON 报告，记录依赖版本、源码哈希与逐项结果，不覆盖历史证据。
+这不等于真实工程、第二台电脑、真实模型或工程签认通过。
+第二项从临时具名账号登录 Rust 主入口，调用实际梁、截面及 IFC 求解器，检查签认导出门禁、
+版本冲突、真实进程重启恢复与跨账号隔离。两项必须使用同时安装主项目、CAD 和工程依赖的解释器；
+测试实例不配置模型，不能把另一套解释器的已安装依赖当成本实例可用。
+安装 STEP 依赖后，两项均可增加 `--with-step`：严格专项额外要求 STEP 的 4 项测试零跳过；
+主入口验收额外检查签认导出与实际 STEP 文件重开、实体数、孔洞体积和包围尺寸。
 """
 
 

@@ -85,6 +85,9 @@ def read_page(page: Any) -> PageParts:
     stands = [0, 0]
     ink = {"fill": False, "stroke": False}     # whether the colour in force is white: white laid behind a run of
     saved: List[Dict[str, bool]] = []          # characters, or a border "drawn" in the paper's colour, rules nothing
+    leading = 0.0
+    leading_stack: List[float] = []
+    text_line: Optional[List[float]] = None
 
     def white(args: Sequence[Any], cmyk: bool = False) -> bool:
         try:
@@ -98,7 +101,7 @@ def read_page(page: Any) -> PageParts:
         return all(v >= 0.97 for v in values)
 
     # Where a piece STANDS is where its first text-showing operator stood. The matrices the library hands to the text
-    # visitor are its own memo of that - and up to pypdf 6.18 the memo is stale for a piece that begins with an inserted
+    # visitor are its own memo of that - in some versions the memo is stale for a piece that begins with an inserted
     # space: " 2025" reported the line above it, and one cell of a real front table came back as two lines.
     shown: List[Tuple[List[float], List[float]]] = []
     current = [b""]
@@ -119,18 +122,45 @@ def read_page(page: Any) -> PageParts:
         pieces.append(Piece(x, y, float(size or 0) * (scale or 1.0), text))
 
     def on_operator(op: Any, args: Sequence[Any], cm: Sequence[float], tm: Sequence[float]) -> None:
+        nonlocal leading, text_line
         current[0] = op
         if op in _SHOW:
-            shown.append(([float(v) for v in cm], [float(v) for v in tm]))
+            shown.append(([float(v) for v in cm], list(text_line) if text_line is not None else [float(v) for v in tm]))
         try:
             if op == b"q":
                 saved.append(dict(ink))
+                leading_stack.append(leading)
             elif op == b"Q" and saved:
                 ink.update(saved.pop())
+                leading = leading_stack.pop()
             elif op in (b"g", b"rg", b"k", b"sc", b"scn"):
                 ink["fill"] = white(args, cmyk=op == b"k")
             elif op in (b"G", b"RG", b"K", b"SC", b"SCN"):
                 ink["stroke"] = white(args, cmyk=op == b"K")
+            # Text leading (TL) is an absolute distance in text space, not a
+            # font-size multiplier. Installed pypdf versions can multiply it
+            # by Tf and move wrapped text into unrelated cells or off-page.
+            # Track the drawn line origin directly; decoded text still comes
+            # from pypdf and is never corrected or guessed.
+            if op == b"BT":
+                text_line = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+            elif op == b"Tm":
+                text_line = [float(value) for value in args[:6]]
+                if len(text_line) != 6 or not all(math.isfinite(value) for value in text_line):
+                    raise ValueError("Invalid text matrix")
+            elif op == b"TL":
+                leading = float(args[0])
+                if not math.isfinite(leading):
+                    raise ValueError("Invalid text leading")
+            elif op in (b"Td", b"TD") and text_line is not None:
+                tx, ty = float(args[0]), float(args[1])
+                if op == b"TD":
+                    leading = -ty
+                text_line[4] += tx * text_line[0] + ty * text_line[2]
+                text_line[5] += tx * text_line[1] + ty * text_line[3]
+            elif op in (b"T*", b"'", b'"') and text_line is not None:
+                text_line[4] -= leading * text_line[2]
+                text_line[5] -= leading * text_line[3]
             if op == b"m":
                 paths.append([_apply(cm, float(args[0]), float(args[1]))])
             elif op == b"l" and paths:
@@ -158,6 +188,8 @@ def read_page(page: Any) -> PageParts:
                 paths.clear()
         except (TypeError, ValueError, IndexError):
             paths.clear()
+            if op in (b"Tm", b"TL", b"Td", b"TD", b"T*", b"'", b'"'):
+                text_line = None
 
     page.extract_text(visitor_text=on_text, visitor_operand_before=on_operator)
     try:

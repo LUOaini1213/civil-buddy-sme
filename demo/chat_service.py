@@ -499,6 +499,9 @@ def _record(root: Path, turn: dict, result: dict, deliverables: list[dict], node
                "deliverables": deliverables, "attachments": turn["attachments"],
                "error_code": result.get("error_code", "")}
     payload["context"] = turn.get("context", {})
+    payload["input_files"] = result.get("input_files", [])
+    payload["source_answer"] = result.get("source_answer", {})
+    payload["input_error"] = result.get("input_error", {})
     # Office export outcome per run, so the card can say "Word 导出失败 / 待生成"
     # instead of silently showing fewer files.
     payload["export_errors"] = [str(e) for e in (result.get("export_errors") or [])]
@@ -812,10 +815,16 @@ def _stream_turn(root: Path, turn: dict, *, key_available: bool, plain_runner, l
                         if not result.get("reply"):
                             raise RuntimeError("模型未返回有效回答")
                     else:
-                        result["reply"] = _offline_chat(eid, message, "en") if turn.get("locale") == "en" else _offline_chat(eid, message)
-                        local_cites = turn["local_sources"]
-                        if local_cites:
-                            result["reply"] += "\n\n本机找到以下相关原文，可展开来源核对。"
+                        from source_answers import answer_from_selected
+                        answer = answer_from_selected(root, sid, message, turn["attachments"], turn["prepared_context"], locale=turn.get("locale", "zh-CN"))
+                        if answer is not None:
+                            result.update(reply=answer["reply"], source_answer=answer["source_answer"])
+                            local_cites = answer["citations"]
+                        else:
+                            result["reply"] = _offline_chat(eid, message, "en") if turn.get("locale") == "en" else _offline_chat(eid, message)
+                            local_cites = turn["local_sources"]
+                            if local_cites:
+                                result["reply"] += "\n\n本机找到以下相关原文，可展开来源核对。"
                     nodes.append({"kind": "info", "title": "问答", "detail": "未调用写入工具"})
                 elif not eid:
                     result["reply"] = "请先选择一个岗位，或用 @岗位名 说明需要的交付物，例如「@项目日报 写一份日报模板」。"
@@ -831,9 +840,25 @@ def _stream_turn(root: Path, turn: dict, *, key_available: bool, plain_runner, l
                         nodes.append({"kind": "decision", "title": "已收到签认确认", "detail": CONFIRM, "operator": "本地用户"})
                     yield _event("status", phase="deliver", text=f"按 {expert.name} 工序起草")
                     control.check()
-                    result = run_agent(turn["material"], session_id=sid, expert_id=eid,
-                                       p0_confirmed=turn["confirmed"], force_intent=turn["intent"],
-                                       project_name=turn["project_name"], cancel_event=control.event)
+                    from contextlib import nullcontext
+                    from packing_assistant.runtime.task_router import wants_link
+                    from selected_inputs import SelectedInputError, selected_job_inputs
+                    needs_binary_inputs = eid == "pack-ship" or (eid == "bid-parse" and wants_link(turn["message"]))
+                    inputs = (selected_job_inputs(root, sid, rid, turn["attachments"], check=control.check)
+                              if needs_binary_inputs else nullcontext([]))
+                    try:
+                        with inputs as input_manifest:
+                            result = run_agent(turn["material"], session_id=sid, expert_id=eid,
+                                               p0_confirmed=turn["confirmed"], force_intent=turn["intent"],
+                                               request_text=turn["message"],
+                                               project_name=turn["project_name"], cancel_event=control.event)
+                            if input_manifest:
+                                result["input_files"] = input_manifest
+                    except SelectedInputError as exc:
+                        result = {"ok": False, "wrote": False, "files": [], "expert_id": eid,
+                                  "state": "failed", "error_code": "input_selection",
+                                  "input_error": {"reason": exc.code}, "reply": exc.reply(turn.get("locale", "zh-CN"))}
+                        nodes.append({"kind": "decision", "title": "附件选择需修正", "detail": result["reply"]})
                     # The UI run owns its own unique snapshot; the engine run remains linked.
                     result["engine_run_id"] = result.get("run_id", "")
                     result["run_id"] = rid
@@ -902,7 +927,9 @@ def _stream_turn(root: Path, turn: dict, *, key_available: bool, plain_runner, l
         yield _event("error", text=str(exc), **_error_extras(root, sid, "\n\n".join(texts) or "".join(partial), files, run_ids))
     except Exception:
         logger.exception("Workbench turn failed for session %s", sid)
-        yield _event("error", text="本轮未完成，请检查模型设置或本地日志后重试。",
+        message = ("This turn did not complete: a task step or local service failed. Check the local logs before retrying."
+                   if turn.get("locale") == "en" else "本轮未完成：任务步骤或本地服务出现错误。请检查本地日志后重试。")
+        yield _event("error", text=message,
                      **_error_extras(root, sid, "\n\n".join(texts) or "".join(partial), files, run_ids))
     finally:
         try:

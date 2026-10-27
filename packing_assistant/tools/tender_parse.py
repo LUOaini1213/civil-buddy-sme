@@ -642,12 +642,19 @@ def build_workbench_extract_table(
     parsed: Optional[Dict[str, Any]] = None,
     *,
     project_name: str = "未命名招标",
+    request_text: Optional[str] = None,
 ) -> str:
     """同一张招标解析表：主线 C 与 workbench sidecar 共用，禁止编造空栏。
 
     九节 + 「事项｜要求原文｜来源页段｜是否检出｜澄清建议」，见 tools/tender_tables.extract_table。"""
-    from packing_assistant.tools.tender_tables import extract_table
+    from packing_assistant.tools.tender_tables import extract_table, extract_table_en
+    from packing_assistant.runtime.reply_language import english_request
 
+    if request_text is not None:
+        current = request_text.rsplit("【本轮用户要求】", 1)[-1]
+        current = re.split(r"\n\s*## (?:本轮附件|作业根文件)", current, maxsplit=1)[0]
+        if english_request(current):
+            return extract_table_en(parsed, project_name="Unnamed tender")
     return extract_table(parsed, project_name=project_name)
 
 
@@ -665,7 +672,7 @@ def workbench_bid_extract(text: str, *, project_name: str = "未命名招标") -
         "submit_blocked": True,
         "submit_block_reason": "P0 资格/废标/★项须人工确认；成果仍是 AI 草稿，不可递交。",
         "extract_table_markdown": build_workbench_extract_table(
-            parsed, project_name=project_name
+            parsed, project_name=project_name, request_text=text
         ),
     }
 
@@ -1398,8 +1405,10 @@ def run_tender_pipeline(
         checklist = build_checklist(reqs)
         matrix = build_response_matrix(reqs, packing_summary=packing_summary)
         handoff = parsed.get("handoff") or build_handoff(reqs, duration_days=parsed.get("duration_days"))
+        from packing_assistant.tools.technical_response import collect
+        handoff["technical_response"] = collect(text)
         outline = build_tech_outline_from_handoff(handoff, project_name=project_name)
-        extract_table = build_workbench_extract_table(parsed, project_name=project_name)
+        extract_table = build_workbench_extract_table(parsed, project_name=project_name, request_text=text)
         package = build_response_package(
             matrix=matrix,
             packing_summary=packing_summary,

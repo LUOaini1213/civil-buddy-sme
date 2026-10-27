@@ -195,11 +195,22 @@ async def static_revalidates(request: Request, call_next):
 
 
 @app.get("/api/health")
-def health(request: Request) -> dict:
+async def health(request: Request) -> dict:
     from context import policy
     from packing_assistant.office_job import job_root, job_root_granted, list_job_files
 
     authorised = access_guard.authorised(request.scope)
+    # Report exactly the same admission decision as the real logistics route.
+    from logistics_api import local_request
+    try:
+        await local_request(request)
+        logistics_available = True
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+        logistics_available = False
+    import asr
+    speech_probe = asr.cached_engine_probe()
     return {
         "ok": True,
         "product": "civil-codex",
@@ -209,10 +220,12 @@ def health(request: Request) -> dict:
         "mode": "configured" if has_key() else "offline",
         "capabilities": {"chat": True, "drafts": True, "model_settings": True,
                          "attachments": True, "upload_url": True, "audit": True, "packing": False,
+                         "agent_workbench": False, "packing_workbench": False,
+                         "logistics": logistics_available,
                          "session_backup": True, "cancel": True, "word_export": True,
                          "task_memory": True, "local_rag": True, "task_routing": True,
                          "expert_contracts": True, "tender_collaboration": True, "semantic_summary": True,
-                         "asr": _asr_installed(), "live_progress": True,
+                         "asr": speech_probe["available"], "asr_probe": speech_probe["state"], "live_progress": True,
                          "auth": bool(access_guard.configured_token()) and not authorised,
                          "file_ref": True, "event_log": True, "background_turns": True,
                          "cad": True},
@@ -337,12 +350,6 @@ async def upload(request: Request) -> dict:
         raise HTTPException(400, "上传内容格式无效，请重新选择文件后再试") from exc
     except (OSError, PermissionError) as exc:
         raise HTTPException(500, "无法保存附件，请检查工作台目录权限") from exc
-
-
-def _asr_installed() -> bool:
-    import asr
-
-    return asr.engine_installed()
 
 
 @app.get("/api/asr/status")
