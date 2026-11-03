@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -15,6 +16,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from demo import local_retrieval as rag
 from demo import projects
+from packing_assistant.filesystem import native_path
 
 
 class RetrievalTests(unittest.TestCase):
@@ -108,6 +110,51 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(rag.search(self.root, self.sid, "资料"), [])
         self.assertIsNone(rag.source(self.root, self.sid, "src-" + "0" * 32))
         self.assertFalse((self.root / self.sid).exists())
+
+    def assert_read_only_index(self):
+        path = rag._path(self.root, self.sid)
+        original = path.read_bytes()
+        with closing(rag._connect(path, write=False)) as connection:
+            self.assertEqual(connection.execute("PRAGMA query_only").fetchone()[0], 1)
+            with self.assertRaises(sqlite3.OperationalError):
+                connection.execute("CREATE TABLE forbidden_write(value TEXT)")
+            # Prove the URI itself is read-only, independently of query_only.
+            connection.execute("PRAGMA query_only=OFF")
+            with self.assertRaises(sqlite3.OperationalError) as denied:
+                connection.execute("CREATE TABLE forbidden_write(value TEXT)")
+            self.assertEqual(denied.exception.sqlite_errorcode & 0xFF, sqlite3.SQLITE_READONLY)
+        self.assertEqual(path.read_bytes(), original)
+        missing = path.with_name("not-created.sqlite3")
+        with self.assertRaises(sqlite3.OperationalError):
+            rag._connect(missing, write=False)
+        self.assertFalse(missing.exists(), "Read-only connection must not create a missing index")
+
+    def test_read_only_uri_escapes_spaces_unicode_and_query_delimiters(self):
+        self.root = self.root / "资料 # %3f with spaces"
+        text = "escapedpathkeyword 原文未改动"
+        self.sync(attachments=[self.attachment(text)])
+        hits = rag.search(self.root, self.sid, "escapedpathkeyword", ["file-one"])
+        self.assertEqual(hits[0]["text"], text)
+        self.assert_offsets(hits)
+        self.assert_read_only_index()
+
+    @unittest.skipUnless(os.name == "nt", "Windows extended-path regression")
+    def test_read_only_uri_handles_real_windows_extended_long_path(self):
+        # Both I/O and cleanup use the same extended spelling; no global Windows
+        # policy changes or ignored cleanup failures are needed.
+        temp = tempfile.TemporaryDirectory(prefix="extended-index-", dir=native_path(self.root))
+        self.addCleanup(temp.cleanup)
+        self.root = (Path(temp.name) / ("private-state-" + "x" * 40) / "accounts"
+                     / "acceptance_alice" / "projects" / ("a" * 64) / "domains")
+        path = rag._path(self.root, self.sid)
+        self.assertGreater(len(str(path)), 260)
+        self.assertTrue(str(path).startswith("\\\\?\\"))
+        text = "extendedpathkeyword 完整检索正文"
+        self.sync(attachments=[self.attachment(text)])
+        hits = rag.search(self.root, self.sid, "extendedpathkeyword", ["file-one"])
+        self.assertEqual(hits[0]["text"], text)
+        self.assert_offsets(hits)
+        self.assert_read_only_index()
 
     def test_concurrent_append_keeps_full_text_and_unique_ids(self):
         texts = [f"编号{i}：" + "完整原文" * 2200 for i in range(24)]

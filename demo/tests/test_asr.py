@@ -80,11 +80,23 @@ def _wav(seconds: float, rate: int = asr.SAMPLE_RATE) -> bytes:
 # ---------- endpoint contract ----------
 
 def test_health_and_status_agree(client):
-    caps = client.get("/api/health").json()["capabilities"]
     status = client.get("/api/asr/status").json()
-    assert caps["asr"] is asr.engine_installed()
+    caps = client.get("/api/health").json()["capabilities"]
+    assert caps["asr"] is asr.cached_engine_probe()["available"]
     assert status["available"] is (asr.engine_error() == "")
     assert status["stores_audio"] is False and status["max_seconds"] == asr.MAX_SECONDS
+
+
+def test_health_reads_only_cached_speech_state_without_loading_native_engine(client, monkeypatch):
+    def forbidden_probe():
+        raise AssertionError("Core health must not import optional native ASR")
+    monkeypatch.setattr(asr, "engine_error", forbidden_probe)
+    for cached, state, available in ((None, "not_probed", False), ("", "available", True),
+                                     ("native import failed", "unavailable", False)):
+        monkeypatch.setattr(asr, "_probe_error", cached)
+        caps = client.get("/api/health").json()["capabilities"]
+        assert caps["asr"] is available
+        assert caps["asr_probe"] == state
 
 
 def test_status_says_when_engine_missing(client, monkeypatch):

@@ -2,7 +2,7 @@
 
 岗位对应：班前口播 / toolbox meeting / daily briefing。本页不是规范全文库，不是交底签认件。toolbox meeting ≠ 安全技术交底。大类门户见 `_shared/web-knowledge.md`。
 
-辖区：默认新加坡工地（SG）。用户 pack 另指定则从其指定。禁止静默混用 CN / SG。未抽出原文的标准只写全名，条款 UNSPECIFIED。2026-08-14 已打开 WSHC toolbox 指南与 BCA site records。
+辖区：仅登记项目包或用户明确资料；未给则 UNSPECIFIED，不默认国家。禁止静默混用 CN / SG。未抽出原文的标准只写全名，条款 UNSPECIFIED。本页记载 2026-08-14 的历史检索，相关标题不是本轮已核验的现行依据。
 
 ## CN
 

@@ -142,6 +142,10 @@ html[lang="en"] .cb-app-nav a { white-space: nowrap; }
 .cb-voice-interim:not(:empty) { margin: 6px 0 0; color: var(--cb-text-muted); }
 .cb-voice-status:empty, .cb-voice-interim:empty { margin: 0; padding: 0; border: 0; }
 #btnVoice.is-rec { color: var(--cb-red); border-color: var(--cb-red); background: var(--cb-red-soft); }
+.cb-app-nav a[aria-disabled="true"], .cb-empty-card[aria-disabled="true"] {
+  opacity: .55;
+  cursor: not-allowed;
+}
 @media (max-width: 768px) {
   .cb-app-header { gap: 10px; padding: 12px 14px 0; }
   .cb-app-header .cb-app-nav { gap: 2px; }

@@ -78,6 +78,17 @@ class EngineeringHTTP(unittest.TestCase):
         self.assertEqual(self.client.post("/api/engineering/frame", json={"model": {"code": "print(1)"}}).status_code, 422)
         self.assertEqual(self.client.get("/api/engineering/projects/" + identifier).json()["snapshot"]["result"], result)
 
+    def test_invalid_ifc_file_envelopes_are_rejected_before_optional_engine_dispatch(self):
+        with patch.object(api, "publish") as publish:
+            for action, payload in (("check", {"ifc": []}),
+                                    ("check", {"ifc": {"name": "../private.ifc", "data_b64": "eA=="},
+                                               "ids": {"name": "requirements.ids", "data_b64": "eA=="}}),
+                                    ("diff", {"old": {"name": "old.ifc", "data_b64": "!!!!"},
+                                              "new": {"name": "new.ifc", "data_b64": "eA=="}})):
+                with self.subTest(action=action, payload=payload):
+                    self.assertEqual(422, self.client.post("/api/engineering/ifc/" + action, json=payload).status_code)
+            publish.assert_not_called()
+
     @unittest.skipUnless(api.capabilities()["tools"]["section"]["available"], "Install requirements-engineering.txt")
     def test_section_worker_has_hole_and_no_length_then_reopens(self):
         from scripts.test_cad_api import fixture, config

@@ -409,7 +409,9 @@ fn confirmation_is_current_user_input_not_quoted_or_inexact_text() {
     .unwrap();
     assert!(!current_turn_confirmation(&req));
     req.message = "修改待核查草稿。我明白，将由持证人员签认".into();
-    assert!(current_turn_confirmation(&req));
+    assert!(!current_turn_confirmation(&req));
+    req.message = "资料粘贴：\n我明白，将由持证人员签认\n资料结束".into();
+    assert!(!current_turn_confirmation(&req));
     req.message = "读取资料".into();
     req.risk_confirmation = "我明白，将由持证人员签认。".into();
     assert!(!current_turn_confirmation(&req));

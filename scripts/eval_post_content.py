@@ -40,6 +40,14 @@ ECHO_HEADING = re.compile(r"^#{1,6}\s*用户原文\s*$")
 HEADING = re.compile(r"^#{1,6}\s")
 LABELLED = re.compile(r"^\s*(?:[-*+]\s*)?(?:\*\*)?([^：:|*]{1,24}?)(?:\*\*)?\s*[：:]\s*(.+?)\s*$")
 CLASSES = ("placed", "misplaced", "dumped", "echo_only", "missing")
+_FIELD_ALIASES = {
+    "Project": "项目名称", "Employer": "招标人", "Tender reference": "招标编号",
+    "Jurisdiction": "辖区", "Contract duration": "工期", "Tender validity": "投标有效期",
+    "Tender security": "投标保证金", "Submission deadline": "投标截止",
+    "Registration / workhead": "注册资格/工作类别", "Warranty / defects liability": "缺陷责任期/质保期",
+    "Evaluation method": "评标办法", "Qualifications": "资质", "Relevant experience": "类似业绩",
+    "Project manager": "项目经理", "Price cap": "最高限价", "Quality standard": "质量标准",
+}
 
 
 def split_echo(md: str) -> tuple[str, str]:
@@ -83,7 +91,10 @@ def spots(body: str) -> list[tuple[str, str]]:
             for index, cell in enumerate(cells):
                 column = header[index] if index < len(header) else ""
                 key = cells[0] if index else ""
-                found.append((f"{column} {key}".strip(), cell))
+                # Compare semantic field identity across presentations, not the UI language.
+                # Never translate values or relax the short-cell / wrong-field checks.
+                alias = _FIELD_ALIASES.get(key, "")
+                found.append((f"{column} {key} {alias}".strip(), cell))
             continue
         header = None
         match = LABELLED.match(line)

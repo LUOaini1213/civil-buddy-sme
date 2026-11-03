@@ -199,6 +199,229 @@ class DesignServicesBuilderTests(unittest.TestCase):
             self.assertIn("A&amp;B &lt; 条件 &#124; 保留实体 &amp;lt;", md)
             self.assertNotIn("A&amp;amp;B", md)
 
+    def test_space_delimited_labels_are_not_discarded(self) -> None:
+        cases = (
+            ("hvac", "系统：诊区空调\n新风量 12800m3/h", "风系统与水系统", "用户新风量", "12800m3/h"),
+            ("electrical", "系统：设备配电\n需要系数 0.68", "负荷计算书数据登记", "需要/利用系数", "0.68"),
+            ("steel", "构件：GL-21\n跨度 21.8m\n屋面恒载 0.38kN/m2", "结构体系与构件范围", "用户跨度", "21.8m"),
+            ("fire-protect", "单体：教学楼\n疏散宽度 楼梯净宽1.55m", "安全疏散与避难", "用户疏散宽度", "楼梯净宽1.55m"),
+        )
+        for post, source, title, label, value in cases:
+            with self.subTest(post=post):
+                rows = rows_for(draft(post, source), title)
+                self.assertEqual(value, field(rows, label))
+                self.assertEqual(2, len(rows))
+
+    def test_two_narrative_hvac_systems_keep_unknown_heat_load_and_shared_source(self) -> None:
+        md = draft("hvac", "出暖通说明，客房那套是风机盘管带新风，冷负荷1320kW，热负荷还没算出来，"
+                   "新风量先按17400m3/h；宴会厅是全空气，冷615kW、热408kW，机房在裙房3层K3-08。"
+                   "两套都出自负荷计算书KT-FH-A08，室内参数设计还没给，冷却塔位置也没定。")
+        rows = rows_for(md, "冷热源方案与负荷资料")
+        self.assertEqual(["风机盘管带新风", "全空气"], [row[2] for row in rows[1:]])
+        self.assertEqual(["1320kW", "615kW"], [field(rows, "用户冷负荷", index) for index in (1, 2)])
+        self.assertEqual(MISSING, field(rows, "用户热负荷", 1))
+        self.assertEqual("408kW", field(rows, "用户热负荷", 2))
+        self.assertEqual(["KT-FH-A08", "KT-FH-A08"], [field(rows, "计算书", index) for index in (1, 2)])
+        air = rows_for(md, "风系统与水系统")
+        self.assertEqual("17400m3/h", field(air, "用户新风量", 1))
+        self.assertEqual(MISSING, field(air, "用户新风量", 2))
+        rooms = rows_for(md, "机房、冷却塔与竖向空间")
+        self.assertEqual(MISSING, field(rooms, "机房", 1))
+        self.assertEqual("裙房3层K3-08", field(rooms, "机房", 2))
+        self.assertTrue(all(field(rooms, "冷却塔", index) == MISSING for index in (1, 2)))
+
+    def test_narrative_hvac_calculation_reference_does_not_merge_with_load(self) -> None:
+        md = draft("hvac", "起草暖通说明，景和园3#办公楼的集中空调系统，服务标准层办公和首层大堂，"
+                   "夏季室外干球按33.6℃取，逐时负荷计算书NT-JS-0512里冷负荷1760kW、热负荷1140kW，"
+                   "制冷机房设在地下二层B2-09，冷却塔放裙房屋面，主机先别选型。")
+        rows = rows_for(md, "冷热源方案与负荷资料")
+        self.assertEqual("NT-JS-0512", field(rows, "计算书"))
+        self.assertEqual("1760kW", field(rows, "用户冷负荷"))
+        self.assertEqual("1140kW", field(rows, "用户热负荷"))
+        self.assertEqual("33.6℃", field(rows_for(md, "系统范围与空气计算参数"), "室外参数"))
+        self.assertEqual("标准层办公和首层大堂", field(rows_for(md, "系统范围与空气计算参数"), "用户范围"))
+        self.assertEqual("集中空调", rows[1][2])
+
+    def test_electrical_narrative_units_keep_coefficient_and_calculation_owner(self) -> None:
+        md = draft("electrical", "电气说明草稿，1#联合厂房设备容量大概2250kW，需要系数工艺那边给的0.73，"
+                   "要双回路供电，防雷按二类；5#倒班宿舍才465kW，系数还没人给，单回路就够了，"
+                   "防雷类别也没定。负荷计算书目前只有厂房的，编号JS-DQ-019，宿舍的后补。")
+        rows = rows_for(md, "负荷计算书数据登记")
+        self.assertEqual(["1#联合厂房", "5#倒班宿舍"], [row[1] for row in rows[1:]])
+        self.assertEqual(["2250kW", "465kW"], [field(rows, "设备容量", index) for index in (1, 2)])
+        self.assertEqual("0.73", field(rows, "需要/利用系数", 1))
+        self.assertEqual(MISSING, field(rows, "需要/利用系数", 2))
+        self.assertEqual("JS-DQ-019", field(rows, "计算书", 1))
+        self.assertEqual(MISSING, field(rows, "计算书", 2))
+        self.assertEqual(MISSING, field(rows_for(md, "防雷、接地与等电位"), "用户防雷类别", 2))
+
+    def test_electrical_transformer_user_capacity_is_not_device_or_generator_capacity(self) -> None:
+        md = draft("electrical", "写电气说明，市政电源 双回路10kV，一用一备\n设备容量：3170kW\n"
+                   "需要系数 0.71，取自甲方负荷计算书FH-2026-013\n变压器甲方已定2台，单台1500kVA\n"
+                   "自备一台柴油发电机，容量还没定。")
+        rows = rows_for(md, "变配电方案核对")
+        self.assertEqual("2台", field(rows, "用户变压器台数"))
+        self.assertEqual("1500kVA", field(rows, "用户变压器容量"))
+        self.assertEqual("3170kW", field(rows_for(md, "负荷计算书数据登记"), "设备容量"))
+        self.assertEqual(MISSING, field(rows, "本稿柴油机/母线槽选型"))
+
+    def test_plural_building_list_intro_does_not_swallow_capacity_as_its_name(self) -> None:
+        md = draft("electrical", "生成电气说明，地块里先做两个单体：1#联合厂房设备容量大概2250kW，"
+                   "需要系数0.73；5#倒班宿舍才465kW，系数还没人给。")
+        rows = rows_for(md, "负荷计算书数据登记")
+        self.assertEqual(["1#联合厂房", "5#倒班宿舍"], [row[1] for row in rows[1:]])
+        self.assertEqual(["2250kW", "465kW"], [field(rows, "设备容量", index) for index in (1, 2)])
+        self.assertEqual(MISSING, field(rows, "需要/利用系数", 2))
+
+    def test_fire_parameters_revisit_named_buildings_without_inheriting_siblings(self) -> None:
+        md = draft("fire-protect", "消防专篇草稿。A座是酒店，高度78.2米，分区面积设计院给的1450平米；"
+                   "B座是裙房商业，高度22.8米，分区面积还没给。"
+                   "防排烟A座走机械排烟，B座中庭那块是自然排烟窗。"
+                   "B座消防用水量给排水提的是605立方，A座的还没算出来。")
+        overview = rows_for(md, "工程概况")
+        self.assertEqual(["A座", "B座"], [row[1] for row in overview[1:]])
+        self.assertEqual(["酒店", "裙房商业"], [field(overview, "建筑功能", index) for index in (1, 2)])
+        area = rows_for(md, "建筑防火与分区")
+        self.assertEqual("1450平米", field(area, "用户分区面积", 1))
+        self.assertEqual(MISSING, field(area, "用户分区面积", 2))
+        smoke = rows_for(md, "防烟排烟")
+        self.assertEqual(["机械排烟", "自然排烟窗"], [field(smoke, "用户防排烟方式", index) for index in (1, 2)])
+        water = rows_for(md, "消防给水与灭火")
+        self.assertEqual(MISSING, field(water, "用户消防水量", 1))
+        self.assertEqual("605立方", field(water, "用户消防水量", 2))
+
+    def test_narrative_plumbing_revisits_each_buildings_literal_negative_levels(self) -> None:
+        md = draft("plumbing", "水专业说明草稿。1#楼给水从学苑路DN150市政管接，水务说压力0.26兆帕；"
+                   "2#楼从规划三路接，压力还没人给。污水这块1#楼出户标高-1.75，接市政井W9，井底-2.55；"
+                   "2#楼出户-1.35，接哪个井没定。资料是设计院周敏微信发的。")
+        water = rows_for(md, "水源与市政接驳")
+        self.assertEqual(["1#楼", "2#楼"], [row[1] for row in water[1:]])
+        self.assertEqual("0.26兆帕", field(water, "用户水压", 1))
+        self.assertEqual(MISSING, field(water, "用户水压", 2))
+        self.assertEqual("DN150", field(water, "用户市政管径", 1))
+        self.assertEqual(MISSING, field(water, "用户市政管径", 2))
+        levels = rows_for(md, "排水与标高衔接")
+        self.assertEqual(["-1.75", "-1.35"], [field(levels, "出户标高", index) for index in (1, 2)])
+        self.assertEqual("-2.55", field(levels, "市政井标高", 1))
+        self.assertEqual(MISSING, field(levels, "市政井标高", 2))
+        self.assertEqual("W9", field(levels, "市政井编号", 1))
+
+    def test_two_steel_components_keep_materials_and_referenced_fireproofing(self) -> None:
+        md = draft("steel", "写钢构说明。办公楼连廊那根钢梁LL-4，跨度17.8米，材料Q355D，"
+                   "两头跟混凝土柱上的预埋件MJ-8焊接；还有屋顶设备平台的钢柱GZ-7，用的是Q345C，"
+                   "柱脚地脚螺栓4根M32，跨度啥的没有。防火甲方说连廊梁刷厚型防火涂料，平台柱的还没定。")
+        rows = rows_for(md, "材料与构件规格记录")
+        self.assertEqual(["LL-4", "GZ-7"], [row[2] for row in rows[1:]])
+        self.assertEqual(["Q355D", "Q345C"], [field(rows, "用户钢材牌号", index) for index in (1, 2)])
+        span = rows_for(md, "结构体系与构件范围")
+        self.assertEqual("17.8米", field(span, "用户跨度", 1))
+        self.assertEqual(MISSING, field(span, "用户跨度", 2))
+        fire = rows_for(md, "构件防火保护")
+        self.assertEqual("厚型防火涂料", field(fire, "用户防火做法", 1))
+        self.assertEqual(MISSING, field(fire, "用户防火做法", 2))
+        self.assertEqual("4根M32", field(rows_for(md, "实体连接界面"), "地脚螺栓", 2))
+
+    def test_example_unknown_and_instruction_figures_do_not_become_design_inputs(self) -> None:
+        for source in ("冷负荷没有，只给了图号NT-2026-030，日期2026-09-30", "冷负荷比如150kW只是示例",
+                       "冷负荷请自行按150kW去算，不是提供的负荷", "冷负荷未知，热负荷200kW"):
+            with self.subTest(source=source):
+                rows = rows_for(draft("hvac", "系统：空调A\n" + source), "冷热源方案与负荷资料")
+                self.assertEqual(MISSING, field(rows, "用户冷负荷"))
+        source = "写电气说明\n单体：甲楼\n设备容量要多少kW？\n需要系数未给，只有计算书编号FH-2026-017"
+        rows = rows_for(draft("electrical", source), "负荷计算书数据登记")
+        self.assertEqual(MISSING, field(rows, "设备容量"))
+        self.assertEqual(MISSING, field(rows, "需要/利用系数"))
+
+    def test_mixed_space_labels_preserve_value_before_identity_and_local_region(self) -> None:
+        source = ("项目：合成项目；单体：办公楼\n"
+                  "冷负荷 154kW；系统：空调甲；辖区：CN\n"
+                  "冷负荷 92kW；系统：空调乙")
+        rows = rows_for(draft("hvac", source), "冷热源方案与负荷资料")
+        self.assertEqual(["空调甲", "空调乙"], [row[2] for row in rows[1:]])
+        self.assertEqual(["154kW", "92kW"], [field(rows, "用户冷负荷", index) for index in (1, 2)])
+        self.assertEqual(["CN", "UNSPECIFIED"], [row[0] for row in rows[1:]])
+
+    def test_narrative_parameter_does_not_erase_the_labelled_header_source(self) -> None:
+        source = "系统：空调甲\n资料来源：A&B < 条件 | 原始实体 &lt;\n新风量 13600m3/h"
+        rows = rows_for(draft("hvac", source), "风系统与水系统")
+        self.assertEqual("A&B < 条件 | 原始实体 &lt;", field(rows, "资料来源"))
+
+    def test_shared_or_unassigned_sources_do_not_implicitly_cover_a_named_sibling(self) -> None:
+        md = draft("plumbing", "1#楼水压0.26MPa；2#楼水压没给。资料是周敏微信发的。")
+        rows = rows_for(md, "水源与市政接驳")
+        self.assertEqual(3, len(rows))
+        self.assertEqual([MISSING, MISSING], [field(rows, "资料来源", index) for index in (1, 2)])
+        registry = rows_for(md, "用户资料来源与归属")
+        self.assertEqual(MISSING, field(registry, "单体/部位"))
+        self.assertEqual("周敏微信发的", field(registry, "资料来源"))
+
+    def test_negated_and_hypothetical_narratives_do_not_register_design_figures(self) -> None:
+        for source in ("不要按二类防雷，接地目标没给", "不是二类防雷，接地目标未定",
+                       "比如1#楼设备容量2300kW，需要系数0.75，防雷二类，只是示例",
+                       "设备容量：比如120kW只是示例\n需要系数：0.7"):
+            with self.subTest(source=source):
+                md = draft("electrical", "系统：配电甲\n" + source)
+                rows = rows_for(md, "负荷计算书数据登记")
+                self.assertTrue(all(field(rows, "设备容量", index) == MISSING for index in range(1, len(rows))))
+                self.assertTrue(all(field(rows_for(md, "防雷、接地与等电位"), "用户防雷类别", index) == MISSING
+                                    for index in range(1, len(rows))))
+
+    def test_reference_codes_and_other_units_are_not_scalar_factors(self) -> None:
+        for source in ("需要系数按计算书FH-2026-021", "需要系数只有日期2026-09-30",
+                       "需要系数未知，设备容量486kW", "需要系数问设计，电压10kV"):
+            with self.subTest(source=source):
+                rows = rows_for(draft("electrical", "系统：配电甲\n" + source), "负荷计算书数据登记")
+                self.assertEqual(MISSING, field(rows, "需要/利用系数"))
+
+    def test_natural_followup_to_table_updates_only_the_named_object(self) -> None:
+        table = "|系统|冷负荷|\n|---|---|\n|空调甲|154kW|\n|空调乙||\n"
+        md = draft("hvac", table + "系统：空调乙\n新风量 12600m3/h")
+        rows = rows_for(md, "风系统与水系统")
+        self.assertEqual(["空调甲", "空调乙"], [row[2] for row in rows[1:]])
+        self.assertEqual(MISSING, field(rows, "用户新风量", 1))
+        self.assertEqual("12600m3/h", field(rows, "用户新风量", 2))
+        self.assertEqual(MISSING, field(rows_for(md, "冷热源方案与负荷资料"), "用户冷负荷", 2))
+
+    def test_unscoped_narrative_after_table_does_not_borrow_its_last_building(self) -> None:
+        table = "|单体|水压|\n|---|---|\n|1#楼|0.26MPa|\n|2#楼||\n"
+        rows = rows_for(draft("plumbing", table + "出户标高-1.85，没说是哪栋"), "排水与标高衔接")
+        self.assertEqual(MISSING, field(rows, "出户标高", 1))
+        self.assertEqual(MISSING, field(rows, "出户标高", 2))
+        self.assertEqual(MISSING, field(rows, "单体/部位", 3))
+        self.assertEqual("-1.85", field(rows, "出户标高", 3))
+
+    def test_ambiguous_component_reference_stays_unassigned(self) -> None:
+        md = draft("steel", "连廊那根钢梁LL-4，材料Q355D；连廊那根钢梁LL-5，材料Q345C。"
+                   "甲方说连廊梁刷厚型防火涂料。")
+        rows = rows_for(md, "构件防火保护")
+        self.assertEqual(MISSING, field(rows, "用户防火做法", 1))
+        self.assertEqual(MISSING, field(rows, "用户防火做法", 2))
+        self.assertEqual(MISSING, field(rows, "构件", 3))
+        self.assertEqual("厚型防火涂料", field(rows, "用户防火做法", 3))
+
+    def test_annotated_numeric_label_preserves_parameters_but_separates_source_id(self) -> None:
+        md = draft("hvac", "系统：诊区空调\n室内参数：22±2℃，湿度50±10%\n"
+                   "冷负荷：391.4kW，出自负荷计算书JH-FH-043\n新风量 13200m3/h")
+        rows = rows_for(md, "冷热源方案与负荷资料")
+        self.assertEqual("391.4kW", field(rows, "用户冷负荷"))
+        self.assertEqual("JH-FH-043", field(rows, "计算书"))
+        self.assertEqual("22±2℃，湿度50±10%", field(rows_for(md, "系统范围与空气计算参数"), "室内参数"))
+
+    def test_unknown_and_example_numbers_are_not_parameters_in_markdown_tables(self) -> None:
+        for value in ("比如150kW只是示例", "没有冷负荷，只给图号NT-2026-031", "请自行按150kW去算"):
+            with self.subTest(value=value):
+                md = draft("hvac", f"|系统|冷负荷|\n|---|---|\n|空调甲|{value}|")
+                self.assertEqual(MISSING, field(rows_for(md, "冷热源方案与负荷资料"), "用户冷负荷"))
+
+    def test_duplicate_system_name_without_building_stays_unassigned(self) -> None:
+        md = draft("hvac", "单体：1#楼；系统：空调A；冷负荷：154kW\n"
+                   "单体：2#楼；系统：空调A；冷负荷：92kW\n系统：空调A\n新风量 13200m3/h")
+        rows = rows_for(md, "风系统与水系统")
+        self.assertEqual(MISSING, field(rows, "用户新风量", 1))
+        self.assertEqual(MISSING, field(rows, "用户新风量", 2))
+        self.assertEqual(MISSING, field(rows, "单体/部位", 3))
+        self.assertEqual("13200m3/h", field(rows, "用户新风量", 3))
+
 
 class DesignServicesRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:

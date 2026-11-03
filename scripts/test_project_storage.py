@@ -16,6 +16,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from demo import projects as pj
+from packing_assistant.filesystem import native_path
 
 
 def _worker(root: str, worker: int, start, results) -> None:
@@ -153,6 +154,42 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(calls, 2)
         self.assertEqual(result, target)
         self.assertEqual(result.read_text(encoding="utf-8"), "{}")
+
+    @unittest.skipUnless(os.name == "nt", "Windows extended-path containment")
+    def test_extended_root_preserves_identity_and_rejects_traversal(self):
+        extended = native_path(self.root)
+        pj.touch_session(extended, "sess-native", "same physical session")
+        normal = pj._bounded_path(self.root, "sess-native", "session.meta.json")
+        native = pj._bounded_path(extended, "sess-native", "session.meta.json")
+        self.assertFalse(str(normal).startswith("\\\\?\\"))
+        self.assertTrue(str(native).startswith("\\\\?\\"))
+        self.assertTrue(normal.samefile(native))
+        self.assertEqual(pj.session_detail(self.root, "sess-native"),
+                         pj.session_detail(extended, "sess-native"))
+        for root in (self.root, extended):
+            with self.subTest(root=str(root)), self.assertRaises(ValueError):
+                pj._bounded_path(root, "..", "outside-store", "session.meta.json")
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction containment")
+    def test_extended_root_rejects_real_junction_without_touching_target(self):
+        import _winapi
+
+        external = self.root / "external"
+        external.mkdir()
+        meta = external / "session.meta.json"
+        original = b'{"title":"external","turns":1}'
+        meta.write_bytes(original)
+        link = self.root / "sess-junction"
+        _winapi.CreateJunction(str(external), str(link))
+        # Remove only this test-owned junction, not its target directory.
+        self.addCleanup(link.rmdir)
+        self.assertTrue(link.is_junction())
+        for root in (self.root, native_path(self.root)):
+            with self.subTest(root=str(root)), self.assertRaises(ValueError):
+                pj._bounded_path(root, "sess-junction", "session.meta.json")
+            with self.subTest(root=str(root)), self.assertRaises(ValueError):
+                pj.set_session_meta(root, "sess-junction", title="must not overwrite")
+        self.assertEqual(meta.read_bytes(), original)
 
     def test_concurrent_manual_metadata_is_not_lost(self):
         project, _ = pj.create_project(self.root, "Manual project")

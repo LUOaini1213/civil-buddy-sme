@@ -32,7 +32,8 @@ class HRBuilderTests(unittest.TestCase):
         ):
             with self.subTest(text=text):
                 markdown = self.labor(text)
-                first, second = markdown.split("# 材料记录 2", 1)
+                # Compare individual records, not the new explicitly keyed overview.
+                first, second = markdown.split("# 材料记录 1", 1)[1].split("# 材料记录 2", 1)
                 self.assertIn("| 劳动者姓名 | 甲 |", first)
                 self.assertIn("| 劳动报酬 | 7000元 |", first)
                 self.assertIn("| 劳动者姓名 | 乙 |", second)
@@ -44,7 +45,7 @@ class HRBuilderTests(unittest.TestCase):
         for worker in ("乙", ""):
             with self.subTest(worker=worker):
                 markdown = self.labor("| 工资 | 劳动者 |\n| --- | --- |\n| 7000元 | 甲 |\n| 9000元 | " + worker + " |")
-                first, second = markdown.split("# 材料记录 2", 1)
+                first, second = markdown.split("# 材料记录 1", 1)[1].split("# 材料记录 2", 1)
                 self.assertIn("| 劳动报酬 | 7000元 |", first)
                 self.assertNotIn("9000元", first)
                 self.assertIn("| 劳动报酬 | 9000元 |", second)

@@ -135,9 +135,9 @@ def _source_table(zone: str, fields: dict[str, str], *, training: bool = False) 
         ("辖区", "资料名称或范围", "年份/版本", "条款", "状态"), rows)
 
 
-def _labor(text: str) -> str:
-    fields = _fields(text)
-    zone = infer_jurisdiction(text)
+def _labor(text: str, *, fields=None, zone=None) -> str:
+    fields = dict(_fields(text) if fields is None else fields)
+    zone = infer_jurisdiction(text) if zone is None else zone
     type_text = fields.get("contract_type") or text
     low = type_text.lower()
     selected = []
@@ -240,9 +240,9 @@ def _labor(text: str) -> str:
     return "\n".join(lines)
 
 
-def _train(text: str) -> str:
-    fields = _fields(text)
-    zone = infer_jurisdiction(text)
+def _train(text: str, *, fields=None, zone=None) -> str:
+    fields = dict(_fields(text) if fields is None else fields)
+    zone = infer_jurisdiction(text) if zone is None else zone
     levels = (
         ("公司级", "company", "企业安全制度、异常报告与通用岗位要求"),
         ("项目级", "project", "工程特点、作业环境、风险识别与现场制度"),
@@ -253,7 +253,8 @@ def _train(text: str) -> str:
         course_rows.append((label, fields.get(f"{prefix}_topic") or f"建议课题：{suggested}（待确认）",
             _value(fields, "audience"), _value(fields, f"{prefix}_hours"),
             fields.get(f"{prefix}_teacher") or _value(fields, "teacher"),
-            _value(fields, "training_date"), _value(fields, "training_place"),
+            fields.get(f"{prefix}_date") or _value(fields, "training_date"),
+            fields.get(f"{prefix}_place") or _value(fields, "training_place"),
             _value(fields, "assessment"), "未实施，结果待记录"))
     lines = [
         "# 培训计划草稿（AI 草稿 · 内部讨论）", "", DISCLAIMER, "",
@@ -327,16 +328,8 @@ def build_draft(expert_id: str, tool_name: str, text: str) -> str | None:
     """Return a post-specific draft only for its exact exclusive tool."""
     if _TOOLS.get(expert_id) != tool_name:
         return None
-    raw = text or ""
-    if expert_id == "hr-train":
-        return _train(raw)
-    records = _labor_records(raw)
-    if len(records) == 1:
-        return _labor(records[0])
-    return "\n\n".join(
-        f"# 材料记录 {index}（字段不跨记录借用）\n\n" + _labor(record)
-        for index, record in enumerate(records, start=1)
-    )
+    from packing_assistant.post_drafts.hr_observations import build_draft as owned_draft
+    return owned_draft(expert_id, tool_name, text)
 
 
 def _labor_records(text: str) -> list[str]:

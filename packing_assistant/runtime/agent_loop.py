@@ -439,12 +439,13 @@ def run_agent(
     from packing_assistant.otel_hooks import span
 
     requested = text if request_text is None else request_text
-    intent = force_intent if force_intent in {"chat", "run", "both"} else understand(requested)
     eid = (expert_id or "").strip()
+    from packing_assistant.runtime.task_router import route_task
+    intent = (force_intent if force_intent in {"chat", "run", "both"}
+              else route_task(requested, [eid] if eid else None)["intent"])
     skill_source = "given" if eid else ""
     route = None
     if not eid:
-        from packing_assistant.runtime.task_router import route_task
         route = route_task(requested)
         if force_intent not in {"chat", "run", "both"}:
             intent = route["intent"]
@@ -493,8 +494,9 @@ def run_agent(
     from packing_assistant.runtime.reply_language import english_request
 
     packing_list = _named_packing_list(requested) if exp and exp.id == "pack-ship" else ""
-    if packing_list and intent == "chat" and force_intent not in {"chat", "run", "both"}:
-        intent = "run"      # 「packing.csv 要几个柜」点名了装箱单，是要算，不是要聊
+    # A named file is an input, not authorization. The router decides whether
+    # this turn actually asks for a calculation; it also honours explanations,
+    # refusals and explicit no-files constraints on already-selected posts.
     cfg = load_config()
     gate = decide_gate(
         intent=intent,
@@ -850,6 +852,9 @@ def run_agent(
                     run.error_code = str(result.get("error_code") or "tool_failed")
                     out["error_code"] = run.error_code
                     out["reply"] = f"工具 {label} 未完成（{run.error_code}），本轮已停止。已完成的文件保留供核对。"
+                    if name == "admin-office__list" and run.error_code == "wrong_post":
+                        out["suggested_expert_id"] = "admin-doc"
+                        out["reply"] = "会议纪要应由公文印章岗（admin-doc）起草，请切换岗位后重试。会务后勤岗不把会务安排清单当作会议纪要；本轮未生成文件。"
                     if out["worker_running"]:
                         out["reply"] = f"工具 {label} 超时，已请求停止；当前工具仍在退出，资源保持占用，后续步骤不会启动。"
                     if name == "pack-ship__plan" and packing_list and result.get("error"):

@@ -15,19 +15,24 @@
 
 连接纪律（audit C3）：每个连接 PRAGMA journal_mode=WAL + synchronous=NORMAL +
 busy_timeout=5000 + foreign_keys=ON；进程内单写连接（模块级锁）+ 惰性 thread-local 读连接。
+线程退出 / 存储关闭时释放所有权；已有读游标完成后关闭句柄，未提交写入不在关闭时补提交。
 """
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
 import sqlite3
 import threading
 import time
+import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from packing_assistant.sqlite_resources import ManagedConnection, ThreadConnectionOwner
 
 logger = logging.getLogger("civil.storage")
 
@@ -180,6 +185,7 @@ def storage_mode() -> str:
 
 #: a second event with the same (run_id, seq) is the same event again (index ux_events_run_seq)
 _EVENT_CONFLICT = " ON CONFLICT(run_id, seq) DO NOTHING"
+_LIVE_STORAGE = weakref.WeakSet()
 
 
 class Storage:
@@ -190,33 +196,51 @@ class Storage:
         self._lock = threading.RLock()
         self._write_conn: Optional[sqlite3.Connection] = None
         self._local = threading.local()
-        self._ensure_schema()
+        self._readers = weakref.WeakSet()
+        self._closed = False
+        try:
+            self._ensure_schema()
+        except BaseException:
+            self.close()
+            raise
+        _LIVE_STORAGE.add(self)
 
     # ---------- 连接 ----------
 
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         busy = busy_timeout_ms()
-        conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=busy / 1000)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute(f"PRAGMA busy_timeout={busy}")
-        conn.execute("PRAGMA foreign_keys=ON")
+        conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=busy / 1000,
+                               factory=ManagedConnection)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL").close()
+            conn.execute("PRAGMA synchronous=NORMAL").close()
+            conn.execute(f"PRAGMA busy_timeout={busy}").close()
+            conn.execute("PRAGMA foreign_keys=ON").close()
+        except BaseException:
+            conn.close()
+            raise
         return conn
 
     @property
     def write_conn(self) -> sqlite3.Connection:
         with self._lock:
+            if self._closed:
+                raise sqlite3.ProgrammingError("Storage is closed.")
             if self._write_conn is None:
                 self._write_conn = self._connect()
             return self._write_conn
 
     def _read_conn(self) -> sqlite3.Connection:
-        conn = getattr(self._local, "conn", None)
-        if conn is None:
-            conn = self._connect()
-            self._local.conn = conn
-        return conn
+        with self._lock:
+            if self._closed:
+                raise sqlite3.ProgrammingError("Storage is closed.")
+            owner = getattr(self._local, "owner", None)
+            if owner is None or owner.connection.closed:
+                conn = self._connect()
+                self._readers.add(conn)
+                self._local.owner = ThreadConnectionOwner(conn)
+            return self._local.owner.connection
 
     def rollback_write(self) -> None:
         """End a write transaction a failed statement left open, so a retry starts from a fresh snapshot."""
@@ -225,14 +249,38 @@ class Storage:
                 self._write_conn.rollback()
 
     def close(self) -> None:
+        """Stop new operations and retire every owned handle.
+
+        No implicit commit: business methods commit their successful writes.
+        Borrowed read cursors finish before their connection is closed.
+        """
         with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            error = None
             if self._write_conn is not None:
                 try:
-                    self._write_conn.commit()
-                    self._write_conn.close()
-                except Exception:
-                    pass
-                self._write_conn = None
+                    self._write_conn.retire()
+                except Exception as exc:
+                    error = exc
+                finally:
+                    self._write_conn = None
+            for conn in list(self._readers):
+                try:
+                    conn.retire()
+                except Exception as exc:
+                    error = error or exc
+            self._readers.clear()
+            self._local = None
+            if error is not None:
+                raise error
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     # ---------- schema ----------
 
@@ -1242,6 +1290,19 @@ def reset_storage() -> None:
         if _STORAGE is not None:
             _STORAGE.close()
         _STORAGE = None
+
+
+def _close_live_storage() -> None:
+    # Non-daemon workers have finished before normal interpreter shutdown.
+    # Retirement still preserves any borrowed cursor instead of forcing it.
+    for store in list(_LIVE_STORAGE):
+        try:
+            store.close()
+        except Exception:
+            logger.warning("SQLite handle cleanup failed", exc_info=True)
+
+
+atexit.register(_close_live_storage)
 
 
 # ---------- CLI：python -m packing_assistant.storage --import|--stats|--prune ----------

@@ -131,11 +131,49 @@ def _sheet_text(value: Any) -> Any:
 
 def _write_rows(worksheet: Any, rows: List[List[str]]) -> None:
     """Draft tables contain text, including strings that look like formulas."""
+    import math
+    import unicodedata
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    def display_width(value: Any) -> int:
+        return max((sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in line)
+                    for line in str(value or "").splitlines()), default=0)
+
+    columns = max((len(row) for row in rows), default=0)
+    width_limit = 72 if columns <= 2 else 44 if columns <= 6 else 30
+    widths = []
+    for c_i in range(columns):
+        longest = max((display_width(row[c_i]) for row in rows if c_i < len(row)), default=0)
+        width = min(width_limit, max(14, longest + 3))
+        widths.append(width)
+        worksheet.column_dimensions[get_column_letter(c_i + 1)].width = width
+    edge = Side(style="thin", color="D9D9D9")
     for r_i, row in enumerate(rows, 1):
+        line_count = 1
         for c_i, value in enumerate(row, 1):
             cell = worksheet.cell(r_i, c_i, _sheet_text(value))
             if isinstance(value, str):
                 cell.data_type = "s"
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+            cell.font = Font(name="Calibri", size=11, bold=r_i == 1, color="000000")
+            cell.border = Border(left=edge, right=edge, top=edge, bottom=edge)
+            if r_i == 1:
+                cell.fill = PatternFill("solid", fgColor="E7E6E6")
+            available = max(1, widths[c_i - 1] - 3)
+            lines = sum(max(1, math.ceil(display_width(line) / available))
+                        for line in str(value or "").split("\n"))
+            line_count = max(line_count, lines)
+        worksheet.row_dimensions[r_i].height = min(409, max(27, line_count * 16 + 8))
+    if rows:
+        worksheet.freeze_panes = "A2"
+        worksheet.print_title_rows = "1:1"
+        worksheet.print_area = worksheet.calculate_dimension()
+        worksheet.sheet_properties.pageSetUpPr.fitToPage = True
+        worksheet.page_setup.orientation = "landscape" if columns > 4 else "portrait"
+        worksheet.page_setup.paperSize = worksheet.PAPERSIZE_A3 if columns > 8 else worksheet.PAPERSIZE_A4
+        worksheet.page_setup.fitToWidth = 1
+        worksheet.page_setup.fitToHeight = 0
 
 
 def _save_workbook(workbook: Any, path: Path) -> Path:

@@ -366,6 +366,8 @@ def run_tender_workflow(text, *, session_id, output_root, sources=None, confirme
             raise ValueError("未从当前资料检出可解析招标要求")
         matrix = build_response_matrix(requirements)
         handoff = parsed["handoff"]
+        from packing_assistant.tools.technical_response import collect
+        handoff["technical_response"] = collect(sources=supplied) if declared else collect(text)
         unread = _unreadable(list(handoff.get("unreadable") or []) + unread)
         if unread:
             handoff["unreadable"] = unread  # the three drafts read it off the handoff
@@ -391,7 +393,7 @@ def run_tender_workflow(text, *, session_id, output_root, sources=None, confirme
         handoff_path = directory / "handoff.json"
         _atomic(handoff_path, snapshot)
         file_saved(handoff_path, "tender.handoff")
-        document(directory, "tender-extract", build_workbench_extract_table(parsed, project_name="当前招标协作"))
+        document(directory, "tender-extract", build_workbench_extract_table(parsed, project_name="当前招标协作", request_text=text))
         state["state"] = "running"
 
         contexts = {}

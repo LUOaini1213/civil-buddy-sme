@@ -69,6 +69,7 @@ class Originals(unittest.TestCase):
         wording = "Two Envelope: technical and price separately"
         result = workbench_bid_extract(f"INVITATION TO TENDER\nQuality 40%\nPrice 60%\n{wording}", project_name="synthetic")
         self.assertIn(wording, result["extract_table_markdown"])
+        self.assertIn(f"| Submission envelope | {wording} | L4 |", result["extract_table_markdown"])
         self.assertEqual(result["handoff"]["envelope_sources"], [{"text": wording, "locator": "L4"}])
         # A bidder's proposed submission method is not the tender's requirement.
         mixed = parse_tender_text("招标要求工期60日历天；我们拟用双信封递交投标文件。")

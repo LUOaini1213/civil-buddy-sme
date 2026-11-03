@@ -54,22 +54,13 @@ VERDICTS = (
     re.compile(r"(?<![不未])检验合格"), re.compile(r"(?<![不未])判定合格"), re.compile(r"(?<![不未])验收通过"),
     re.compile(r"(?<![不未])可以开工"), re.compile(r"(?<![不未])准予"), re.compile(r"(?<![不未])审批通过"),
 )
-DISCLAIMER_MARKS = ("AI 草稿", "内部讨论", "草稿")
+DISCLAIMER_MARKS = ("AI 草稿", "内部讨论", "草稿", "AI draft")
 
 # Posts whose writer still interpolates the user's words into a table row without escaping "|", so a
 # pipe the user typed adds cells to that row and shifts every value after it one heading to the
 # right. Measured 2026-09-20, before the writers were rewritten. This list only ever shrinks: the
 # test fails both on a post that newly breaks and on one that is fixed but still listed.
-PIPES_SHIFT_COLUMNS = {
-    "cost": ("pipes", "user_table"), "equip": ("pipes", "user_table"),
-    "hr-recruit": ("pipes", "user_table"), "interim": ("pipes", "user_table"),
-    "lab-record": ("pipes", "user_table"), "lab-sample": ("pipes", "user_table"),
-    "material-site": ("pipes", "user_table"), "plan-lookahead": ("pipes", "user_table"),
-    "plan-master": ("pipes", "user_table"), "plan-resource": ("pipes", "user_table"),
-    "proc-compare": ("pipes", "user_table"), "proc-plan": ("pipes", "user_table"),
-    "proc-vendor": ("pipes", "user_table"), "quality": ("pipes", "user_table"),
-    "subcontract": ("pipes", "user_table"),
-}
+PIPES_SHIFT_COLUMNS = {}
 
 
 def table_rows(markdown: str) -> list[tuple[int, list[str]]]:

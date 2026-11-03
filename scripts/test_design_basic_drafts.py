@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from packing_assistant import expert_turn
+from packing_assistant.office_job import tables_from_md
 from packing_assistant.post_drafts.design_basic import DISCLAIMER, build_draft
 from packing_assistant.runtime.scheduler import Scheduler
 from packing_assistant.runtime.tool_engine import default_engine
@@ -33,6 +34,11 @@ def chapter(markdown: str, title: str) -> str:
 def table_rows(markdown: str) -> list[list[str]]:
     return [[cell.strip() for cell in line.strip().strip("|").split("|")]
             for line in markdown.splitlines() if line.startswith("| ") and not re.fullmatch(r"[| \-:]+", line)]
+
+
+def typed_rows(markdown: str, title: str, header: str) -> list[dict[str, str]]:
+    rows = next(rows for _, rows in tables_from_md(chapter(markdown, title)) if header in rows[0])
+    return [dict(zip(rows[0], row)) for row in rows[1:]]
 
 
 class DesignBuilderTests(unittest.TestCase):
@@ -193,7 +199,7 @@ class DesignBuilderTests(unittest.TestCase):
     def test_facade_records_do_not_certify_performance_or_acceptance(self):
         markdown = draft("facade", "幕墙编号：CW-A；防火封堵：用户节点F1；防雷接口：电气接点表；拉拔检测计划：用户检测计划；性能检测：用户报告P；验收记录：用户签收记录；状态：用户称已验收\n幕墙编号：CW-B；防火玻璃范围：用户范围B")
         acceptance = table_rows(chapter(markdown, "8 验收资料"))[1:]
-        self.assertEqual(acceptance[0], ["CW-A", "用户签收记录", "用户称已验收", "未验收", "UNSPECIFIED"])
+        self.assertEqual(acceptance[0], ["CW-A", "用户签收记录", "用户称已验收", "本轮未执行验收", "UNSPECIFIED"])
         self.assertEqual(acceptance[1][1:3], ["[A001] 待填"] * 2)
         self.assertIn("用户检测计划", chapter(markdown, "10 后置锚固与拉拔检测接口"))
         self.assertIn("用户范围B", chapter(markdown, "11 防火专业接口"))
@@ -298,6 +304,235 @@ class DesignBuilderTests(unittest.TestCase):
                 rows = table_rows(chapter(draft(post, text), title))
                 self.assertEqual(next(row for row in rows if row[0] == "对象A")[index], first)
                 self.assertEqual(next(row for row in rows if row[0] == "对象B")[index], second)
+
+    def test_narrative_architecture_registers_literal_area_height_and_task_brief(self):
+        md = draft("architecture", "起草建筑说明，3#楼是人才公寓，地上18层，总建筑面积21917.3平米，"
+                   "建筑高度53.15米，首层层高4.9米，设计任务书用甲方2026-08-19下发的那版，图号目前只有建施-06。")
+        row = typed_rows(md, "1 工程概况与设计范围", "单体")[0]
+        self.assertEqual(("3#楼", "人才公寓", "18层", "21917.3平米", "53.15米"),
+                         tuple(row[key] for key in ("单体", "功能 / 业态", "层数", "建筑面积", "建筑高度")))
+        self.assertEqual("4.9米", typed_rows(md, "7 竖向", "层高")[0]["层高"])
+        self.assertIn("2026-08-19", chapter(md, "1 工程概况与设计范围"))
+        drawing = typed_rows(md, "9 图则口径", "用户图号")[0]
+        self.assertEqual("建施-06", drawing["用户图号"])
+        self.assertEqual("3#楼", drawing["关联单体"])
+
+    def test_two_narrative_buildings_keep_each_drawing_and_unknown_storeys_separate(self):
+        md = draft("architecture", "两栋一起出建筑说明：1#楼商业带办公，面积32718.2平，高80.6米，"
+                   "消防车道走北侧规划路，图号建施-102；另外那个幼儿园是6#楼，才2891.7平，三层，"
+                   "高度甲方还没定，主入口开在南边小区路，图号建施-602是B版。")
+        rows = typed_rows(md, "1 工程概况与设计范围", "单体")
+        self.assertEqual(["1#楼", "6#楼"], [row["单体"] for row in rows])
+        self.assertEqual(["商业带办公", "幼儿园"], [row["功能 / 业态"] for row in rows])
+        self.assertEqual(["32718.2平", "2891.7平"], [row["建筑面积"] for row in rows])
+        self.assertEqual(["[A001] 待填", "三层"], [row["层数"] for row in rows])
+        self.assertEqual("[A001] 待填", rows[1]["建筑高度"])
+        drawing = typed_rows(md, "9 图则口径", "用户图号")
+        self.assertEqual(["1#楼", "6#楼"], [row["关联单体"] for row in drawing])
+        self.assertEqual(["[A001] 待填", "B版"], [row["版本"] for row in drawing])
+        general = typed_rows(md, "3 总平面", "消防车道")
+        self.assertEqual("北侧规划路", general[0]["消防车道"])
+        self.assertEqual("[A001] 待填", general[1]["消防车道"])
+
+    def test_space_labelled_architecture_keeps_elevator_location_and_drawing_version(self):
+        md = draft("architecture", "单体：综合教学楼A座\n地上6层，建筑高度24.95m\n"
+                   "无障碍电梯 1部，设在东侧门厅\n图号：建施-J-03，版本V2.2\n"
+                   "提资：2026-10-18前给结构提楼板开洞条件")
+        row = typed_rows(md, "6 无障碍", "无障碍电梯")[0]
+        self.assertIn("1部", row["无障碍电梯"])
+        self.assertIn("东侧门厅", row["无障碍电梯"])
+        self.assertEqual("V2.2", typed_rows(md, "9 图则口径", "用户图号")[0]["版本"])
+        interface = typed_rows(md, "10 专业界面、依据与自检", "截止日期")[0]
+        self.assertEqual("2026-10-18前", interface["截止日期"])
+        self.assertEqual("结构", interface["接收专业"])
+
+    def test_narrative_structure_preserves_two_buildings_and_member_load_units(self):
+        md = draft("structure", "起草结构提纲，1#办公楼是框架，柱子KZ-6用C45，活载按荷载表取2.7；"
+                   "2#仓库门式刚架，钢柱GZ-3用Q355D，活载业主说按7.8kN考虑。仓库基础型式还没定。")
+        objects = typed_rows(md, "1 工程概况", "单体")
+        self.assertEqual(["1#办公楼", "2#仓库"], [row["单体"] for row in objects])
+        self.assertEqual(["框架", "门式刚架"], [row["结构体系"] for row in objects])
+        loads = typed_rows(md, "4 荷载与组合", "活载")
+        self.assertEqual(["1#办公楼", "2#仓库"], [row["关联单体"] for row in loads])
+        self.assertEqual(["KZ-6", "GZ-3"], [row["构件 / 部位"] for row in loads])
+        self.assertEqual(["2.7", "7.8kN"], [row["活载"] for row in loads])
+        material = typed_rows(md, "5 材料", "用户混凝土等级")
+        self.assertEqual("C45", material[0]["用户混凝土等级"])
+        self.assertEqual("Q355D", material[1]["用户钢材等级"])
+        self.assertEqual("[A001] 待填", material[1]["用户混凝土等级"])
+        self.assertTrue(all(row[-1] == "UNSPECIFIED" for row in table_rows(chapter(md, "7 计算步骤"))[1:]))
+
+    def test_narrative_structure_member_dimensions_do_not_swallow_material_ids(self):
+        md = draft("structure", "起草结构提纲，3#楼，框架剪力墙结构，地上29层，建筑高度81.8米，"
+                   "设防烈度7度0.16g，二层转换梁KZL-4跨度8.7米，截面720×1530，混凝土C40，钢筋HRB400。")
+        row = typed_rows(md, "9 构件复核清单", "用户跨度")[0]
+        self.assertEqual(("KZL-4", "8.7米", "720×1530"), tuple(row[key] for key in ("构件", "用户跨度", "用户截面")))
+        quake = typed_rows(md, "8 抗震概念与薄弱部位", "用户地震参数")[0]
+        self.assertEqual("7度0.16g", quake["用户地震参数"])
+        self.assertEqual("C40", typed_rows(md, "5 材料", "用户混凝土等级")[0]["用户混凝土等级"])
+
+    def test_late_foundation_label_belongs_to_building_not_current_beam(self):
+        md = draft("structure", "单体：5#楼\n构件：LL-13连梁\n混凝土等级：C35\n基础型式 筏板基础")
+        row = typed_rows(md, "6 地基基础", "用户基础型式")[0]
+        self.assertEqual("5#楼", row["单体"])
+        self.assertEqual("筏板基础", row["用户基础型式"])
+
+    def test_narrative_geotech_holes_and_layers_keep_unknown_water_and_phi_local(self):
+        md = draft("geotech", "地勘摘录帮我理成表：ZK4那个孔打了38.7米，水位2.45，"
+                   "第3层是粉砂，c给的6.7、φ29.8；ZK12孔深42.6，第3层变成淤泥质粉质黏土了，"
+                   "c是13.9，φ没写，水位也没量。")
+        holes = typed_rows(md, "5 勘探工作量与试验", "用户孔号")
+        self.assertEqual(["ZK4", "ZK12"], [row["用户孔号"] for row in holes])
+        self.assertEqual(["38.7米", "42.6"], [row["孔深"] for row in holes])
+        layers = typed_rows(md, "6 地层与参数摘录", "用户层号")
+        self.assertEqual(["ZK4", "ZK12"], [row["用户孔号"] for row in layers])
+        self.assertEqual(["6.7", "13.9"], [row["黏聚力 c"] for row in layers])
+        self.assertEqual(["29.8", "未在原文检出"], [row["φ"] for row in layers])
+        self.assertTrue(all(row["用户承载力记录"] == "未在原文检出" for row in layers))
+        water = typed_rows(md, "4 场地与地下水", "用户地下水位")
+        self.assertEqual(["2.45", "未在原文检出"], [row["用户地下水位"] for row in water])
+
+    def test_geotech_space_hole_id_preserves_negative_depth_and_report_reference(self):
+        md = draft("geotech", "地勘报告：YT-2026-059（中间成果）\n孔号 BH13\n孔深：33.4m\n"
+                   "地下水位：埋深1.85m\n层号：④\n岩土名称：淤泥质黏土\n层底深度 19.7m\nc：11.3kPa\nφ：8.7°")
+        holes = typed_rows(md, "5 勘探工作量与试验", "用户孔号")
+        self.assertEqual("BH13", holes[0]["用户孔号"])
+        row = typed_rows(md, "6 地层与参数摘录", "用户层号")[0]
+        self.assertEqual(("BH13", "④", "19.7m", "11.3kPa", "8.7°"),
+                         tuple(row[key] for key in ("用户孔号", "用户层号", "层深", "黏聚力 c", "φ")))
+        self.assertIn("YT-2026-059", chapter(md, "1 任务与阶段"))
+
+    def test_narrative_facade_relative_type_reference_updates_only_its_system(self):
+        md = draft("facade", "A座有两种幕墙，生成说明。大堂东立面那块是全玻幕墙，编号QB-02，层高9.7，"
+                   "风压设计院说按2.47算；塔楼标准层是单元式的UC-04，风压3.36，层高4.6，水密要1100Pa。"
+                   "全玻那块气密水密都还没给，预埋单元式用槽式埋件，全玻的还不知道。")
+        rows = typed_rows(md, "4 抗风、气密、水密与层间变位", "用户风压")
+        self.assertEqual(["QB-02", "UC-04"], [row["幕墙"] for row in rows])
+        self.assertEqual(["2.47", "3.36"], [row["用户风压"] for row in rows])
+        self.assertEqual(["[A001] 待填", "1100Pa"], [row["水密要求"] for row in rows])
+        embed = typed_rows(md, "3 预埋件与主体结构接口", "预埋件")
+        self.assertEqual(["[A001] 待填", "槽式埋件"], [row["预埋件"] for row in embed])
+        self.assertNotIn("2.47kPa", md)
+
+    def test_facade_space_fields_keep_literal_fraction_and_user_source(self):
+        md = draft("facade", "幕墙编号：MQ-03\n体系：构件式明框玻璃幕墙\n设计风压：3.13kPa\n"
+                   "风压来源：结构提资单JG-TZ-018\n层高 4.0m\n层间变位 1/450\n后置锚栓 M14化学锚栓")
+        row = typed_rows(md, "1 体系选型", "用户体系")[0]
+        self.assertEqual("构件式明框玻璃幕墙", row["用户体系"])
+        self.assertEqual("4.0m", row["层高"])
+        row = typed_rows(md, "4 抗风、气密、水密与层间变位", "层间变位")[0]
+        self.assertEqual("1/450", row["层间变位"])
+        self.assertEqual("结构提资单JG-TZ-018", typed_rows(md, "3 预埋件与主体结构接口", "用户图纸来源")[0]["用户图纸来源"])
+
+    def test_a_unique_member_revisit_restores_its_own_building_and_region(self):
+        md = draft("structure", "1#办公楼，辖区：CN，柱子KZ-6用C45；2#仓库，钢柱GZ-3用Q355D。"
+                   "柱子KZ-6跨度6.7米。")
+        rows = typed_rows(md, "9 构件复核清单", "用户跨度")
+        self.assertEqual(["KZ-6", "GZ-3"], [row["构件"] for row in rows])
+        self.assertEqual(["6.7米", "[A001] 待填"], [row["用户跨度"] for row in rows])
+        self.assertEqual(["CN", "UNSPECIFIED"], [row["对象辖区"] for row in rows])
+
+    def test_same_member_code_without_a_named_building_is_not_assigned_to_last_building(self):
+        md = draft("structure", "1#办公楼，柱子KZ-6用C45；2#仓库，柱子KZ-6用C35。"
+                   "柱子KZ-6跨度6.7米，没说是哪栋。")
+        rows = typed_rows(md, "4 荷载与组合", "构件 / 部位")
+        self.assertEqual(["1#办公楼", "2#仓库", "[A001] 待填"], [row["关联单体"] for row in rows])
+        members = typed_rows(md, "9 构件复核清单", "用户跨度")
+        self.assertEqual(["[A001] 待填", "[A001] 待填", "6.7米"], [row["用户跨度"] for row in members])
+
+    def test_pure_colon_foundation_input_is_also_unit_level_not_member_level(self):
+        md = draft("structure", "单体：5#楼\n构件：梁A；跨度：6m\n基础型式：筏板基础")
+        row = typed_rows(md, "6 地基基础", "用户基础型式")[0]
+        self.assertEqual("筏板基础", row["用户基础型式"])
+
+    def test_named_building_revisit_can_disambiguate_its_duplicate_member(self):
+        md = draft("structure", "1#办公楼，辖区：CN，柱子KZ-6用C45；"
+                   "2#仓库，辖区：SG，柱子KZ-6用C35。1#办公楼，柱子KZ-6跨度6.7米。")
+        rows = typed_rows(md, "9 构件复核清单", "用户跨度")
+        self.assertEqual(["6.7米", "[A001] 待填"], [row["用户跨度"] for row in rows])
+        self.assertEqual(["CN", "SG"], [row["对象辖区"] for row in rows])
+
+    def test_kindergarten_is_a_separate_building_not_more_area_on_the_school(self):
+        md = draft("architecture", "生成建筑设计说明。1#教学楼，地上5层，总建筑面积5140平米，高23.6米；"
+                   "2#幼儿园，三层，总建筑面积2380平米，高度还没给。")
+        rows = typed_rows(md, "1 工程概况与设计范围", "建筑高度")
+        self.assertEqual(["1#教学楼", "2#幼儿园"], [row["单体"] for row in rows])
+        self.assertEqual(["5140平米", "2380平米"], [row["建筑面积"] for row in rows])
+        self.assertEqual(["5层", "三层"], [row["层数"] for row in rows])
+        self.assertEqual(["23.6米", "[A001] 待填"], [row["建筑高度"] for row in rows])
+
+    def test_unrecognised_numbered_building_never_contaminates_the_prior_building(self):
+        md = draft("architecture", "1#教学楼，总建筑面积5140平米，高23.6米；"
+                   "西侧2#研发中心，总建筑面积2380平米，高29.7米。")
+        rows = typed_rows(md, "1 工程概况与设计范围", "建筑高度")
+        self.assertEqual(["1#教学楼", "[A001] 待填"], [row["单体"] for row in rows])
+        self.assertEqual(["5140平米", "2380平米"], [row["建筑面积"] for row in rows])
+        self.assertEqual(["23.6米", "29.7米"], [row["建筑高度"] for row in rows])
+
+    def test_unique_member_revisit_updates_its_foundation_not_the_last_building(self):
+        md = draft("structure", "1#办公楼，柱子KZ-6用C45；2#仓库，钢柱GZ-3用Q355D。"
+                   "柱子KZ-6跨度6.7米，基础型式 筏板基础。")
+        rows = typed_rows(md, "6 地基基础", "用户基础型式")
+        self.assertEqual(["筏板基础", "[A001] 待填"], [row["用户基础型式"] for row in rows])
+
+    def test_named_hole_revisit_restores_local_region_and_only_its_layer(self):
+        md = draft("geotech", "孔号 BH13\n辖区：CN\n层号：④\nc：11.3kPa\n"
+                   "孔号 BH14\n辖区：SG\n层号：④\nc：12.3kPa\n孔号 BH13\n层号 ④\nφ 12.4度")
+        rows = typed_rows(md, "6 地层与参数摘录", "用户层号")
+        self.assertEqual(["BH13", "BH14"], [row["用户孔号"] for row in rows])
+        self.assertEqual(["12.4度", "未在原文检出"], [row["φ"] for row in rows])
+        self.assertEqual(["CN", "SG"], [row["对象辖区"] for row in rows])
+
+    def test_ambiguous_layer_revisit_cannot_choose_the_last_hole(self):
+        md = draft("geotech", "孔号 BH13\n层号：④\nc：11.3kPa\n"
+                   "孔号 BH14\n层号：④\nc：12.3kPa\n层号 ④\nφ 12.4度")
+        rows = typed_rows(md, "6 地层与参数摘录", "用户层号")
+        self.assertEqual(["BH13", "BH14", "未在原文检出"], [row["用户孔号"] for row in rows])
+        self.assertEqual(["未在原文检出", "未在原文检出", "12.4度"], [row["φ"] for row in rows])
+
+    def test_member_table_revisit_preserves_its_original_body_and_region(self):
+        md = draft("structure", "|单体|构件|混凝土等级|辖区|\n|---|---|---|---|\n"
+                   "|1#办公楼|KZ-6|C45|CN|\n|2#仓库|GZ-3|C35|SG|\n柱子KZ-6跨度6.7米。")
+        rows = typed_rows(md, "9 构件复核清单", "用户跨度")
+        self.assertEqual(["6.7米", "[A001] 待填"], [row["用户跨度"] for row in rows])
+        self.assertEqual(["CN", "SG"], [row["对象辖区"] for row in rows])
+        self.assertEqual(["1#办公楼", "2#仓库"], [row["关联单体"] for row in typed_rows(md, "4 荷载与组合", "构件 / 部位")])
+
+    def test_local_region_and_later_layer_values_do_not_cross_boreholes(self):
+        md = draft("geotech", "孔号 BH13\n辖区：CN\n层号：④\nc：11.3kPa\n"
+                   "孔号 BH14\n层号：④\nφ 12.4度")
+        rows = typed_rows(md, "6 地层与参数摘录", "用户层号")
+        self.assertEqual(["BH13", "BH14"], [row["用户孔号"] for row in rows])
+        self.assertEqual(["11.3kPa", "未在原文检出"], [row["黏聚力 c"] for row in rows])
+        self.assertEqual(["CN", "UNSPECIFIED"], [row["对象辖区"] for row in rows])
+
+    def test_basic_design_examples_and_report_codes_do_not_become_parameters(self):
+        cases = (
+            ("architecture", "单体：教学楼\n建筑高度按图号A-2026-031取，未提供高度", "1 工程概况与设计范围", "建筑高度"),
+            ("structure", "构件：梁A\n跨度比如6m只是示例", "9 构件复核清单", "用户跨度"),
+            ("geotech", "孔号 BH13\n层号：④\nc只给报告YT-2026-031\nφ没写", "6 地层与参数摘录", "黏聚力 c"),
+            ("facade", "幕墙编号：MQ-03\n层间变位：比如1/450只是示例", "4 抗风、气密、水密与层间变位", "层间变位"),
+        )
+        for post, text, title, label in cases:
+            with self.subTest(post=post):
+                rows = typed_rows(draft(post, text), title, label)
+                self.assertTrue(all(row[label] in {"[A001] 待填", "未在原文检出"} for row in rows))
+
+    def test_facade_ambiguous_type_reference_stays_unassigned_and_does_not_claim_acceptance(self):
+        md = draft("facade", "A座有两种幕墙。单元式的UC-04，风压3.36；单元式的UC-05，风压3.46。"
+                   "预埋单元式用槽式埋件，没说是哪个系统。")
+        rows = typed_rows(md, "3 预埋件与主体结构接口", "预埋件")
+        self.assertEqual(["[A001] 待填", "[A001] 待填", "槽式埋件"], [row["预埋件"] for row in rows])
+        self.assertEqual("[A001] 待填", rows[2]["幕墙"])
+        self.assertTrue(all(row["本轮状态"] == "本轮未执行验收" for row in typed_rows(md, "8 验收资料", "用户验收资料")))
+
+    def test_ambiguous_facade_type_across_buildings_has_no_last_building_owner(self):
+        md = draft("facade", "A座，单元式的UC-04，风压3.36；B座，单元式的UC-05，风压3.46。"
+                   "预埋单元式用槽式埋件，没说是哪个系统。")
+        rows = typed_rows(md, "1 体系选型", "关联单体")
+        self.assertEqual(["A座", "B座", "[A001] 待填"], [row["关联单体"] for row in rows])
+        embed = typed_rows(md, "3 预埋件与主体结构接口", "预埋件")
+        self.assertEqual(["[A001] 待填", "[A001] 待填", "槽式埋件"], [row["预埋件"] for row in embed])
 
 
 class DesignRuntimeTests(unittest.TestCase):

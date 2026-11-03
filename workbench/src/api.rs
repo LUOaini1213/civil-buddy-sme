@@ -593,6 +593,8 @@ async fn session_patch(
 }
 
 async fn health(State(st): State<Arc<AppState>>, identity: Option<Extension<Arc<crate::product::auth::InstanceAuth>>>) -> Json<Value> {
+    let agent_workbench = identity.is_some();
+    let packing_workbench = st.engine.is_some() && std::env::var_os("CIVIL_DOMAIN_URL").is_some();
     let identity = identity.map(|Extension(auth)| auth.capabilities()).unwrap_or_else(|| json!({"mode":"unprotected_legacy_router","authentication_required":false,"multi_tenant":false}));
     /* ux(round4)：probe() 走 reqwest::blocking，必须在 spawn_blocking 里跑——
        直接在 async 上下文 drop blocking runtime 会 panic 并截断 /api/health（同 round3 对 /api/chat 的修复）。 */
@@ -615,6 +617,8 @@ async fn health(State(st): State<Arc<AppState>>, identity: Option<Extension<Arc<
         "model_settings": true,
         "audit": true,
         "packing": packing_up,
+        "agent_workbench": agent_workbench,
+        "packing_workbench": packing_workbench,
         "attachments": true,
         "cancel": true,
         "session_backup": st.engine.is_some(),
@@ -1204,7 +1208,11 @@ async fn chat(State(st): State<Arc<AppState>>, Json(mut body): Json<ChatIn>) -> 
     let turn_guard = crate::turns::Guard { sid: session.clone(), flag: turn_flag.clone() };
     body.session_id = session.clone();
     if let Some(engine) = &st.engine {
-        if chat_needs_python_tools(
+        // A selected legacy specialist/material scope belongs to the fixed
+        // domain pipeline, independently of the message's language or whether
+        // the client assigned attachment roles. Generic Agent model turns use
+        // /api/agent/turns; unbound ordinary chat keeps its existing Rust path.
+        if !body.expert_ids.is_empty() || !body.attachments.is_empty() || chat_needs_python_tools(
             &body.message,
             &body.cad_project_id,
             &body.planning_project_id,

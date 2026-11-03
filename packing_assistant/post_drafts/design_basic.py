@@ -11,6 +11,8 @@ import html
 import re
 
 from packing_assistant.jurisdiction import infer_jurisdiction
+from packing_assistant.post_drafts.design_basic_observations import aliases_for, parameter_value, statements
+from packing_assistant.post_drafts.design_observations import MISSING as OBSERVATION_MISSING
 
 DISCLAIMER = (
     "本文件由 Civil Buddy 根据用户输入生成，仅供内部讨论与起草。"
@@ -150,38 +152,78 @@ def _record_pairs(pairs: list[tuple[str, str]], post: str) -> list[tuple[str, st
 
 def _parse(text: str, post: str) -> _Input:
     data = _Input()
+    aliases = aliases_for(post, _ALIASES)
+    labels = "|".join(re.escape(alias) for alias in sorted(aliases, key=len, reverse=True))
+    field_re = re.compile(r"(?<![\w])(" + labels + r")\s*[:：=]\s*", re.I)
     active, active_kind = data.context, None
     object_name, hole_name = "", ""
     object_scope, hole_scope = "UNSPECIFIED", "UNSPECIFIED"
+    fresh_object_kinds: set[str] = set()
+    fresh_hole = False
+    unassigned_objects: dict[int, dict[str, str]] = {}
     preamble: list[str] = []
 
-    def add(key: str, value: str) -> None:
-        nonlocal active, active_kind, object_name, hole_name, object_scope, hole_scope
+    def add(key: str, value: str, *, revisit: bool = False, narrative: bool = False, unscoped: bool = False) -> None:
+        nonlocal active, active_kind, object_name, hole_name, object_scope, hole_scope, fresh_object_kinds, fresh_hole
         kind = _kind(key, post)
         primary = key not in {"soil", "information"}
         if kind and (primary or kind != active_kind or key in active):
-            active, active_kind = {}, kind
-            data.records.setdefault(kind, []).append(active)
+            child = kind not in {"objects", "holes"}
+            # A freshly named parent introduces its own children, including
+            # codes also used in another building/hole. Later bare references
+            # may revisit a globally unique child, never just the last parent.
+            scoped = child and not unscoped and (fresh_hole if kind == "layers" else kind in fresh_object_kinds)
+            candidates = [row for row in data.records.get(kind, []) if row.get(key) == value
+                          and (not scoped or (row.get("hole_ref", "") == hole_name if kind == "layers"
+                                              else row.get("object_ref", "") == object_name))] if revisit and value else []
+            ambiguous = child and (unscoped or len(candidates) > 1)
+            active_kind = kind
+            if len(candidates) == 1 and not unscoped:
+                active = candidates[0]
+                if child:
+                    object_name = active.get("object_ref", "")
+                    parents = [row for row in data.records.get("objects", []) if row.get("object") == object_name]
+                    object_scope = (parents[0].get("jurisdiction") or parents[0].get("_jurisdiction", "UNSPECIFIED")) if len(parents) == 1 else active.get("jurisdiction") or active.get("_jurisdiction", "UNSPECIFIED")
+                    if not scoped:
+                        fresh_object_kinds.clear()
+                    if kind == "layers":
+                        hole_name = active.get("hole_ref", "")
+                        holes = [row for row in data.records.get("holes", []) if row.get("hole") == hole_name]
+                        hole_scope = (holes[0].get("jurisdiction") or holes[0].get("_jurisdiction", "UNSPECIFIED")) if len(holes) == 1 else active.get("jurisdiction") or active.get("_jurisdiction", "UNSPECIFIED")
+            else:
+                active = {}
+                data.records.setdefault(kind, []).append(active)
+                if ambiguous:
+                    object_name, hole_name = "", ""
+                    object_scope, hole_scope = "UNSPECIFIED", "UNSPECIFIED"
+                    fresh_object_kinds.clear()
             scope = data.context.get("jurisdiction", "UNSPECIFIED")
             if kind != "objects" and object_name:
                 scope = object_scope
             if kind == "layers" and hole_name:
                 scope = hole_scope
-            active["_jurisdiction"] = scope
-            if kind not in {"objects", "holes", "drawings"} and object_name:
-                active["object_ref"] = object_name
+            active.setdefault("_jurisdiction", "UNSPECIFIED" if ambiguous else scope)
+            if kind not in {"objects", "holes"} and object_name:
+                active.setdefault("object_ref", object_name)
             if kind == "layers" and hole_name:
                 active["hole_ref"] = hole_name
-        value = value.strip()
+            if child:
+                fresh_object_kinds.discard(kind)
+                if kind == "layers":
+                    fresh_hole = False
+        value = parameter_value(key, value).strip()
         empty = not value or bool(_EMPTY.fullmatch(value))
         if key == "object":
             object_name = "" if empty else value
             hole_name = ""
-            object_scope = active["_jurisdiction"]
+            object_scope = active.get("jurisdiction") or active["_jurisdiction"]
             hole_scope = "UNSPECIFIED"
+            fresh_object_kinds = {"components", "facades", "spaces", "interfaces", "drawings", "layers"} if object_name else set()
+            fresh_hole = False
         elif key == "hole":
             hole_name = "" if empty else value
-            hole_scope = active["_jurisdiction"]
+            hole_scope = active.get("jurisdiction") or active["_jurisdiction"]
+            fresh_hole = bool(hole_name)
         elif key == "jurisdiction":
             # A local explicit unknown also overrides a global jurisdiction.
             scope = "UNSPECIFIED" if empty else value
@@ -194,13 +236,70 @@ def _parse(text: str, post: str) -> _Input:
         if empty:
             return
         target = data.context if key in _GLOBAL else active
+        object_fields = {"foundation", "bearing_layer", "bearing", "depth", "system", "seismic_target", "seismic_parameter", "seismic_grade", "floors", "height"} if post == "structure" else {
+            "area", "height", "floors", "function", "fire_rating", "entrance", "fire_lane", "fire_site", "road_link", "storey_height", "clear_height",
+            "accessible_lift", "accessible_toilet", "ramp", "signage", "roof", "basement_access", "envelope", "thermal", "shading", "energy_report", "green",
+        } if post == "architecture" else set()
+        if post == "geotech":
+            object_fields = {"recommendation", "foundation", "stage", "load_level", "basements"}
+        if key in object_fields and active_kind not in {None, "objects", "spaces"}:
+            parents = [row for row in data.records.get("objects", []) if row.get("object", "") == object_name]
+            if len(parents) == 1:
+                target = parents[0]
+            elif not data.records.get("objects"):
+                target = data.context
+            else:
+                # Preserve an explicit unit-level fact even when no parent
+                # can be identified, without putting it on a member or a
+                # different building. Its blank identity is visible in body.
+                if id(active) not in unassigned_objects:
+                    unassigned_objects[id(active)] = {"_jurisdiction": "UNSPECIFIED"}
+                    data.records["objects"].append(unassigned_objects[id(active)])
+                target = unassigned_objects[id(active)]
+        if narrative and post == "geotech" and key == "water" and active_kind == "layers":
+            parents = [row for row in data.records.get("holes", []) if row.get("hole", "") == hole_name]
+            if len(parents) == 1:
+                target = parents[0]
         if key in target and target[key] != value:
             target[key] += "；" + value
         else:
             target[key] = value
 
     lines, index = text.splitlines(), 0
+    narrative_checked_until = 0
     while index < len(lines):
+        if not lines[index].lstrip().startswith("|") and index >= narrative_checked_until:
+            end = index + 1
+            while end < len(lines) and not lines[end].lstrip().startswith("|"):
+                end += 1
+            narrative_checked_until = end
+            observations = statements(post, "\n".join(lines[index:end]), aliases)
+            if observations is not None:
+                for source, events in observations:
+                    if not data.records:
+                        first_anchor = next((event.start for event in events if _kind(event.key, post)), None)
+                        # Only a pre-object statement may establish a default.
+                        if first_anchor is None:
+                            zone = infer_jurisdiction(source)
+                            if "jurisdiction" not in data.context and zone != "UNSPECIFIED":
+                                data.context["jurisdiction"] = zone
+                    if post == "facade" and not any(event.key == "facade" for event in events):
+                        mentioned = re.findall(r"单元式|构件式|全玻", source)
+                        owners = [row for row in data.records.get("facades", []) if any(value in row.get("facade_type", "") for value in mentioned)]
+                        if len(owners) == 1:
+                            active, active_kind = owners[0], "facades"
+                            object_name = active.get("object_ref", "")
+                            object_scope = active.get("jurisdiction") or active.get("_jurisdiction", "UNSPECIFIED")
+                            fresh_object_kinds.clear()
+                        elif len(owners) > 1:
+                            add("facade", "", narrative=True, unscoped=True)
+                    pairs = [(event.key, "" if event.value == OBSERVATION_MISSING else event.value) for event in events]
+                    for key, value in _record_pairs(pairs, post):
+                        labelled = any(event.key == key and event.value == value and event.labelled for event in events)
+                        unscoped = bool(re.search(r"没说是哪栋|没说是哪个|未说明(?:关联)?单体|单体(?:未定|未知)", source))
+                        add(key, value, revisit=not labelled, narrative=True, unscoped=unscoped)
+                index = end
+                continue
         if lines[index].lstrip().startswith("|"):
             block = []
             while index < len(lines) and lines[index].lstrip().startswith("|"):
@@ -210,13 +309,13 @@ def _parse(text: str, post: str) -> _Input:
                 # Decode adapter entities after splitting, exactly once.
                 block.append([html.unescape(cell.strip()) for cell in interior.split("|")])
                 index += 1
-            headers = [_ALIASES.get(cell.casefold()) for cell in block[0]]
+            headers = [aliases.get(cell.casefold()) for cell in block[0]]
             is_table = len(block) > 1 and all(re.fullmatch(r":?-{3,}:?", cell) for cell in block[1])
             if is_table and any(headers):
                 kinds = {_kind(key, post) for key in headers}
                 kind = next((kind for kind in _PRIORITY if kind in kinds), {"architecture": "objects", "structure": "components", "geotech": "layers", "facade": "facades"}[post])
                 for values in block[2:]:
-                    row = {key: value for key, value in zip(headers, values) if key and value and not _EMPTY.fullmatch(value)}
+                    row = {key: parameter_value(key, value) for key, value in zip(headers, values) if key and parameter_value(key, value) and not _EMPTY.fullmatch(value)}
                     row["_jurisdiction"] = data.context.get("jurisdiction", "UNSPECIFIED")
                     if "jurisdiction" in headers:
                         local_scope = values[headers.index("jurisdiction")] if headers.index("jurisdiction") < len(values) else ""
@@ -229,14 +328,16 @@ def _parse(text: str, post: str) -> _Input:
                 active, active_kind = data.context, None
                 object_name, hole_name = "", ""
                 object_scope, hole_scope = "UNSPECIFIED", "UNSPECIFIED"
+                fresh_object_kinds.clear()
+                fresh_hole = False
             else:
                 for cells in block:
-                    if len(cells) > 1 and (key := _ALIASES.get(cells[0].casefold())):
+                    if len(cells) > 1 and (key := aliases.get(cells[0].casefold())):
                         add(key, cells[1])
             continue
-        matches = list(_FIELD_RE.finditer(lines[index]))
+        matches = list(field_re.finditer(lines[index]))
         if not data.records:
-            first_anchor = next((match.start() for match in matches if _kind(_ALIASES[match.group(1).casefold()], post)), len(lines[index]))
+            first_anchor = next((match.start() for match in matches if _kind(aliases[match.group(1).casefold()], post)), len(lines[index]))
             preamble.append(lines[index][:first_anchor])
             zone = infer_jurisdiction("\n".join(preamble))
             if "jurisdiction" not in data.context and zone != "UNSPECIFIED":
@@ -245,7 +346,7 @@ def _parse(text: str, post: str) -> _Input:
         for position, match in enumerate(matches):
             end = matches[position + 1].start() if position + 1 < len(matches) else len(lines[index])
             value = _field_value(lines[index][match.end():end])
-            pairs.append((_ALIASES[match.group(1).casefold()], value))
+            pairs.append((aliases[match.group(1).casefold()], value))
         for key, value in _record_pairs(pairs, post):
             add(key, value)
         index += 1
@@ -330,7 +431,7 @@ def _architecture(text: str) -> str:
         "## 8 节能与绿色", "", _rows_table(objects, (("单体", "object"), ("围护要求", "envelope"), ("用户传热系数", "thermal"), ("用户遮阳系数", "shading"), ("节能计算书", "energy_report"), ("绿色建筑要求", "green"))), "",
         "热工参数的适用性与节能结果待计算书和检测资料核对，本轮未计算。", "",
         "## 9 图则口径", "", _table(("登记项", "用户提供 / 缺口"), [("用户图号清单", _value(data.context, "drawings"))]), "",
-        _rows_table(data.rows("drawings"), (("用户图号", "drawing_id"), ("图名", "drawing_name"), ("版本", "revision"), ("图签要求", "title_block"), ("图例要求", "legend"))), "",
+        _rows_table(data.rows("drawings"), (("用户图号", "drawing_id"), ("图名", "drawing_name"), ("版本", "revision"), ("图签要求", "title_block"), ("图例要求", "legend"), ("关联单体", "object_ref"))), "",
         "图号仅抄用户提供的标识；本稿不生成索引图号，不声称已查看所列图纸。", "",
         "## 10 专业界面、依据与自检", "",
         _interfaces(data, (("结构", "开洞、荷载用途和建筑条件"), ("机电", "机房、竖井与设备需求"), ("装修", "承重和疏散界面"), ("幕墙", "预埋与立面接口"), ("人防 / 消防", "口部与专篇分工"))), "",
@@ -381,7 +482,7 @@ def _geotech(text: str) -> str:
         "未给水位不推断干燥场地；单位、测量日期及季节变化待核。", "",
         "## 5 勘探工作量与试验", "", _rows_table(holes, (("用户孔号", "hole"), ("孔深", "hole_depth"), ("孔距", "spacing"), ("原位测试", "in_situ"), ("室内试验", "laboratory"))), "",
         "不生成孔号、孔数、坐标或布孔间距；工作量由勘察单位结合任务确定。", "",
-        "## 6 地层与参数摘录", "", _rows_table(layers, (("用户孔号", "hole_ref"), ("用户层号", "layer"), ("岩土名称", "soil"), ("层深", "layer_depth"), ("c", "cohesion"), ("φ", "friction"), ("用户水位", "water"), ("压缩模量", "modulus"), ("桩侧摩阻", "pile_friction"), ("用户承载力记录", "bearing"), ("来源", "source")), missing=NOT_FOUND), "",
+        "## 6 地层与参数摘录", "", _rows_table(layers, (("用户孔号", "hole_ref"), ("用户层号", "layer"), ("岩土名称", "soil"), ("层深", "layer_depth"), ("黏聚力 c", "cohesion"), ("φ", "friction"), ("用户水位", "water"), ("压缩模量", "modulus"), ("桩侧摩阻", "pile_friction"), ("用户承载力记录", "bearing"), ("来源", "source")), missing=NOT_FOUND), "",
         "仅保留孔号与所属分层的显式关联；后一孔或后一层不继承前一行参数。特征值、设计值及适用性均待原报告核对。", "",
         "## 7 地基方案比选", "", _table(("候选方案", "需核条件与资料", "本轮选择"), [("天然地基", "持力层、变形与荷载条件", "UNSPECIFIED"), ("复合地基", "处理目标、场地与试验资料", "UNSPECIFIED"), ("桩基", "土层、桩端桩侧资料及试验", "UNSPECIFIED")]), "",
         _rows_table(data.rows("objects"), (("单体", "object"), ("用户报告建议", "recommendation"), ("用户基础型式", "foundation"), ("来源", "source"))), "",
@@ -409,7 +510,7 @@ def _facade(text: str) -> str:
         "## 5 防火、防雷与冷凝水", "", _rows_table(facades, (("幕墙", "facade"), ("防火封堵", "fire_stop"), ("防雷接口", "lightning"), ("冷凝水措施", "condensate"))), "",
         "## 6 开启扇与清洗维护", "", _rows_table(facades, (("幕墙", "facade"), ("开启扇", "opening"), ("限制器", "limiter"), ("清洗维护", "cleaning"), ("擦窗机轨道", "track"))), "",
         "## 7 加工图与材料检测", "", _rows_table(facades, (("幕墙", "facade"), ("用户加工图", "shop_drawings"), ("材料检测 / 质保", "material_report"), ("参数来源", "source"))), "",
-        "## 8 验收资料", "", _rows_table(facades, (("幕墙", "facade"), ("用户验收资料", "acceptance"), ("用户状态", "status")), status="未验收"), "",
+        "## 8 验收资料", "", _rows_table(facades, (("幕墙", "facade"), ("用户验收资料", "acceptance"), ("用户状态", "status")), status="本轮未执行验收"), "",
         "用户记录不改写为本轮验收结论。", "",
         "## 9 性能与热工核对", "", _rows_table(facades, (("幕墙", "facade"), ("用户风压", "wind_pressure"), ("气密", "air"), ("水密", "watertight"), ("变位", "movement"), ("传热系数", "thermal"), ("遮阳系数", "shading"), ("可见光指标", "light_transmission"), ("性能检测资料", "performance_report"))), "",
         "不自动生成性能等级；热工参数需与建筑节能资料核对。", "",

@@ -17,6 +17,8 @@ MemorySaver（进程重启即丢）。现在：装包即 SqliteSaver；回退必
 
 from __future__ import annotations
 
+import atexit
+from contextlib import closing
 import logging
 import os
 import sqlite3
@@ -25,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from packing_assistant.storage import default_db_path
+from packing_assistant.sqlite_resources import ManagedConnection
 
 logger = logging.getLogger("civil.lg_checkpoint")
 
@@ -73,15 +76,40 @@ def get_checkpointer():
         path = checkpoint_db_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         # SqliteSaver 需要保持连接存活；连接纪律与 storage 一致（WAL + busy_timeout）
-        _CONN = sqlite3.connect(str(path), check_same_thread=False, timeout=5.0)
-        _CONN.execute("PRAGMA journal_mode=WAL")
-        _CONN.execute("PRAGMA busy_timeout=5000")
-        _SAVER = SqliteSaver(_CONN)
+        conn = sqlite3.connect(str(path), check_same_thread=False, timeout=5.0, factory=ManagedConnection)
         try:
-            _SAVER.setup()  # CREATE TABLE IF NOT EXISTS checkpoints/writes/...（幂等）
+            conn.execute("PRAGMA journal_mode=WAL").close()
+            conn.execute("PRAGMA busy_timeout=5000").close()
+            saver = SqliteSaver(conn)
+        except BaseException:
+            conn.close()
+            raise
+        try:
+            saver.setup()  # CREATE TABLE IF NOT EXISTS checkpoints/writes/...（幂等）
         except Exception:
             logger.warning("SqliteSaver.setup() failed（首次写入时会重试）", exc_info=True)
+        except BaseException:
+            conn.close()
+            raise
+        _CONN, _SAVER = conn, saver
         return _SAVER
+
+
+def close_checkpointer() -> None:
+    """Release the singleton at shutdown, not a request to reset an active graph.
+
+    An existing SqliteSaver cursor can finish; retirement refuses new cursors
+    and closes the connection only after that lease is released.
+    """
+    global _SAVER, _CONN
+    with _LOCK:
+        conn = _CONN
+        _SAVER = _CONN = None
+        if conn is not None:
+            conn.retire()
+
+
+atexit.register(close_checkpointer)
 
 
 def thread_config(thread_id: str, *, checkpoint_ns: str = "") -> Dict[str, Any]:
@@ -128,13 +156,11 @@ def list_thread_ids(*, limit: int = 50) -> list:
     if not path.exists():
         return []
     try:
-        conn = sqlite3.connect(str(path))
-        cur = conn.execute(
-            "SELECT DISTINCT thread_id FROM checkpoints ORDER BY rowid DESC LIMIT ?",
-            (int(limit),),
-        )
-        rows = [r[0] for r in cur.fetchall()]
-        conn.close()
-        return rows
+        with closing(sqlite3.connect(str(path))) as conn:
+            with closing(conn.execute(
+                "SELECT DISTINCT thread_id FROM checkpoints ORDER BY rowid DESC LIMIT ?",
+                (int(limit),),
+            )) as cur:
+                return [r[0] for r in cur.fetchall()]
     except Exception:
         return []

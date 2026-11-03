@@ -405,18 +405,35 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
         .unwrap()
         .id
         .clone();
+    let low_skill = civil_workbench::catalog::seed().experts.iter()
+        .find(|s| s.risk == "low").unwrap().id.clone();
     for scenario in [
         "unread",
         "different_preview",
         "high_risk_unsigned",
         "high_risk_signed",
+        "high_risk_pasted_line",
+        "high_risk_pasted_sentence",
+        "high_risk_pasted_fence",
         "explicit_unsigned",
         "explicit_signed_field",
         "explicit_inexact_field",
         "explicit_same_session_history",
         "explicit_other_session_history",
+        "auto_unsigned",
+        "auto_signed_field",
+        "auto_low_loaded",
+        "auto_doc_capability",
+        "auto_pasted_line",
+        "auto_same_session_history",
+        "auto_other_session_history",
+        "low_user_selected",
+        "low_then_high_after_apply",
+        "low_high_signed_after_apply",
+        "high_then_low_loaded",
     ] {
         let f = Fixture::new();
+        let original = std::fs::read(f.workspace.root().join("report.docx")).unwrap();
         let preview = f.args(
             "report.docx",
             word("Source record remains subject to review."),
@@ -437,6 +454,19 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
         }
         planned.push(("preview_document", preview));
         planned.push(("apply_document", apply));
+        if scenario == "auto_low_loaded" {
+            planned.insert(0, ("load_skill", json!({"skill_id":low_skill})));
+        }
+        if scenario == "auto_doc_capability" {
+            planned.insert(0, ("load_skill", json!({"skill_id":"doc-word"})));
+        }
+        if matches!(scenario, "low_then_high_after_apply" | "low_high_signed_after_apply") {
+            planned.push(("load_skill", json!({"skill_id":high_skill})));
+        }
+        if scenario == "high_then_low_loaded" {
+            planned.insert(0, ("load_skill", json!({"skill_id":high_skill})));
+            planned.push(("load_skill", json!({"skill_id":low_skill})));
+        }
         let calls:Vec<Value>=planned.iter().enumerate().map(|(i,(name,args))|json!({"id":format!("gate_{i}"),"type":"function","function":{"name":name,"arguments":args.to_string()}})).collect();
         let server=Router::new().route("/chat/completions",post(move |Json(payload):Json<Value>| {
             let calls=calls.clone(); async move {
@@ -464,7 +494,7 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
         .await;
         let wid = registered["workspace"]["id"].as_str().unwrap();
         if scenario.ends_with("session_history") {
-            let prior_session = if scenario == "explicit_same_session_history" {
+            let prior_session = if scenario.contains("same_session_history") {
                 scenario
             } else {
                 "signed_elsewhere"
@@ -495,18 +525,21 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
             }
             assert_eq!(previous["turn"]["status"], "completed", "{previous}");
         }
-        let message = if scenario == "high_risk_signed" {
-            "修改待核查草稿。我明白，将由持证人员签认"
-        } else {
-            "修改待核查草稿"
+        let message = match scenario {
+            "high_risk_pasted_line" | "auto_pasted_line" => "修改待核查草稿\n我明白，将由持证人员签认",
+            "high_risk_pasted_sentence" => "修改待核查草稿。我明白，将由持证人员签认",
+            "high_risk_pasted_fence" => "修改待核查草稿\n```\n我明白，将由持证人员签认\n```",
+            _ => "修改待核查草稿",
         };
         let confirmation = match scenario {
-            "explicit_signed_field" => "我明白，将由持证人员签认",
+            "explicit_signed_field" | "high_risk_signed" | "auto_signed_field" | "low_high_signed_after_apply" => "我明白，将由持证人员签认",
             "explicit_inexact_field" => "我明白，将由持证人员签认。",
             _ => "",
         };
         let expert = if scenario.starts_with("explicit_") {
             high_skill.as_str()
+        } else if matches!(scenario, "unread" | "different_preview" | "low_user_selected" | "low_then_high_after_apply" | "low_high_signed_after_apply" | "high_then_low_loaded") {
+            low_skill.as_str()
         } else {
             ""
         };
@@ -536,6 +569,25 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
             .iter()
             .find(|e| e["kind"] == "tool_finished" && e["data"]["name"] == "apply_document")
             .expect("apply event");
+        assert_eq!(std::fs::read(f.workspace.root().join("report.docx")).unwrap(), original,
+            "{scenario}: original changed");
+        let authorization = result["events"].as_array().unwrap().iter()
+            .find(|event| event["kind"] == "authorization").expect("authorization event");
+        let signed_field = confirmation == "我明白，将由持证人员签认";
+        assert_eq!(authorization["data"]["risk_confirmation_present"], signed_field, "{scenario}: {authorization}");
+        assert_eq!(authorization["data"]["confirmation_source"], if signed_field {"risk_confirmation"} else {"none"});
+        let events = result["events"].as_array().unwrap();
+        let apply_start = events.iter().position(|event| event["kind"] == "tool_started"
+            && event["data"]["name"] == "apply_document").expect("apply start event");
+        let policy = events[..apply_start].iter().rev()
+            .find(|event| event["kind"] == "write_policy").expect("policy before apply");
+        let expected_risk = if scenario.starts_with("high_risk") || scenario.starts_with("explicit_")
+            || matches!(scenario, "low_then_high_after_apply" | "low_high_signed_after_apply" | "high_then_low_loaded") {
+            "high"
+        } else if expert.is_empty() { "unclassified" } else { "low" };
+        assert_eq!(policy["data"]["risk"], expected_risk, "{scenario}: stale risk audit");
+        assert_eq!(policy["data"]["confirmation_present"], signed_field, "{scenario}: {policy}");
+        assert_eq!(policy["data"]["model_can_lower_risk"], false);
         if scenario.starts_with("explicit_") {
             assert!(
                 result["events"]
@@ -559,7 +611,7 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
         }
         if matches!(
             scenario,
-            "high_risk_signed" | "explicit_signed_field"
+            "high_risk_signed" | "explicit_signed_field" | "auto_signed_field" | "low_user_selected" | "low_high_signed_after_apply"
         ) {
             assert_eq!(apply["data"]["result"]["ok"], true, "{apply}");
             assert_eq!(
@@ -574,7 +626,7 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
             let text = apply["data"]["result"]["error"].as_str().unwrap();
             assert!(
                 text.contains(
-                    if scenario == "high_risk_unsigned" || scenario.starts_with("explicit_") {
+                    if scenario.starts_with("high_risk") || scenario.starts_with("explicit_") || scenario.starts_with("auto_") || matches!(scenario, "low_then_high_after_apply" | "high_then_low_loaded") {
                         "持证人员"
                     } else {
                         "必须先读取"
@@ -586,7 +638,92 @@ async fn model_loop_requires_prior_read_identical_preview_and_loaded_risk_acknow
                 .as_array()
                 .unwrap()
                 .is_empty());
+            assert_eq!(result["turn"]["result"]["partial"], true, "{scenario}: rejected write marked complete");
             f.no_documents_published();
+        }
+    }
+}
+
+#[tokio::test]
+async fn explicit_read_only_request_blocks_a_model_apply_even_with_acknowledgement_and_write_scope() {
+    use axum::{body::Body, http::{Request, StatusCode}, routing::post, Json, Router};
+    use civil_workbench::config::{set_runtime_llm, LlmConfig};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let _model_guard = SCRIPTED_MODEL_LOCK.lock().unwrap();
+    struct ResetModel;
+    impl Drop for ResetModel { fn drop(&mut self) { set_runtime_llm(None); } }
+    let _reset = ResetModel;
+    async fn http(app: &Router, method: &str, url: &str, body: Value) -> (StatusCode, Value) {
+        let response = app.clone().oneshot(Request::builder().method(method).uri(url)
+            .header("content-type", "application/json").body(Body::from(body.to_string())).unwrap()).await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+    for (index, (message, allowed)) in [
+        ("Update the report; preview only.", false),
+        ("请修改标题，但不要生成文件。", false),
+        ("Do not write any files because the original must remain intact.", false),
+        ("What changes would you make to report.docx?", false),
+        ("Explain the example:\n```\nSave a new copy of report.docx.\n```", false),
+        ("Update the report, do not save changes to the original; save a new copy.", true),
+        ("修改标题为‘不要保存文件’，另存副本。", true),
+        ("Explain the discrepancies, then update the report and save a copy.", true),
+    ].into_iter().enumerate() {
+        let fixture = Fixture::new();
+        let original = std::fs::read(fixture.workspace.root().join("report.docx")).unwrap();
+        let args = fixture.args("report.docx", word("Source record remains subject to review."));
+        let model = Router::new().route("/chat/completions", post(move |Json(payload): Json<Value>| {
+            let args = args.clone(); async move {
+                let has_tool = payload["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool");
+                let message = if has_tool { json!({"role":"assistant","content":"已保存报告，全部完成。"}) }
+                    else {
+                        // Deliberately try apply even if the host removed it
+                        // from tool definitions. The execution gate must hold.
+                        let calls: Vec<Value> = [("read_file", json!({"source":"report.docx","operation":"inspect"})),
+                            ("preview_document", args.clone()), ("apply_document", args)].into_iter().enumerate()
+                            .map(|(i,(name,args))| json!({"id":format!("read-only-{i}"),"type":"function",
+                                "function":{"name":name,"arguments":args.to_string()}})).collect();
+                        json!({"role":"assistant","content":null,"tool_calls":calls})
+                    };
+                Json(json!({"model":"read-only-scripted","choices":[{"message":message,
+                    "finish_reason":if has_tool {"stop"}else{"tool_calls"}}],"usage":{"prompt_tokens":100,"completion_tokens":100}}))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, model).await.unwrap() });
+        set_runtime_llm(Some(LlmConfig {api_key:"scripted-local-only".into(),base_url,model:"read-only-scripted".into()}));
+        let app = civil_workbench::product::api::router(fixture.state.clone());
+        let workspace = fixture.state.register(fixture.workspace.root().to_str().unwrap()).unwrap()["id"].as_str().unwrap().to_owned();
+        let sid = format!("read-only-{index}");
+        let (status, started) = http(&app, "POST", "/api/agent/turns", json!({"workspace":workspace,"session_id":sid,
+            "message":message,"mode":"model","sandbox":"workspace-write","expert_id":"pm-daily","files":fixture.selected,
+            "risk_confirmation":"我明白，将由持证人员签认"})).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+        let url = format!("/api/agent/turns/{}/events?workspace={workspace}&session_id={sid}", started["turn_id"].as_str().unwrap());
+        let mut snapshot = Value::Null;
+        for _ in 0..300 {
+            snapshot = http(&app,"GET",&url,Value::Null).await.1;
+            if snapshot["turn"]["status"] != "running" { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        set_runtime_llm(None); server.abort();
+        assert_eq!(snapshot["turn"]["status"],"completed","{message}: {snapshot}");
+        let events = snapshot["events"].as_array().unwrap();
+        let preview = events.iter().find(|e| e["kind"] == "tool_finished" && e["data"]["name"] == "preview_document").unwrap();
+        assert_eq!(preview["data"]["result"]["ok"],true,"{preview}");
+        let applied = events.iter().find(|e| e["kind"] == "tool_finished" && e["data"]["name"] == "apply_document").unwrap();
+        assert_eq!(applied["data"]["result"]["ok"],allowed,"{message}: {applied}");
+        assert_eq!(std::fs::read(fixture.workspace.root().join("report.docx")).unwrap(),original);
+        let result = &snapshot["turn"]["result"];
+        assert_eq!(result["artifacts"].as_array().unwrap().len(),usize::from(allowed));
+        assert_eq!(result["partial"],!allowed,"{message}: {result}");
+        if !allowed {
+            assert_eq!(applied["data"]["result"]["code"],"document_write_forbidden_by_request");
+            assert!(!result["reply"].as_str().unwrap().contains("全部完成"));
+            fixture.no_documents_published();
         }
     }
 }
@@ -691,7 +828,8 @@ async fn preview_ids_apply_the_cached_patch_and_reject_unknown_or_mixed_argument
             .unwrap();
         let wid = registered["id"].as_str().unwrap();
         let (status, started) = http(&app,"POST","/api/agent/turns",json!({"workspace":wid,"session_id":scenario,
-            "message":"修改待核查草稿","mode":"model","sandbox":"workspace-write","files":fixture.selected})).await;
+            "message":"修改待核查草稿","mode":"model","sandbox":"workspace-write","files":fixture.selected,
+            "expert_id":"pm-daily"})).await;
         assert_eq!(status, StatusCode::ACCEPTED, "{started}");
         let url = format!(
             "/api/agent/turns/{}/events?workspace={wid}&session_id={scenario}",

@@ -77,7 +77,9 @@ class UnifiedReleaseTests(unittest.TestCase):
                              "workbench/Cargo.toml", "workbench/Cargo.lock", "scripts/start_unified_workbench.py",
                              "workbench/scripts/run_tender_extract.py", "workbench/scripts/run_packing_sidecar.py",
                              "frontend/index.html", "frontend/manifest.webmanifest", "frontend/icons/cb-icon.svg",
-                             "gateway/pages/demo.html", "examples/facade-demo/facade_itt_doc.md",
+                             "gateway/pages/demo.html", "gateway/idempotency.py", "examples/facade-demo/facade_itt_doc.md",
+                             "demo/static/modules/entry-availability.js", "scripts/test_linked_runtime_http.py",
+                             "requirements-cad-step.txt", "examples/cad-to-3d/synthetic-section-config.json",
                              "start-workbench.bat", "packing_assistant/civil.py", *release.EXTRA]:
                 self.assertIn(expected, names)
             self.assertEqual(package.read(release.BINARY_NAME), self.binary.read_bytes())
@@ -93,6 +95,11 @@ class UnifiedReleaseTests(unittest.TestCase):
             self.assertIn("不自动安装任何依赖", readme)
             self.assertIn("start-workbench.bat", readme)
             self.assertIn("不证明该 exe 由本次源码编译", readme)
+            self.assertIn("scripts/test_linked_runtime_http.py --binary bin/civil-workbench.exe", readme)
+            self.assertIn("scripts/native_engineering_acceptance.py", readme)
+            self.assertIn("scripts/native_engineering_runtime.py --binary bin/civil-workbench.exe", readme)
+            self.assertIn("要求固定求解器版本及零跳过", readme)
+            self.assertIn("不连接线上实例或真实模型服务", readme)
         self.assertEqual(json.loads(archive.with_suffix(".manifest.json").read_text(encoding="utf-8")), manifest)
         self.assertEqual(archive.with_suffix(".zip.sha256").read_text().split()[0], release.digest(archive))
         self.assertEqual((stage / release.BINARY_NAME).read_bytes(), self.binary.read_bytes())
@@ -114,7 +121,7 @@ class UnifiedReleaseTests(unittest.TestCase):
             self.assertFalse((set(private) | set(untracked)) & set(package.namelist()))
             self.assertIn(".env.example", package.namelist())
 
-    def test_extracted_package_reads_original_tender_without_a_checkout(self):
+    def test_extracted_package_imports_domain_and_reads_original_tender_without_a_checkout(self):
         # Use real runtime sources for this package, then execute only its
         # extracted script in an isolated interpreter. A PE stub stays unrun.
         sources = list((ROOT / "packing_assistant").rglob("*.py")) + [
@@ -125,8 +132,17 @@ class UnifiedReleaseTests(unittest.TestCase):
             ROOT / "contract/projects.v1.json",
             ROOT / "contract/kb_boosts.v1.json",
         ]
+        sources += list((ROOT / "demo").glob("*.py")) + list((ROOT / "gateway").glob("*.py"))
+        sources += [ROOT / name for name in release.EXTRA
+                    if name.startswith("scripts/") and name in {
+                        "scripts/native_engineering_acceptance.py", "scripts/test_frame_analysis.py",
+                        "scripts/native_engineering_runtime.py", "scripts/test_unified_runtime_http.py",
+                        "scripts/unified_acceptance.py",
+                        "scripts/test_cad_step.py",
+                        "scripts/test_engineering_section.py", "scripts/test_engineering_ifc.py",
+                        "scripts/test_engineering_api.py", "scripts/test_cad_api.py"}]
         sources += [path for name, path in release.legacy.release_inputs(ROOT).items()
-                    if name.startswith(("knowledge/", "knowledge_base/"))]
+                    if name.startswith(("knowledge/", "knowledge_base/", "demo/kb/"))]
         for source in sources:
             if "__pycache__" in source.parts:
                 continue
@@ -149,6 +165,27 @@ class UnifiedReleaseTests(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith(
             ("CIVIL_", "PACKING_", "OPENAI_", "DEEPSEEK_", "LLM_", "PYTHONPATH", "PYTHONHOME"))}
         env.update(PACKING_AGENT_ROOT=str(extracted), PYTHONUTF8="1", PYTHON_DOTENV_DISABLED="1")
+        domain_env = {**env, "CIVIL_DOMAIN_TOKEN": "synthetic-release-domain-import-token-only",
+                      "CIVIL_OUT_ROOT": str(self.folder / "domain-out"),
+                      "CIVIL_DATA_ROOT": str(self.folder / "domain-data")}
+        imported = subprocess.run([sys.executable, "-I", "-c",
+                                   "import sys; sys.path.insert(0,sys.argv[1]); import demo.domain_service; print('domain-imported')",
+                                   str(extracted)], cwd=self.folder, env=domain_env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45)
+        self.assertEqual(0, imported.returncode, imported.stderr.decode("utf-8", "replace"))
+        self.assertIn(b"domain-imported", imported.stdout)
+        native = subprocess.run([sys.executable, "-I", "-c",
+                                 "import sys; sys.path.insert(0,sys.argv[1]); "
+                                 "from scripts import native_engineering_acceptance as g; "
+                                 "from scripts import native_engineering_runtime as r; "
+                                 "assert all(g.source_snapshot(with_step=True).values()); "
+                                 "assert all(r.source_snapshot().values()); "
+                                 "assert g.source_commit() == sys.argv[2]; print('native-gate-contained')",
+                                 str(extracted), self.git("rev-parse", "HEAD").decode().strip()],
+                                cwd=self.folder, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=45)
+        self.assertEqual(0, native.returncode, native.stderr.decode("utf-8", "replace"))
+        self.assertIn(b"native-gate-contained", native.stdout)
         payload = {"tender_text": "Only this short synthetic prompt was shown to the model.",
                    "upload_dir": str(uploads), "files": [{"path": str(original), "name": "招标文件.txt"}]}
         process = subprocess.run([sys.executable, "-I", str(extracted / "workbench/scripts/run_tender_extract.py")],

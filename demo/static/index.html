@@ -48,8 +48,8 @@
     </div>
     <nav class="cb-app-nav" aria-label="工作台导航">
       <a href="/static/index.html" aria-current="page">工作台</a>
-      <a href="/static/agent.html">Agent</a>
-      <a href="/packing">装箱拼柜</a>
+      <a data-cb-entry="/static/agent.html" data-cb-capability="agent_workbench" data-cb-entry-name="Agent 工程工作台" role="link" aria-disabled="true" tabindex="-1">Agent</a>
+      <a data-cb-entry="/packing" data-cb-capability="packing_workbench" data-cb-entry-name="装箱拼柜" role="link" aria-disabled="true" tabindex="-1">装箱拼柜</a>
       <a href="/cad">CAD</a>
       <a href="/engineering">工程计算</a>
       <a href="/engineering/planning">施工计划</a>
@@ -86,18 +86,19 @@
           <h3 class="cb-empty-title">土木版 Codex：66 岗工作台</h3>
           <p class="cb-empty-desc">说明要完成的任务，工作台帮你选择岗位。也可自行点名；示例只预填，不会自动发送。</p>
           <p class="cb-empty-note" id="cbAvailability" role="status">正在检测可用能力…</p>
+          <p class="cb-empty-note" id="cbEntryAvailability" role="status">入口可用性尚未确认。</p>
           <div class="cb-empty-cards">
-            <a href="/static/agent.html" class="cb-empty-card tone-strong" style="text-decoration:none;color:inherit">
+            <a id="cbAgentEntry" data-cb-entry="/static/agent.html" data-cb-capability="agent_workbench" data-cb-entry-name="Agent 工程工作台" role="link" aria-disabled="true" tabindex="-1" class="cb-empty-card tone-strong" style="text-decoration:none;color:inherit">
               <span class="cb-empty-ico" aria-hidden="true">AI</span>
               <span class="cb-empty-k">Agent 工程工作台</span>
               <span class="cb-empty-v">打开工程文件夹，让模型读取资料、调用工具并生成可追溯的文档修改</span>
             </a>
-            <a id="cbPackingEntry" href="/packing" class="cb-empty-card tone-blue" style="text-decoration:none;color:inherit">
+            <a id="cbPackingEntry" data-cb-entry="/packing" data-cb-capability="packing_workbench" data-cb-entry-name="装箱拼柜" role="link" aria-disabled="true" tabindex="-1" class="cb-empty-card tone-blue" style="text-decoration:none;color:inherit">
               <span class="cb-empty-ico" aria-hidden="true">装</span>
               <span class="cb-empty-k">装箱拼柜工作台</span>
               <span class="cb-empty-v">上传装箱清单，预览成箱方案，人工确认后查看拼柜 3D 与重心</span>
             </a>
-            <a href="/logistics" class="cb-empty-card tone-blue" style="text-decoration:none;color:inherit">
+            <a id="cbLogisticsEntry" data-cb-entry="/logistics" data-cb-capability="logistics" data-cb-entry-name="箱单识别与物流材料" role="link" aria-disabled="true" tabindex="-1" class="cb-empty-card tone-blue" style="text-decoration:none;color:inherit">
               <span class="cb-empty-ico" aria-hidden="true">箱</span>
               <span class="cb-empty-k">箱单识别与物流材料</span>
               <span class="cb-empty-v">读取 Excel、PDF 和图片，核对箱件与净毛重，确认后装箱计算</span>

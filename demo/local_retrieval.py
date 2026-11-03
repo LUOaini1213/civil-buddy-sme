@@ -14,6 +14,7 @@ import re
 import sqlite3
 from threading import RLock
 from typing import Any
+from urllib.parse import quote
 
 if __package__:
     from . import projects
@@ -136,7 +137,11 @@ def _documents(sid: str, history: list[dict], attachments: list[dict]) -> list[d
 
 
 def _connect(path, *, write: bool):
-    connection = sqlite3.connect(str(path) if write else path.as_uri() + "?mode=ro",
+    # Path.as_uri() interprets the Windows \\?\ prefix as a URI authority.
+    # Encode the native absolute filename as a file: path instead: SQLite
+    # decodes it back to exactly that filename, without a host or query injection.
+    readonly_uri = "file:" + quote(str(path.absolute()), safe="/:") + "?mode=ro"
+    connection = sqlite3.connect(str(path) if write else readonly_uri,
                                  uri=not write, timeout=10)
     try:
         connection.row_factory = sqlite3.Row

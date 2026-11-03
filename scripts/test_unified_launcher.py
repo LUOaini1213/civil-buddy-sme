@@ -70,6 +70,22 @@ class LauncherTests(unittest.TestCase):
         with patch.object(launcher.os, "scandir", side_effect=PermissionError("synthetic denied")), self.assertRaises(PermissionError):
             launcher.validate_owned_directory(self.root, state=False)
 
+    def test_ownership_scan_handles_long_windows_run_paths_without_skipping_foreign_markers(self):
+        import shutil
+        root = self.root / "long-state-scan"
+        native = launcher.filesystem_path(root)
+        self.addCleanup(shutil.rmtree, native, ignore_errors=True)
+        deep = native.joinpath(*(f"level-{index}-" + "x" * 42 for index in range(7)))
+        deep.mkdir(parents=True)
+        (deep / "workbench.json").write_text("synthetic local run", encoding="utf-8")
+        self.assertGreater(len(str(deep)), 260)
+        launcher.validate_owned_directory(root, state=True)
+        owner = deep / ".civil-buddy" / "instance-owner.sqlite"
+        owner.parent.mkdir()
+        owner.write_bytes(b"synthetic foreign workspace marker")
+        with self.assertRaisesRegex(ValueError, "contains an owned workspace"):
+            launcher.validate_owned_directory(root, state=True)
+
     def test_named_launcher_rejects_foreign_workspace_state_before_spawning_helpers(self):
         binary = self.root / "host.exe"
         binary.touch()
@@ -123,13 +139,13 @@ class LauncherTests(unittest.TestCase):
         self.assertGreaterEqual(len(env["CIVIL_DOMAIN_TOKEN"]), 32)
         self.assertNotIn("PYTHONPATH", env)
         self.assertEqual(env["PYTHON_DOTENV_DISABLED"], "1")
-        self.assertEqual(Path(env["CIVIL_DOMAIN_WORKSPACE"]), state / "domains")
-        self.assertEqual(Path(env["CIVIL_OUT_ROOT"]), state / "domains")
-        self.assertEqual(Path(env["CIVIL_SANDBOX_ROOTS"]), state / "domains")
-        self.assertEqual(Path(env["PACKING_OUTPUT_DIR"]), state / "packing")
-        self.assertEqual(Path(env["PACKING_TRACE_DIR"]), state / "packing" / "traces")
-        self.assertEqual(Path(env["CB_DB_PATH"]), state / "packing" / "civilbuddy.db")
-        self.assertEqual(Path(env["PACKING_LG_CHECKPOINT_PATH"]), state / "packing" / "checkpoints.db")
+        self.assertEqual(Path(env["CIVIL_DOMAIN_WORKSPACE"]), launcher.filesystem_path(state / "domains"))
+        self.assertEqual(Path(env["CIVIL_OUT_ROOT"]), launcher.filesystem_path(state / "domains"))
+        self.assertEqual(Path(env["CIVIL_SANDBOX_ROOTS"]), launcher.filesystem_path(state / "domains"))
+        self.assertEqual(Path(env["PACKING_OUTPUT_DIR"]), launcher.filesystem_path(state / "packing"))
+        self.assertEqual(Path(env["PACKING_TRACE_DIR"]), launcher.filesystem_path(state / "packing" / "traces"))
+        self.assertEqual(Path(env["CB_DB_PATH"]), launcher.filesystem_path(state / "packing" / "civilbuddy.db"))
+        self.assertEqual(Path(env["PACKING_LG_CHECKPOINT_PATH"]), launcher.filesystem_path(state / "packing" / "checkpoints.db"))
         self.assertEqual(env["PACKING_LLM_AGENT"], "0")
         host_env = spawned[1][1]["env"]
         self.assertEqual(host_env["DEEPSEEK_API_KEY"], "fake-config-key")
@@ -254,6 +270,26 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(plan_store.workspace, legacy)
             self.assertEqual(schedule.root, legacy / ".civil-buddy/out/engineering/schedules")
             self.assertEqual(plan_store.root, legacy / ".civil-buddy/out/engineering/plans")
+
+    def test_named_plan_persistence_handles_windows_long_private_state_paths(self):
+        config, _engineering, planning = self._apis()
+        from packing_assistant.engineering.planning import calculate
+        # The cleanup must use long-path I/O too, without ignoring its errors.
+        temp = tempfile.TemporaryDirectory(prefix="long-state-", dir=launcher.filesystem_path(ROOT / "output"))
+        self.addCleanup(temp.cleanup)
+        domain = Path(temp.name) / ("private-state-" + "x" * 40) / "accounts" / "acceptance_alice" / "projects" / ("a" * 64) / "domains"
+        domain.mkdir(parents=True)
+        native_domain = launcher.filesystem_path(domain)
+        env = {"CIVIL_DOMAIN_WORKSPACE": str(native_domain), "CIVIL_SANDBOX_ROOTS": str(native_domain),
+               "CIVIL_SANDBOX": "workspace-write", "CIVIL_JOB_ROOT": str(native_domain)}
+        with patch.dict(os.environ, env):
+            store = planning.store()
+            self.assertGreater(len(str(store.root / ("b" * 32 + ".json"))), 260)
+            computed = calculate(planning.example())
+            saved = store.save(name="Synthetic long-state plan", plan=computed["plan"], result=computed["result"])
+            self.assertEqual(store.open(saved["id"])["revision"], 1)
+            self.assertEqual([p["id"] for p in store.list_projects()], [saved["id"]])
+            self.assertTrue(native_domain.samefile(domain), "Extended path must not select another directory")
 
 
 class ListenerShutdownTests(unittest.TestCase):

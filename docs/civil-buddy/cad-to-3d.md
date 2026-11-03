@@ -27,6 +27,11 @@ CAD 附加依赖为 `ezdxf`、`shapely`、`trimesh`、`mapbox-earcut`。
 需要 STEP 实体导出时，另装 `python -m pip install -r requirements-cad-step.txt`。
 它使用可选 CadQuery/OCP 内核；没有安装仍可预览和导出 GLB。
 
+统一与 Python 源码包均包含这份可选依赖清单。已安装主项目、CAD、工程与 STEP
+依赖后，可用 `python scripts/native_engineering_acceptance.py --with-step` 运行零跳过门禁；
+统一包还可用 `python scripts/native_engineering_runtime.py --binary bin/civil-workbench.exe --with-step`
+经临时具名实例验证签认导出和实际 STEP 文件重开。输入仍为合成样例，不代表真实图纸验收。
+
 首页根据后端声明的能力显示 CAD 入口；仅提供旧工作台接口的后端不会显示不可用入口。
 配置 `CIVIL_TOKEN` 时，CAD 使用与工作台相同的访问口令。直接打开 `/cad` 可在页内输入口令；
 登录后重新检测能力，不需要重新上传已在页面中的图纸。访问口令与导出签认句是两个独立步骤。

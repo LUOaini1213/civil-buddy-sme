@@ -195,6 +195,212 @@ class AdminDraftTests(unittest.TestCase):
         self.assertTrue(rows[2][2].startswith("UNSPECIFIED"))
         self.assertIn(["份数", "见逐份用印文件核验（不合并份数或权限）"], rows_for(md, "用印申请与核验"))
 
+    def test_reported_minutes_extract_literal_roles_decision_and_pending_work(self) -> None:
+        md = draft("admin-doc", "整理会议纪要，10月8日下午在项目部西楼会议室开的材料协调会，"
+                   "项目经理吴海平主持，记录人是资料员林宁，监理代表张健列席，"
+                   "会上定了由材料负责人钱文在10月15日前完成二层材料清点，"
+                   "东门卸货时间没定下来，留到下次例会再议。")
+        info = dict(rows_for(md, "会议记录要素")[1:])
+        self.assertEqual("材料协调会", info["会议名称"])
+        self.assertEqual("10月8日下午", info["时间"])
+        self.assertEqual("项目部西楼会议室", info["地点"])
+        self.assertEqual("项目经理吴海平", info["主持人"])
+        self.assertEqual("资料员林宁", info["记录人"])
+        self.assertEqual("监理代表张健", info["列席人员"])
+        decided = rows_for(md, "已议定事项")[1]
+        self.assertEqual(["二层材料清点", "材料负责人钱文", "10月15日前", ""], decided)
+        self.assertIn("东门卸货时间没定下来", rows_for(md, "待定事项")[1][0])
+
+    def test_narrative_proposals_and_example_decisions_do_not_become_resolutions(self) -> None:
+        for text in ("会上建议由李工在10月15日前完成目录核对", "会上讨论由李工完成目录核对",
+                     "比如写成会上定了由李工在10月15日前完成目录核对",
+                     "如果会上决定由李工完成目录核对，请先别当成已定事项"):
+            with self.subTest(text=text):
+                md = draft("admin-doc", "写会议纪要，" + text)
+                self.assertTrue(rows_for(md, "已议定事项")[1][0].startswith("UNSPECIFIED"))
+
+    def test_narrative_decision_owners_and_dates_stay_with_their_own_item(self) -> None:
+        md = draft("admin-doc", "写会议纪要，上会决定由张工在10月16日前完成图纸目录，"
+                   "同时决定由李工完成设备台账，设备费用还没定。")
+        decided = rows_for(md, "已议定事项")
+        self.assertEqual(["图纸目录", "张工", "10月16日前", ""], decided[1])
+        self.assertEqual("设备台账", decided[2][0])
+        self.assertEqual("李工", decided[2][1])
+        self.assertTrue(decided[2][2].startswith("UNSPECIFIED"))
+
+    def test_space_delimited_approver_is_a_named_pending_person_not_approval(self) -> None:
+        md = draft("admin-doc", "起草请示\n事由：补配资料柜\n审批人 刘文平")
+        self.assertIn(["拟审批人（用户提供，权限待核）", "刘文平"], rows_for(md, "用印申请与核验"))
+        self.assertIn(["审批人签认", ""], rows_for(md, "用印申请与核验"))
+        for unknown in ("还没定", "待确认", "未知", "写谁还不清楚"):
+            md = draft("admin-doc", "写用印申请\n审批人 " + unknown)
+            person = dict(rows_for(md, "用印申请与核验")[1:])["拟审批人（用户提供，权限待核）"]
+            self.assertTrue(person.startswith("UNSPECIFIED"), person)
+
+    def test_narrative_seal_files_do_not_share_copies_seal_or_approver(self) -> None:
+        md = draft("admin-doc", "写用印审批表，一个是钢筋班组劳动合同，27份，盖合同专用章，"
+                   "审批人写商务经理林安；另一个是施工安全管理协议，11份，盖项目部印章，"
+                   "这个谁批还没定先空着。经办都是我，劳资员周宁，下周二前要用。")
+        rows = rows_for(md, "逐份用印文件核验")
+        self.assertEqual(["钢筋班组劳动合同", "27份", "合同专用章", "商务经理林安", ""], rows[1])
+        self.assertEqual(["施工安全管理协议", "11份", "项目部印章"], rows[2][:3])
+        self.assertTrue(rows[2][3].startswith("UNSPECIFIED"))
+        self.assertEqual("", rows[2][-1])
+        self.assertIn(["申请人", "劳资员周宁"], rows_for(md, "用印申请与核验"))
+
+    def test_narrative_second_seal_file_cannot_inherit_missing_quantity_or_stamp(self) -> None:
+        md = draft("admin-doc", "写用印申请，一个是资料交接单，6份，盖资料章，审批人是王主任；"
+                   "另一个是场地说明，份数和印章还没确定。")
+        rows = rows_for(md, "逐份用印文件核验")
+        self.assertEqual(["资料交接单", "6份", "资料章", "王主任", ""], rows[1])
+        self.assertEqual("场地说明", rows[2][0])
+        self.assertTrue(all(value.startswith("UNSPECIFIED") for value in rows[2][1:4]))
+
+    def test_narrative_meeting_roles_and_equipment_demand_reach_separate_fields(self) -> None:
+        md = draft("admin-office", "出会务清单，定于2026-10-20下午14:10在西楼大会议室召开8#楼图纸会审会，"
+                   "由总工赵建平主持，资料员何宁记录，参会的有设计院和设备部大概23人，"
+                   "会场要备好投影仪和三支无线话筒，茶水席卡也一起准备。")
+        self.assertIn(["会议/活动名称", "8#楼图纸会审会"], rows_for(md, "任务信息"))
+        self.assertEqual("资料员何宁", rows_for(md, "与会")[3][1])
+        equipment = next(row for row in rows_for(md, "场地") if row[0].startswith("设备/"))
+        self.assertEqual("投影仪和三支无线话筒", equipment[1])
+        self.assertEqual("", equipment[-1])
+        self.assertIn("茶水席卡", next(row for row in rows_for(md, "场地") if row[0].startswith("签到"))[1])
+
+    def test_natural_reception_metadata_is_not_lost_or_treated_as_approval(self) -> None:
+        md = draft("admin-office", "列接待清单\n来访单位：市住建局观摩团\n事由：工地观摩交流\n"
+                   "带队 许宁副局长，一行21人\n到达：2026-10-22 08:50\n离开：当天15:30\n"
+                   "场所 项目部展厅和样板层\n陪同：项目经理刘文\n用餐：中午工作餐，不住宿")
+        info = dict(rows_for(md, "接待安排")[1:])
+        self.assertEqual("工地观摩交流", info["接待事由"])
+        self.assertEqual("许宁副局长", info["带队人"])
+        self.assertEqual("21人", info["人数"])
+        self.assertEqual("2026-10-22 08:50", info["到达时间"])
+        self.assertEqual("当天15:30", info["离开时间"])
+        self.assertEqual("项目部展厅和样板层", info["接待地点"])
+        self.assertEqual("", info["费用标准及审批"])
+
+    def test_narrative_vehicle_requests_keep_second_driver_plate_and_time_unknown(self) -> None:
+        md = draft("admin-office", "周五有两拨用车列后勤清单，第一拨商务车苏E8J613，司机赵文，"
+                   "早上8:10从项目部送甲方徐总他们3个人去苏州高铁站；"
+                   "第二拨下午去诚达钢构厂看构件，安全部王宁带队6个人，"
+                   "来回大概140公里，司机还没定车也没批，几点走等通知。")
+        rows = rows_for(md, "逐项用车需求")
+        first, second = dict(zip(rows[0], rows[1])), dict(zip(rows[0], rows[2]))
+        self.assertEqual("苏E8J613", first["拟用车/车牌（待核）"])
+        self.assertEqual("赵文", first["拟司机（待核）"])
+        self.assertEqual("早上8:10", first["出发时间"])
+        self.assertEqual("项目部", first["出发地点"])
+        self.assertEqual("苏州高铁站", first["目的地"])
+        self.assertEqual("甲方徐总", first["乘车人员"])
+        self.assertEqual("3个人", first["人数"])
+        self.assertEqual("诚达钢构厂", second["目的地"])
+        self.assertEqual("安全部王宁", second["带队人"])
+        self.assertEqual("6个人", second["人数"])
+        self.assertEqual("大概140公里", second["用户提供里程（未计算）"])
+        for key in ("拟用车/车牌（待核）", "拟司机（待核）", "出发时间"):
+            self.assertTrue(second[key].startswith("UNSPECIFIED"), second)
+        self.assertEqual("", first["派车审批"])
+        self.assertEqual("", second["派车审批"])
+
+    def test_example_and_negated_driver_or_equipment_do_not_become_actual_fields(self) -> None:
+        md = draft("admin-office", "写用车清单，第一拨去北站，司机不是王工，车牌还没定；"
+                   "第二拨去南站，比如车牌写苏E12345，司机写李工只是示例。")
+        if "逐项用车需求" in md:
+            for row in rows_for(md, "逐项用车需求")[1:]:
+                self.assertTrue(row[2].startswith("UNSPECIFIED"))
+                self.assertTrue(row[3].startswith("UNSPECIFIED"))
+        md = draft("admin-office", "写会务清单，计划于周二在资料室召开周例会，"
+                   "会场不用投影仪，设备需求还没定。")
+        equipment = next(row for row in rows_for(md, "场地") if row[0].startswith("设备/"))
+        self.assertTrue(equipment[1].startswith("UNSPECIFIED"))
+
+    def test_two_natural_meetings_keep_missing_chair_and_equipment_separate(self) -> None:
+        md = draft("admin-office", "写会务清单，计划于周一9:00在东楼召开材料协调会，由李工主持，"
+                   "会场要备好投影仪；计划于周二14:00在西楼召开设备协调会，主持人还没定。")
+        tables = tables_from_md(md)
+        tasks = [dict(rows[1:]) for name, rows in tables if name.startswith("任务信息")]
+        self.assertEqual(["材料协调会", "设备协调会"], [item["会议/活动名称"] for item in tasks])
+        agendas = [rows for name, rows in tables if name.startswith("议程")]
+        self.assertEqual("李工", agendas[0][1][2])
+        self.assertTrue(agendas[1][1][2].startswith("UNSPECIFIED"))
+        venues = [rows for name, rows in tables if name.startswith("场地")]
+        self.assertEqual("投影仪", venues[0][2][1])
+        self.assertTrue(venues[1][2][1].startswith("UNSPECIFIED"))
+
+    def test_decimal_and_thousands_literals_are_never_truncated_to_integer_suffixes(self) -> None:
+        md = draft("admin-doc", "写用印申请，一个是劳动合同，2.5份，盖合同专用章；"
+                   "另一个是安全协议，1,200份，盖项目部印章。")
+        rows = rows_for(md, "逐份用印文件核验")
+        self.assertTrue(rows[1][1].startswith("UNSPECIFIED"))
+        self.assertEqual("1,200份", rows[2][1])
+        md = draft("admin-office", "写用车清单，第一拨去北站，来回大概140.5公里；"
+                   "第二拨去南站，来回2,100公里。")
+        rows = rows_for(md, "逐项用车需求")
+        mileage = rows[0].index("用户提供里程（未计算）")
+        self.assertEqual(["大概140.5公里", "2,100公里"], [row[mileage] for row in rows[1:]])
+        md = draft("admin-office", "写会务清单，计划于周二在东楼召开周例会，参会的有项目部大概3.5人。")
+        self.assertTrue(dict(rows_for(md, "任务信息")[1:])["参会人数（用户提供，待核）"].startswith("UNSPECIFIED"))
+
+    def test_hypothetical_scope_survives_commas_and_separate_lines(self) -> None:
+        md = draft("admin-doc", "写会议纪要，以下只是示例，会上决定由李工在10月16日前完成目录核对。")
+        self.assertTrue(rows_for(md, "已议定事项")[1][0].startswith("UNSPECIFIED"))
+        md = draft("admin-office", "写用车清单。比如，第一拨商务车苏E8J613，司机赵文，去北站；\n"
+                   "第二拨去南站，来回100公里。")
+        self.assertNotIn("逐项用车需求", md)
+
+    def test_hypothetical_labels_are_not_imported_as_application_facts(self) -> None:
+        md = draft("admin-doc", "写用印申请，以下只是示例\n文件名称：示意合同\n份数：20份\n审批人：王工")
+        rows = dict(rows_for(md, "用印申请与核验")[1:])
+        for key in ("文件名称", "份数", "拟审批人（用户提供，权限待核）"):
+            self.assertTrue(rows[key].startswith("UNSPECIFIED"), rows)
+        md = draft("admin-doc", "写用印申请，以下只是示例，份数：20份。"
+                   "实际情况是：文件名称：资料交接单；份数：3份。")
+        rows = dict(rows_for(md, "用印申请与核验")[1:])
+        self.assertEqual("3份", rows["份数"])
+        self.assertEqual("资料交接单", rows["文件名称"])
+
+    def test_mixed_narrative_and_colon_fields_keep_local_seal_associations(self) -> None:
+        md = draft("admin-doc", "写用印审批表，一个是劳动合同，份数：9份，印章：合同专用章，审批人：张工；"
+                   "另一个是安全协议，份数：4份，印章：项目部印章，审批人：还没定。")
+        rows = rows_for(md, "逐份用印文件核验")
+        self.assertEqual(["劳动合同", "9份", "合同专用章", "张工", ""], rows[1])
+        self.assertEqual(["安全协议", "4份", "项目部印章"], rows[2][:3])
+        self.assertTrue(rows[2][3].startswith("UNSPECIFIED"))
+
+    def test_vehicle_column_table_does_not_promote_unknown_people_or_inherit_them(self) -> None:
+        md = draft("admin-office", "写用车需求\n| 车牌 | 司机 | 目的地 | 出发时间 |\n| --- | --- | --- | --- |\n"
+                   "| 苏E8J613 | 赵文 | 北站 | 8:10 |\n| | | 南站 | |")
+        rows = rows_for(md, "逐项用车需求")
+        self.assertEqual("苏E8J613", rows[1][1])
+        self.assertEqual("赵文", rows[1][2])
+        self.assertTrue(rows[2][1].startswith("UNSPECIFIED"))
+        self.assertTrue(rows[2][2].startswith("UNSPECIFIED"))
+        self.assertTrue(rows[2][3].startswith("UNSPECIFIED"))
+
+    def test_two_minutes_keep_resolutions_and_pending_work_under_their_own_meeting(self) -> None:
+        md = draft("admin-doc", "写会议纪要，10月7日在东楼开的材料协调会，上会决定由张工在10月15日前完成材料目录；"
+                   "10月8日在西楼开的设备协调会，上会决定由李工完成设备台账，设备费用还没定。")
+        tables = tables_from_md(md)
+        meetings = [dict(rows[1:])["会议名称"] for name, rows in tables if name.startswith("会议记录要素")]
+        self.assertEqual(["材料协调会", "设备协调会"], meetings)
+        decisions = [rows for name, rows in tables if name.startswith("已议定事项")]
+        self.assertEqual(["材料目录", "张工", "10月15日前", ""], decisions[0][1])
+        self.assertEqual(["设备台账", "李工"], decisions[1][1][:2])
+        self.assertTrue(decisions[1][1][2].startswith("UNSPECIFIED"))
+        pending = [rows for name, rows in tables if name.startswith("待定事项")]
+        self.assertTrue(pending[0][1][0].startswith("UNSPECIFIED"))
+        self.assertEqual("设备费用还没定", pending[1][1][0])
+
+    def test_long_meeting_list_does_not_rescan_every_preceding_event(self) -> None:
+        import time
+        from packing_assistant.post_drafts.admin_narrative import parse_narrative
+        started = time.perf_counter()
+        parsed = parse_narrative("计划于周一9:00在东楼召开材料协调会，由李工主持；" * 1000)
+        self.assertEqual(1000, len(parsed.meetings))
+        self.assertTrue(all(record["chair"] == "李工" for record in parsed.meetings))
+        self.assertLess(time.perf_counter() - started, 3.0)
+
 
 class AdminRuntimeTests(unittest.TestCase):
     def test_real_runtime_markdown_and_excel_contain_structured_facts(self) -> None:

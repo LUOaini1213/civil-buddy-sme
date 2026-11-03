@@ -41,6 +41,40 @@ def rows_of(layout: pg.Layout) -> List[List[str]]:
 
 
 class Cells(unittest.TestCase):
+    def test_text_leading_uses_drawn_distance_not_font_size_or_library_matrix(self) -> None:
+        class FakePage:
+            mediabox = type("Box", (), {"height": 842.0, "width": 595.0})()
+
+            def extract_text(self, visitor_text=None, visitor_operand_before=None):
+                identity = [1, 0, 0, 1, 0, 0]
+                stale = [1, 0, 0, 1, 50, 730]
+                before = lambda op, args=(): visitor_operand_before(op, args, identity, stale)
+                before(b"BT")
+                before(b"Tm", stale)
+                before(b"Tf", ["/F1", 10])
+                before(b"TL", [13])
+                before(b"Tj")
+                visitor_text("First line", identity, stale, None, 10)
+                before(b"T*")
+                stale[5] = 600  # the library erroneously multiplied 13 by 10
+                before(b"Tj")
+                visitor_text("Second line", identity, stale, None, 10)
+                before(b"q")
+                before(b"TL", [21])
+                before(b"Q")
+                before(b"Tf", ["/F2", 9])  # font changes do not change TL
+                before(b"T*")
+                before(b"Tj")
+                visitor_text("Third line", identity, stale, None, 9)
+                before(b"TD", [2, -7])
+                before(b"T*")
+                before(b"Tj")
+                visitor_text("Fourth line", identity, stale, None, 9)
+
+        parts = pg.read_page(FakePage())
+        self.assertEqual([(50, 730), (50, 717), (50, 704), (52, 690)], [(p.x, p.y) for p in parts.pieces])
+        self.assertEqual(["First line", "Second line", "Third line", "Fourth line"], [p.text for p in parts.pieces])
+
     def test_cells_centred_in_their_row_go_to_that_row(self) -> None:
         """Word centres the number and the name; the content runs over several lines above and below them. Read
         straight across, that is "1.10.2 答疑提出的" / "截止时间 /" - the grid says which cell each piece is in."""

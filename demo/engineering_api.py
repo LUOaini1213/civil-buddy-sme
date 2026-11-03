@@ -148,6 +148,11 @@ async def ifc(request: Request, action: Literal["check", "diff"]):
             raise ValueError()
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise HTTPException(422, "请提交有效 IFC 输入对象。") from exc
+    from packing_assistant.engineering.ifc import validate_sources
+    try:
+        await run_in_threadpool(validate_sources, action, payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     return await cad.operation(request, lambda: publish("ifc_" + action, payload))
 
 

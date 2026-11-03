@@ -1463,6 +1463,12 @@ def scores(doc: Document) -> List[Tuple[str, str, Piece]]:
     seen: set = set()
     judged = any(_EVALUATION.search(p.chapter) for p in doc.pieces)     # the document has a chapter on how bids are judged
     for p in doc.pieces:
+        if p.kind == "text" and (not judged or _EVALUATION.search(p.chapter)) and not _CONTRACT.search(p.chapter):
+            for clause in re.split(r";\s*|\.(?!\d)\s*", p.text):
+                literal = re.fullmatch(r"\s*([A-Za-z][A-Za-z /&()\-]{2,80}?)\s*:\s*(\d+(?:\.\d+)?\s+(?:marks?|points?))\s*", clause, re.I)
+                if literal and (_flat(literal.group(1)), _flat(literal.group(2))) not in seen:
+                    seen.add((_flat(literal.group(1)), _flat(literal.group(2))))
+                    out.append((literal.group(1).strip(), literal.group(2).strip(), p))
         # "2.2.6计算商务报价得分（满分100分）" - where price is all that is scored there is no table, only this heading
         if p.kind in ("heading", "text") and len(p.text) <= 40 and (_EVALUATION.search(p.chapter) or "评标" in p.chapter):
             full = re.search(r"(?:计算)?([一-鿿]{2,10}?)得分\s*[（(]\s*满分\s*(\d+(?:\.\d+)?)\s*分\s*[)）]", p.text)

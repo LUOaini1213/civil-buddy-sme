@@ -40,13 +40,18 @@ v0.7.0 is the submitted competition version; `main` holds post-submission previe
    waiting for approval), or in the desktop dialog. The Python surfaces never read the task for approval: a message
    approves only when the whole of it, trimmed, is the sentence (`civil_config.confirms_in_message`), so the sentence
    quoted from a tender, a panel list or a file, deferred, conditional, retracted or simply added to a request
-   approves nothing on the gateway, the terminal and the desktop app; neither does a copy in a model reply. The Rust
-   workbench still takes it as a whole line of the message (see Known open items). A boolean such as `confirm_ok` or
-   `p0_confirmed` is refused (HTTP 422 on the gateway and the Rust workbench). Every approval covers that turn only:
+   approves nothing on the gateway, the terminal and the desktop app; neither does a copy in a model reply.
+   The unified Rust Agent accepts it only in the current turn's dedicated `risk_confirmation` field, never from
+   the message body, quotations or source text. Boolean approval fields are refused (HTTP 422) on the legacy
+   gateway/workbench routes. On the unified Agent, unrecognised flags cannot supply acknowledgement and a
+   boolean `risk_confirmation` is rejected by its string-typed request schema. Every approval covers that turn only:
    it is not remembered for the next turn, a new thread, a resumed thread or a restored session.
    `civil exec --confirm` is the local operator's own switch and takes no sentence. The sentence is asked for only
-   when a high-risk post is selected or loaded. In the Rust workbench's default automatic post selection the model
-   decides whether to load a post; if it loads none, a copy can be written without the sentence. Writes are always
+   when a high-risk post is selected or loaded on the legacy paths. On the unified Rust Agent, automatic-mode
+   writes without a user-selected risk scope also require the dedicated acknowledgement. A user may explicitly
+   select a low-risk catalog post for ordinary copies without it; model-loaded posts cannot grant this exception.
+   Loading a high-risk post raises risk for the whole turn, including applies earlier in the same tool batch.
+   Writes are always
    new copies, and a copy is written only after the source was read and the identical change was previewed.
 4. **Token-gated server.** `packing_assistant/access_guard.py` sits in front of the gateway and the workbench,
    WebSockets included. With `CIVIL_TOKEN` set, every request needs the token (loopback too; compared with
@@ -114,12 +119,35 @@ snapshot. Remaining boundaries and their current scope are listed here:
   a scripted model; a live model reading a planted instruction could still steer which menu tool runs on which listed
   file, and what a chat reply says before the guards. The URL fetch resolves DNS twice.
 - **Chat.** In the workbench, question-only turns call the model whenever a key is set, whatever `agent_mode` says.
-- **Sign-off inside pasted text (Rust workbench).** The Rust workbench still takes a sign-off sentence that forms a
-  whole line or sentence of the message as approval. The Python surfaces no longer do (only the whole message, or the
-  confirmation field). Until the Rust side matches, a person should not paste unreviewed text into a high-risk turn.
-- **Automatic post selection.** The typed confirmation applies only when a high-risk post is selected or loaded. In
-  the Rust workbench's default automatic mode the model decides whether to load a post, so a model that loads none
-  can write a copy of a high-risk document without the sentence. The copy is new and the original is unchanged.
+
+## Rust document-write acknowledgement (2026-10-12 source change)
+
+The unified Agent uses only the exact `risk_confirmation` field in the current request.
+Pasted lines/sentences, fenced text, model prose and earlier turns do not authorise writes.
+Automatic-mode reads and previews remain possible without acknowledgement; publishing a new
+copy requires it unless the user explicitly selected a low-risk catalog post. Loading a low-risk
+post or a document capability through the model cannot lower the automatic-mode policy.
+All high-risk `load_skill` calls in a proposed batch are checked before its first apply, and
+raised risk remains sticky for the turn. This is a catalog/selection policy, not a semantic
+detector proving that arbitrary document content is low-risk; selecting the appropriate scope
+remains the user's responsibility. Acknowledgement is not professional approval.
+
+The Rust host also enforces recognised read-only questions and explicit no-save/no-files
+directives before dispatching `apply_document`, even with workspace-write permission and a
+valid acknowledgement. It removes apply from advertised tools and still rejects a forged
+apply call. Quoted/fenced examples do not supply write permission. Original-preservation
+instructions do not prohibit an explicitly requested new copy, and prohibitions against
+invented facts are not treated as a ban on every document output. This is bounded request
+recognition, not unrestricted semantic intent validation. Select the actual `read-only`
+sandbox when unconditional prevention of document writes is required.
+
+`product_document_gates`, `product_identity`, the Agent unit tests and
+`scripts/test_agent_ui.cjs` cover the field, scope, ordering and ordinary-copy paths with
+synthetic inputs and a scripted local model. Source changes do not patch old binaries or cloud
+deployments; rebuild and verify the specific deployed artifact before relying on this policy.
+`scripts/test_unified_runtime_http.py` additionally exercises acknowledged preview/no-files
+requests against the compiled named host and checks that no physical documents or artifacts
+are published, while signed and explicitly selected low-risk copies still work.
 
 ## Unified named instances (2026-09-27)
 
@@ -134,8 +162,8 @@ files under the same Windows/Linux account. Use separate OS accounts or hosts wh
 The internal Python service has a separate random Bearer token, a route allowlist, no provider keys and no model
 loop. Named mode disables legacy local-path import, URL import and studio editing. Rust Agent events, actor IDs,
 usage and interrupted/cancelled states are persisted. Confirmation is specific to the current turn and is
-not inherited from old turns, restored sessions or a boolean field; it is asked for only when a high-risk post is
-selected or loaded, and pasted text can still carry it (both listed under Known open items). The legacy limitations
+not inherited from old turns, restored sessions or a boolean field. The unified Agent takes it only from the
+dedicated field and requires it for high-risk or unclassified automatic-mode writes, as described above. The legacy limitations
 above still apply to separately launched Python/gateway entry points unless their own implementation says otherwise;
 they must not be used as an unprotected alternate entry into a named instance.
 

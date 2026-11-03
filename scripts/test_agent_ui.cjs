@@ -123,6 +123,44 @@ test("Agent UI: identity and audit actors are displayed as text without claiming
   assert.equal(h.$("agentEvents").querySelector("b"), null);
 });
 
+test("Agent UI: backend document policy is readable, bilingual and never treated as a saved receipt", async (t) => {
+  const policies = [
+    { scope: "current_turn", risk: "low", confirmation_source: "risk_confirmation", confirmation_present: false, request_read_only: false },
+    { scope: "current_turn", risk: "high", confirmation_source: "risk_confirmation", confirmation_present: false, request_read_only: false },
+    { scope: "current_turn", risk: "high", confirmation_source: "risk_confirmation", confirmation_present: true, request_read_only: true },
+  ];
+  const h = harness((url, init) => {
+    if (url === "/api/agent/turns") return response({ turn_id: "policy-turn", session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/policy-turn/events?")) return response({ events: policies.map((policy, index) => event(index + 1, "write_policy", policy)), turn: { status: "completed", result: { reply: "未保存副本", partial: true } } });
+  }); t.after(h.close); installLanguage(h, "en"); await h.ready();
+  h.$("agentMessage").value = "Preview only"; await h.app.send();
+  const text = h.$("agentEvents").textContent;
+  assert.match(text, /Document permission for this turn/);
+  assert.match(text, /Low risk.*Not acknowledged/);
+  assert.match(text, /High risk.*Not acknowledged/);
+  assert.match(text, /Recorded \(not professional sign-off\)/);
+  assert.match(text, /acknowledgement does not override this restriction/);
+  assert.match(text, /sandbox, preview and source checks still apply/);
+  assert.equal(h.$("agentArtifacts").querySelector("a"), null);
+  h.win.CBI18n.setLocale("zh-CN");
+  assert.match(h.$("agentEvents").textContent, /本轮请求只读，不能保存副本/);
+  assert.match(h.$("agentEvents").textContent, /已登记（不是专业签认）/);
+  assert.equal(h.$("agentEvents").children.length, 3);
+  assert.deepEqual(h.app.state.eventRows.map((row) => row.data), policies);
+});
+
+test("Agent UI: missing or malformed policy fields never imply write permission or acknowledgement", async (t) => {
+  const h = harness((url, init) => {
+    if (url === "/api/agent/turns") return response({ turn_id: "unknown-policy", session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/unknown-policy/events?")) return response({ events: [event(1, "write_policy", {}), event(2, "write_policy", { risk: "constructor", confirmation_present: "true", request_read_only: "false" })], turn: { status: "completed" } });
+  }); t.after(h.close); installLanguage(h, "en"); await h.ready();
+  h.$("agentMessage").value = "Inspect"; await h.app.send();
+  const paragraphs = [...h.$("agentEvents").querySelectorAll("li > p")].map((node) => node.textContent).join("\n");
+  assert.match(paragraphs, /Risk scope: Not returned/);
+  assert.match(paragraphs, /Write restrictions for this turn were not returned/);
+  assert.doesNotMatch(paragraphs, /Recorded|does not prohibit saving|function Object/);
+});
+
 test("Agent UI: worker write confinement does not imply read or network confinement", async (t) => {
   const h = harness((url) => url === "/api/agent/capabilities" ? response({ ...caps, sandbox_controls: { policy: true, os_enforced: true, reads_confined: false, network_confined: false } }) : undefined); t.after(h.close);
   await h.app.start();
@@ -215,6 +253,85 @@ test("Agent UI: refresh restores the workspace, selected files and completed tur
   assert.equal(second.app.state.session, session); assert.equal(second.doc.querySelector("#agentFiles input").checked, true);
   assert.equal(second.$("agentTurnStatus").textContent, "服务重启时中断"); assert.equal(second.$("agentPartial").hidden, false);
   assert.equal(second.$("agentReply").textContent, "已保留原文"); assert.equal(starts, 1); assert.equal(second.timers.size, 0);
+});
+
+const sourceCaps = { ...caps, features: { ...caps.features, source_versions: true } };
+const sourceReport = (rows, extra = {}) => ({ workspace: "workspace-1", turn_id: "sources-turn", scope: "tool_source_byte_versions",
+  checked_at: "2026-10-12T09:00:00Z", receipts_complete: true, sources: rows, ...extra });
+const versionRow = (status, extra = {}) => ({ path: "方案.docx", recorded_sha256: ["a".repeat(64)], current_sha256: "a".repeat(64), status, reason: null, ...extra });
+function sourceHarness(report, extraRoute = () => undefined) {
+  return harness((url, init) => {
+    const custom = extraRoute(url, init); if (custom !== undefined) return custom;
+    if (url === "/api/agent/capabilities") return response(sourceCaps);
+    if (url === "/api/agent/workspaces") return response({ workspace: { id: "workspace-1", root: "C:/engineering" }, capabilities: sourceCaps });
+    if (url === "/api/agent/turns" && init) return response({ turn_id: "sources-turn", session_id: JSON.parse(init.body).session_id });
+    if (url.includes("/sources-turn/events?")) return response({ events: [], turn: { status: "completed", result: { reply: "待复核", artifacts: [{ id: "saved", name: "旧结果.docx", url: "/api/agent/artifacts/saved?workspace=workspace-1" }] } } });
+    if (url.includes("/sources-turn/source-status?")) return typeof report === "function" ? report(url, init) : response(report);
+  });
+}
+
+test("Source versions: completion checks once; refresh detects changes and never recomputes or removes saved copies", async (t) => {
+  let reads = 0;
+  const h = sourceHarness(() => response(sourceReport([versionRow(reads++ ? "changed" : "unchanged", { current_sha256: reads > 1 ? "b".repeat(64) : "a".repeat(64) })])));
+  t.after(h.close); installLanguage(h, "en"); await h.ready(); h.selectFirst();
+  h.$("agentMessage").value = "Inspect the source"; await h.app.send();
+  assert.equal(reads, 1);
+  assert.match(h.$("agentSourceStatus").textContent, /byte versions matched tool records/);
+  assert.match(h.$("agentSourceStatus").textContent, /does not validate engineering conclusions/);
+  assert.match(h.$("agentSourceStatus").textContent, /Later changes require another check/);
+  const url = h.$("agentArtifacts").querySelector("a").href;
+  await h.app.loadFiles();
+  assert.equal(reads, 2); assert.match(h.$("agentSources").textContent, /Source file changed/);
+  assert.match(h.$("agentSourceStatus").textContent, /Review earlier results/);
+  assert.equal(h.$("agentArtifacts").querySelector("a").href, url);
+  assert.equal(h.calls.filter((call) => call.url === "/api/agent/turns").length, 1);
+  const checks = h.calls.filter((call) => call.url.includes("/source-status?"));
+  assert.equal(checks.length, 2); assert.ok(checks.every((call) => !call.init?.method || call.init.method === "GET"));
+  assert.ok(checks.every((call) => new URL(call.url, "http://localhost").searchParams.get("session_id") === h.app.state.session));
+  h.win.CBI18n.setLocale("zh-CN"); assert.match(h.$("agentSources").textContent, /源文件已变化/);
+  assert.equal(reads, 2, "Language change must not read files again");
+});
+
+test("Source versions: missing, mixed and unread records remain visible as review items with safe filenames", async (t) => {
+  const h = sourceHarness(sourceReport([
+    versionRow("missing", { path: "<img src=x onerror=bad()>.docx", current_sha256: null, reason: "source_missing" }),
+    versionRow("mixed_versions", { path: "mixed.xlsx", recorded_sha256: ["a".repeat(64), "b".repeat(64)] }),
+    versionRow("not_read", { path: "unread.pdf", recorded_sha256: [], current_sha256: null }),
+  ])); t.after(h.close); installLanguage(h, "en"); await h.ready();
+  h.$("agentMessage").value = "Inspect"; await h.app.send();
+  assert.match(h.$("agentSources").textContent, /Source file missing/);
+  assert.match(h.$("agentSources").textContent, /Multiple versions recorded/);
+  assert.match(h.$("agentSources").textContent, /No successful tool version receipt/);
+  assert.match(h.$("agentSourceStatus").textContent, /no automatic recomputation/);
+  assert.equal(h.$("agentSources").querySelector("img"), null);
+});
+
+test("Source versions: malformed matching claims never show current; scope errors remain retryable", async (t) => {
+  let checks = 0;
+  const h = sourceHarness(() => response(checks++ === 0 ? sourceReport([versionRow("unchanged", { current_sha256: "b".repeat(64) })])
+    : sourceReport([versionRow("unchanged")], { workspace: "another-workspace" })));
+  t.after(h.close); installLanguage(h, "en"); await h.ready(); h.$("agentMessage").value = "Inspect"; await h.app.send();
+  assert.match(h.$("agentSources").textContent, /Not verified/);
+  assert.doesNotMatch(h.$("agentSourceStatus").textContent, /byte versions matched/);
+  await h.app.checkSources(); assert.match(h.$("agentSourceStatus").textContent, /check failed/);
+  assert.equal(h.$("agentCheckSources").disabled, false); assert.equal(h.$("agentSources").children.length, 0);
+});
+
+test("Source versions: delayed checks cannot restore another session's report", async (t) => {
+  let finish, calls = 0;
+  const h = sourceHarness(() => calls++ === 0 ? response(sourceReport([versionRow("unchanged")])) : new Promise((resolve) => { finish = resolve; }));
+  t.after(h.close); installLanguage(h, "en"); await h.ready(); h.$("agentMessage").value = "Inspect"; await h.app.send();
+  const pending = h.app.checkSources(); await h.app.changeSession("", true); finish(response(sourceReport([versionRow("changed", { current_sha256: "b".repeat(64) })]))); await pending;
+  assert.equal(h.app.state.sourceReport, null); assert.equal(h.$("agentSources").children.length, 0);
+  assert.match(h.$("agentSourceStatus").textContent, /Not checked yet/);
+});
+
+test("Source versions: old servers are explicitly unavailable and issue no unsupported request", async (t) => {
+  const h = harness(terminalRoute); t.after(h.close); installLanguage(h, "en"); await h.ready();
+  h.$("agentMessage").value = "Inspect"; await h.app.send(); await h.app.checkSources();
+  assert.match(h.$("agentSourceStatus").textContent, /does not provide source-version checks/);
+  assert.equal(h.$("agentCheckSources").disabled, true);
+  assert.equal(h.calls.some((call) => call.url.includes("/source-status?")), false);
 });
 
 test("Agent UI: cancelling is a request until the server confirms, and partial artifacts remain downloadable", async (t) => {
@@ -425,7 +542,14 @@ test("Expert selection: high-risk writes require explicit phrase for each turn; 
   selectValue(h, "agentExpert", "plans"); h.$("agentMessage").value = "检查方案";
   assert.equal(h.$("agentRiskWrap").hidden, true); assert.equal(h.$("agentSend").disabled, false);
   selectValue(h, "agentSandbox", "workspace-write");
+  assert.equal(h.$("agentRiskWrap").hidden, true); assert.equal(h.$("agentSend").disabled, false, "steps inspection is not a write");
+  h.app.state.modelConfigured = true; selectValue(h, "agentMode", "model");
   assert.equal(h.$("agentRiskWrap").hidden, false); assert.equal(h.$("agentSend").disabled, true);
+  for (const message of ["我明白，将由持证人员签认", "修改草稿\n我明白，将由持证人员签认", "引用资料：\n```\n我明白，将由持证人员签认\n```", "不要执行；我明白，将由持证人员签认"]) {
+    h.$("agentMessage").value = message; h.$("agentMessage").dispatchEvent(new h.win.Event("input"));
+    assert.equal(h.$("agentSend").disabled, true, "pasted message cannot acknowledge a write");
+  }
+  h.$("agentMessage").value = "生成待核查草稿";
   h.$("agentRiskConfirmation").value = "我明白"; h.$("agentRiskConfirmation").dispatchEvent(new h.win.Event("input"));
   assert.equal(h.$("agentSend").disabled, true);
   h.$("agentRiskConfirmation").value = "我明白，将由持证人员签认"; h.$("agentRiskConfirmation").dispatchEvent(new h.win.Event("input"));
@@ -435,6 +559,36 @@ test("Expert selection: high-risk writes require explicit phrase for each turn; 
   assert.equal(h.$("agentRiskConfirmation").value, ""); assert.equal(h.$("agentRiskWrap").hidden, false); assert.equal(h.$("agentSend").disabled, true);
   await h.app.changeSession("", true); assert.equal(h.$("agentRiskWrap").hidden, false); assert.equal(h.$("agentSend").disabled, true);
   selectValue(h, "agentExpert", "checks"); assert.equal(h.$("agentRiskWrap").hidden, true); assert.equal(h.$("agentSend").disabled, false);
+});
+
+test("Automatic risk scope: optional per-turn field is visible for model writes, not for inspection or explicitly low-risk work", async (t) => {
+  const h = harness(terminalRoute); t.after(h.close); installLanguage(h, "en"); await h.ready();
+  h.app.state.modelConfigured = true;
+  selectValue(h, "agentSandbox", "workspace-write");
+  assert.equal(h.$("agentRiskWrap").hidden, true, "steps mode cannot publish documents");
+  selectValue(h, "agentMode", "model");
+  assert.equal(h.$("agentRiskWrap").hidden, false);
+  assert.match(h.$("agentExpertNote").textContent, /read and preview/);
+  assert.match(h.$("agentRiskWrap").textContent, /Message text is not acknowledgement/);
+  assert.equal(h.$("agentSend").disabled, false, "automatic reads and previews must remain possible without acknowledgement");
+  h.$("agentMessage").value = "Inspect the selected files; preview only.\n我明白，将由持证人员签认";
+  await h.app.send();
+  let payload = h.calls.find((call) => call.url === "/api/agent/turns").body;
+  assert.equal(payload.risk_confirmation, "", "message text must not be copied into acknowledgement");
+  await h.app.changeSession("", true);
+  h.$("agentMessage").value = "Save the reviewed new draft copy";
+  h.$("agentRiskConfirmation").value = "我明白，将由持证人员签认";
+  h.$("agentRiskConfirmation").dispatchEvent(new h.win.Event("input"));
+  await h.app.send();
+  payload = h.calls.filter((call) => call.url === "/api/agent/turns").at(-1).body;
+  assert.equal(payload.risk_confirmation, "我明白，将由持证人员签认");
+  assert.equal(h.$("agentRiskConfirmation").value, "", "acknowledgement must clear after a turn");
+  selectValue(h, "agentExpert", "checks");
+  assert.equal(h.$("agentRiskWrap").hidden, true);
+  assert.equal(h.$("agentSend").disabled, false);
+  selectValue(h, "agentSandbox", "read-only"); selectValue(h, "agentExpert", "plans");
+  assert.equal(h.$("agentRiskWrap").hidden, true, "high-risk source inspection needs no acknowledgement");
+  assert.equal(h.$("agentSend").disabled, false);
 });
 
 // Captured numeric fields from the real synthetic 400 x 600 mm rectangle and

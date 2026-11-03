@@ -38,6 +38,8 @@ selftest（受限进程里当场试，答案来自操作系统）
 
 ## 拿不到的时候
 
+Windows 的数据盘可能只继承 Modify 权限：创建者虽然是目录所有者，却没有设置 Low 标签所需的 `WRITE_OWNER`。启动器仅在设置标签返回 Access denied 时，对当前用户本人拥有、无链接的 `.civil-buddy/out` 补一条不继承的本人 `WRITE_OWNER` 允许项，再设置标签。保留其他 ACL，不授予 Full Control，不改所有者、原件或工作根目录，也不启用管理员权限；已有显式或继承的相关拒绝规则不覆盖，非本人所有或修复失败仍拒绝执行。该权限及 Low 标签持久保存在输出目录。详见 [Microsoft SECURITY_INFORMATION](https://learn.microsoft.com/en-us/windows/win32/secauthz/security-information)；真实权限与受限进程回归为 `scripts/test_windows_sandbox_label.py`。
+
 - `sandbox_backend = os` 而拿不到（不在作业文件夹里、内核不支持、工作进程没能进入受限状态）：**本轮拒绝执行**（`sandbox_unavailable`），不会悄悄不设防地跑。
 - `auto`：退回应用层，并在回复开头说明原因。
 - 需要作业文件夹（`civil init` 或 `-C`）：那里的 `.civil-buddy/out` 是唯一的可写处。
