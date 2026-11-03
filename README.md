@@ -31,7 +31,8 @@ stay with people (`[TO FILL]`); nothing is booked or submitted.
 > (PJ2U63AF). The pilot partner is not named here. **Every demo input is SYNTHETIC**
 > ([examples/facade-demo](examples/facade-demo/README.md)); no contractor's document or number is in
 > this repository. The team placed 3rd in the SME Category of the NUS-ISS Show Me Your Agents
-> Hackathon 2026.
+> Hackathon 2026. The organiser's prize notification (2026-11-02) is recorded in
+> [docs/awards/nus-iss-smya-2026-prize-notification.md](docs/awards/nus-iss-smya-2026-prize-notification.md).
 
 **Submitted version.** The version submitted for NUS-ISS shortlisting is release
 [v0.7.0](https://github.com/LUOaini1213/civil-buddy-sme/tree/v0.7.0) (commit `0c0e803`); the figures and
